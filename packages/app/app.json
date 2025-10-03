@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.tutturu.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -27,6 +31,18 @@
       "bundler": "metro"
     },
     "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#232323",
+          "image": "./assets/images/ucf_act_logo.png",
+          "dark": {
+            "image": "./assets/images/ucf_act_logo.png",
+            "backgroundColor": "#232323"
+          },
+          "imageWidth": 200
+        }
+      ],
       "expo-router",
       [
         "expo-splash-screen",
@@ -44,6 +60,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9a6ebd33-5128-4c74-ac6d-7ddfc45b04e1"
+      }
     }
   }
 }
