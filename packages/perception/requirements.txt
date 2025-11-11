@@ -1,0 +1,10 @@
+python-dotenv==1.2.1
+ftfy==6.3.1
+future==1.0.0
+tensorboard==2.20.0
+ultralytics==8.3.227
+onnx==1.19.1
+onnxruntime-gpu==1.23.2
+onnxslim==0.1.71
+tensorrt_cu12==10.14.1.48.post1
+fsspec==2025.10.0

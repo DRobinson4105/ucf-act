@@ -1,22 +1,9 @@
-**UCF Autonomous Campus Taxi** is a self-driving electric golf cart designed to provide safe, efficient, and on-demand transportation across the UCF campus for students.
+# Overview
 
-The vehicle navigates via a pre-mapped network of safe, pedestrian-friendly campus paths with a path planning algorithm determining the most efficient route. Multiple RGB-D cameras, 360 degree LiDAR, and radar sensors will be installed around the cart to provide real-time 360 degree awareness to detect and avoid pedestrians, vehicles, and obstacles through various weather conditions.
+Our Senior Design project, **Autonomous Campus Taxi (ACT)**, is a self-driving electric golf cart designed to provide on-demand, autonomous transportation for students and faculty across the University of Central Florida campus. In addition to showcasing autonomous systems engineering, ACT addresses real challenges faced by students such as long travel times between buildings, limited access to efficient on-campus transportation, and inadequate solutions for students and faculty with physical disabilities or impairments. By offering a convenient, inclusive, and user-friendly solution, ACT aims to improve campus accessibility and the overall student experience at UCF.
 
-Cart acceleration will be controlled by an ESP-32 module directly connected to the throttle position sensor (TPS) assembly on the cart. Braking and steering will be managed by linear actuators connected to the ESP-32. Jetson Orin and ESP-32 will communicate back and forth as Jetson Orin will handle all intense computation for cart’s real-time path planning and environment perception (based on sensors around cart).  The cart will allow the sit-in driver to override the cart's driving system at any time while being equipped with a physical and remote killswitch.
+To achieve this, the golf cart will autonomously follow a predefined path at a maximum speed of 8 mph, detect on-path obstacles, and safely stop or reroute as needed. The system will be powered by a NVIDIA Jetson Orin Nano, which will handle perception, planning and communication. Actuator commands (steering, throttle, and braking) will be sent over a CAN bus to ESP32 microcontrollers responsible for low-level control and safety.
 
-## Tech Stack
+A suite of sensors, including LiDAR, RGB cameras, ultrasonic sensors, RTK GNSS, IMU, wheel speeds, and steering angle sensors will be mounted, calibrated, and time-synchronized on the vehicle. These inputs will feed into the Jetson Orin Nano for real-time decision-making. In parallel, a mobile app will allow users to request the cart, track its live location, and specify a destination on campus.
 
-#### Software
-- Python (PyTorch, TensorRT, OpenCV)
-- ROS 2 (Nav2, Cartographer)
-- CARLA for simulation testing
-- React Native (Building UI/UX for mobile app)
-- PostgreSQL or SQLite (Handling users and storing path information)
-
-#### Hardware
-- Electric golf cart (E-Z-GO TXT / Club Car DS)
-- NVIDIA Jetson Orin (perception and planning)
-- ESP32 (safety and actuator control)
-- GNSS IMU System
-- Steering and brake linear actuators
-- Sensors (RGB-D cameras, 360 degree LiDAR, Radar, Ultrasonic)
+While ACT is a Senior Design project, our ambition extends beyond the classroom. We hope to spark broader interest in accessible, sustainable, and autonomous campus transportation, and pave the way for future student-led innovation at UCF.
