@@ -5,7 +5,7 @@ from .encoding import Encoding
 from .inverted_residual import InvertedResidual, InvertedResidualV3
 from .make_divisible import make_divisible
 from .point_sample import get_uncertain_point_coords_with_randomness
-from .ppm import DAPPM, PAPPM
+from .ppm import DAPPM, PAPPM, RPPM
 from .res_layer import ResLayer
 from .se_layer import SELayer
 from .self_attention_block import SelfAttentionBlock
@@ -21,7 +21,7 @@ __all__ = [
     'ResLayer', 'SelfAttentionBlock', 'make_divisible', 'InvertedResidual',
     'UpConvBlock', 'InvertedResidualV3', 'SELayer', 'PatchEmbed',
     'nchw_to_nlc', 'nlc_to_nchw', 'nchw2nlc2nchw', 'nlc2nchw2nlc', 'Encoding',
-    'Upsample', 'resize', 'DAPPM', 'PAPPM', 'BasicBlock', 'Bottleneck',
+    'Upsample', 'resize', 'DAPPM', 'PAPPM', 'RPPM', 'BasicBlock', 'Bottleneck',
     'cross_attn_layer', 'LayerNorm2d', 'MLP',
     'get_uncertain_point_coords_with_randomness'
 ]

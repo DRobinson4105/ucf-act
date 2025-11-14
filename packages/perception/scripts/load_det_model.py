@@ -5,6 +5,8 @@ from ultralytics import YOLO
 os.makedirs("models", exist_ok=True)
 os.chdir("models")
 
+print("Downloading YOLOv11")
+
 model = YOLO("yolo11n.pt")
 
 model.export(

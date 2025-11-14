@@ -1,4 +1,5 @@
 import os
+import argparse
 
 from mmseg.apis import MMSegInferencer
 import cv2
@@ -8,11 +9,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-infer = MMSegInferencer(
-    model='models/ddrnet.py',
-    weights='models/ddrnet_23-slim_in1k-pre_2xb6-120k_cityscapes-1024x1024_20230426_145312-6a5e5174.pth',
-    device='cuda:0'
-)
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--model", type=str, default="gcnet", choices=["gcnet", "ddrnet"])
+
+args = parser.parse_args()
+
+if args.model == "gcnet":
+    infer = MMSegInferencer(
+        model='configs/gcnet-s_4xb3-120k_cityscapes-1024x1024.py',
+        weights='models/gcnet-s_mIoU-76.9.pth',
+        device='cuda:0'
+    )
+elif args.model == "ddrnet":
+    infer = MMSegInferencer(
+        model='configs/ddrnet.py',
+        weights='models/ddrnet_23-slim_in1k-pre_2xb6-120k_cityscapes-1024x1024_20230426_145312-6a5e5174.pth',
+        device='cuda:0'
+    )
+else:
+    raise Exception("Unsupported model")
 
 # warm up
 sample = cv2.cvtColor(cv2.imread('examples/image.png'), cv2.COLOR_BGR2RGB)
@@ -31,7 +47,7 @@ try:
     while True:
         ret, frame = cap.read()
         if not ret: break
-        
+
         res = infer(frame, return_datasamples=False)
 
         pred = res["predictions"]
