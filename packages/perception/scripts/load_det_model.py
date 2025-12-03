@@ -1,6 +1,16 @@
 import os
 
 from ultralytics import YOLO
+import torch
+
+if torch.cuda.is_available():
+    device = "0"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+
+print(f"Downloading YOLOv11 on device {device}")
 
 os.makedirs("models", exist_ok=True)
 os.chdir("models")
@@ -12,7 +22,7 @@ model = YOLO("yolo11n.pt")
 model.export(
     format="onnx",
     half=False,
-    device=0,
+    device=device,
     imgsz=640,
     dynamic=False,
     nms=False,
@@ -20,11 +30,12 @@ model.export(
     simplify=True,
 )
 
-model.export(
-    format="engine",
-    device=0,
-    imgsz=640,
-    half=True,
-    nms=True,
-    dynamic=False,
-)
+if device == "0":
+    model.export(
+        format="engine",
+        device=device,
+        imgsz=640,
+        half=True,
+        nms=True,
+        dynamic=False,
+    )
