@@ -1,37 +1,43 @@
-import os
+import argparse
 
 from ultralytics import YOLO
 import cv2
 import torch
-from dotenv import load_dotenv
 
-load_dotenv()
+def main(config):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = YOLO("models/yolo11n.pt").to(device)
 
-camera_port = int(os.getenv("CAMERA_PORT"))
+    camera_port = int(config.camera_port)
+    cap = cv2.VideoCapture(camera_port)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model = YOLO("models/yolo11n.pt").to(device)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open camera")
 
-cap = cv2.VideoCapture(camera_port)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
 
-if not cap.isOpened():
-    raise RuntimeError("Could not open camera")
+            results = model(frame, verbose=False)
+            annotated = results[0].plot()
 
-try:
-    while True:
-        ret, frame = cap.read()
-        if not ret: break
+            cv2.imshow("window", annotated)
 
-        results = model(frame, verbose=False)
-        annotated = results[0].plot()
+            if cv2.waitKey(1) & 0xFF in (27, ord('q')):
+                break
 
-        cv2.imshow("window", annotated)
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
-        if cv2.waitKey(1) & 0xFF in (27, ord('q')):
-            break
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
 
-finally:
-    cap.release()
-    cv2.destroyAllWindows()
+    parser.add_argument("--camera-port", type=int, default=0)
+
+    config = parser.parse_args()
+
+    main(config)
