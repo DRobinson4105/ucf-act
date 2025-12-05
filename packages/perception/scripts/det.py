@@ -5,11 +5,16 @@ import cv2
 import torch
 
 def main(config):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
     model = YOLO("models/yolo11n.pt").to(device)
 
-    camera_port = int(config.camera_port)
-    cap = cv2.VideoCapture(camera_port)
+    cap = cv2.VideoCapture(config.camera_port)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
 

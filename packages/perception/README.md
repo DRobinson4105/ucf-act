@@ -4,18 +4,12 @@
 conda create -n act_perception python=3.11 -y
 conda activate act_perception
 
-# install torch and torchvision with cuda 12.1
-pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121
+# install with cuda 12.1
+conda install -c conda-forge cudnn=9
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121 onnxruntime-gpu==1.23.2
 
-# build mmcv first
-pip install -U openmim
-mim install mmengine
-mim install mmcv==2.2.0
-
-# install mmseg
-cd mmsegmentation
-pip install -e .
-cd ..
+# install with cpu
+pip install torch==2.5.1 torchvision==0.20.1 onnxruntime==1.23.2
 
 # install other dependencies while pinning torch==2.5.1 and torchvision==0.20.1
 pip install -r requirements.txt -c constraints.txt

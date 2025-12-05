@@ -1,67 +1,98 @@
+import os
+import sys
 import argparse
+import time
 
-from mmseg.apis import MMSegInferencer
 import cv2
-import torch
 import numpy as np
+import onnxruntime as ort
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from utils.video_capture import VideoCapture
+
+label_map = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 3], dtype=np.uint8)
+
+palette = np.array([
+    [50, 209, 50], # drivable
+    [255, 0, 0], # non-drivable
+    [244, 35, 232], # person
+    [220, 220, 0], # vehicle
+], dtype=np.uint8)
+
+def preprocess(frame: np.typing.NDArray[np.uint8]) -> np.typing.NDArray[np.float32]:
+    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img = (img - mean) / std
+
+    inp = img.transpose(2, 0, 1).reshape(1, 3, 720, 1280)
+
+    return inp
+
+def postprocess(frame: np.typing.NDArray[np.uint8], outputs: list[np.typing.NDArray[np.float32]]) -> np.typing.NDArray[np.uint8]:
+    preds = np.squeeze(outputs[0].argmax(axis=1), axis=0)
+    preds = label_map[preds]
+
+    mask = palette[preds]
+
+    annotated = cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
+
+    return annotated
 
 def main(config):
-    if config.model == "gcnet":
-        infer = MMSegInferencer(
-            model='configs/gcnet-s_4xb3-120k_cityscapes-1024x1024.py',
-            weights='models/gcnet-s_mIoU-76.9.pth',
-            device='cuda:0'
-        )
-    elif config.model == "ddrnet":
-        infer = MMSegInferencer(
-            model='configs/ddrnet.py',
-            weights='models/ddrnet_23-slim_in1k-pre_2xb6-120k_cityscapes-1024x1024_20230426_145312-6a5e5174.pth',
-            device='cuda:0'
-        )
-    else:
-        raise Exception("Unsupported model")
+    ort_session = ort.InferenceSession(config.model_path, providers=[
+        "TensorrtExecutionProvider", "CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"
+    ])
+    input_name = ort_session.get_inputs()[0].name
+    output_names = [o.name for o in ort_session.get_outputs()]
 
-    # warm up
-    sample = cv2.cvtColor(cv2.imread('examples/image.png'), cv2.COLOR_BGR2RGB)
+    cap = VideoCapture(config.camera_port, frame_shape=(720, 1280))
 
-    for _ in range(5):
-        with torch.inference_mode(), torch.amp.autocast('cuda'):
-            _ = infer(sample, return_datasamples=False)
+    if config.test:
+        frame = cv2.imread(config.test)
+        frame = cv2.resize(frame, (1280, 720))
 
-    camera_port = int(config.camera_port)
-    cap = cv2.VideoCapture(camera_port, cv2.CAP_DSHOW)
+        inp = preprocess(frame)
 
-    if not cap.isOpened():
-        raise RuntimeError("Could not open camera")
+        outputs = ort_session.run(output_names, {input_name: inp})
+        annotated = postprocess(frame, outputs)
 
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret: break
-
-            res = infer(frame, return_datasamples=False)
-
-            pred = res["predictions"]
-
-            palette = np.array(infer.visualizer.dataset_meta["palette"], dtype=np.uint8)
-            color_mask = palette[pred]
-
-            annotated = cv2.addWeighted(frame, 0.5, color_mask[..., ::-1], 0.5, 0)
-
-            cv2.imshow("window", annotated)
-
-            if cv2.waitKey(1) & 0xFF in (27, ord('q')):
-                break
-
-    finally:
-        cap.release()
+        cv2.imshow("Test", annotated)
+        cv2.waitKey(0)
         cv2.destroyAllWindows()
+    else:
+        try:
+            last_frame = time.time()
+            while True:
+                ret, frame = cap.read()
+                if not ret: continue
+
+                print(f"FPS: {1 / (time.time() - last_frame)}")
+                last_frame = time.time()
+
+                inp = preprocess(frame)
+                outputs = ort_session.run(output_names, {input_name: inp})
+                annotated = postprocess(frame, outputs)
+
+                cv2.imshow("window", annotated)
+
+                if cv2.waitKey(1) & 0xFF in (27, ord('q')):
+                    break
+
+        finally:
+            cap.release()
+            cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model", type=str, default="gcnet", choices=["gcnet", "ddrnet"])
     parser.add_argument("--camera-port", type=int, default=0)
+    parser.add_argument("--model-path", type=str, default="models/ddrnet_slim.onnx")
+    parser.add_argument("--test", type=str, default="")
 
     config = parser.parse_args()
 
