@@ -11,23 +11,17 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from utils.ddrnet import load_ddrnet, load_ddrnet_slim
+from utils.ddrnet import load_ddrnet_slim
 
 def main(config):
+    print(f"Downloading DDRNet")
+    
     os.makedirs("models", exist_ok=True)
 
-    if config.model == "ddrnet_slim":
-        model = load_ddrnet_slim()
-        checkpoint_id = "1d_K3Af5fKHYwxSo8HkxpnhiekhwovmiP"
-    elif config.model == "ddrnet":
-        model = load_ddrnet()
-        checkpoint_id = "16viDZhbmuc3y7OSsUo2vhA7V6kYO0KX6"
-    else:
-        raise RuntimeError(f"Unsupported model {config.model}")
+    model = load_ddrnet_slim()
+    checkpoint_id = "1d_K3Af5fKHYwxSo8HkxpnhiekhwovmiP"
     
     checkpoint_path = config.output_path.replace(".onnx", ".pth")
-
-    print(f"Downloading {config.model}")
 
     gdown.download(id=checkpoint_id, output=checkpoint_path)
     checkpoint = torch.load(checkpoint_path, map_location='cpu') 
@@ -43,7 +37,10 @@ def main(config):
     model.load_state_dict(state_dict, strict=True)
     model.eval()
 
-    example_inputs = torch.randn(1, 3, 720, 1280)
+    w, h = config.resolution.lower().split('x')
+    w, h = int(w), int(h)
+
+    example_inputs = torch.randn(1, 3, h, w)
     mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
     example_inputs = (example_inputs - mean) / std
@@ -61,11 +58,13 @@ def main(config):
     onnx_model = onnx.load(config.output_path)
     onnx.checker.check_model(onnx_model)
 
+    print(f"Downloaded DDRNet")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model", type=str, choices=["ddrnet", "ddrnet_slim"], default="ddrnet_slim")
-    parser.add_argument("--output-path", type=str, default="models/ddrnet_slim.onnx")
+    parser.add_argument("--output-path", type=str, default="models/ddrnet.onnx")
+    parser.add_argument("--resolution", type=str, default="1280x720")
 
     config = parser.parse_args()
 

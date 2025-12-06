@@ -1,8 +1,18 @@
+import os
+import sys
 import argparse
 
-from ultralytics import YOLO
 import cv2
 import torch
+torch.cuda.init()
+
+from ultralytics import YOLO
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from utils.video_capture import VideoCapture
 
 def main(config):
     if torch.cuda.is_available():
@@ -14,34 +24,46 @@ def main(config):
 
     model = YOLO("models/yolo11n.pt").to(device)
 
-    cap = cv2.VideoCapture(config.camera_port)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
+    w, h = config.resolution.lower().split('x')
+    w, h = int(w), int(h)
+    resolution = (w, h)
+    
+    if config.test:
+        frame = cv2.imread(config.test)
+        frame = cv2.resize(frame, resolution)
 
-    if not cap.isOpened():
-        raise RuntimeError("Could not open camera")
+        results = model(frame, verbose=False)
+        annotated = results[0].plot()
 
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret: break
-
-            results = model(frame, verbose=False)
-            annotated = results[0].plot()
-
-            cv2.imshow("window", annotated)
-
-            if cv2.waitKey(1) & 0xFF in (27, ord('q')):
-                break
-
-    finally:
-        cap.release()
+        cv2.imshow("Test", annotated)
+        cv2.waitKey(0)
         cv2.destroyAllWindows()
+    else:
+        cap = VideoCapture(config.camera_port, frame_shape=(h, w))
+    
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret: break
+
+                results = model(frame, verbose=False)
+                annotated = results[0].plot()
+
+                cv2.imshow("window", annotated)
+
+                if cv2.waitKey(1) & 0xFF in (27, ord('q')):
+                    break
+
+        finally:
+            cap.release()
+            cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--camera-port", type=int, default=0)
+    parser.add_argument("--resolution", type=str, default="1280x720")
+    parser.add_argument("--test", type=str, default="")
 
     config = parser.parse_args()
 

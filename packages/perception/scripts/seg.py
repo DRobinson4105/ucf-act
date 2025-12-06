@@ -22,14 +22,15 @@ palette = np.array([
     [220, 220, 0], # vehicle
 ], dtype=np.uint8)
 
-def preprocess(frame: np.typing.NDArray[np.uint8]) -> np.typing.NDArray[np.float32]:
+def preprocess(frame: np.typing.NDArray[np.uint8], resolution: tuple[int, int]) -> np.typing.NDArray[np.float32]:
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     img = (img - mean) / std
-
-    inp = img.transpose(2, 0, 1).reshape(1, 3, 720, 1280)
+    
+    w, h = resolution
+    inp = img.transpose(2, 0, 1).reshape(1, 3, h, w)
 
     return inp
 
@@ -50,13 +51,15 @@ def main(config):
     input_name = ort_session.get_inputs()[0].name
     output_names = [o.name for o in ort_session.get_outputs()]
 
-    cap = VideoCapture(config.camera_port, frame_shape=(720, 1280))
+    w, h = config.resolution.lower().split('x')
+    w, h = int(w), int(h)
+    resolution = (w, h)
 
     if config.test:
         frame = cv2.imread(config.test)
-        frame = cv2.resize(frame, (1280, 720))
+        frame = cv2.resize(frame, resolution)
 
-        inp = preprocess(frame)
+        inp = preprocess(frame, resolution)
 
         outputs = ort_session.run(output_names, {input_name: inp})
         annotated = postprocess(frame, outputs)
@@ -65,6 +68,8 @@ def main(config):
         cv2.waitKey(0)
         cv2.destroyAllWindows()
     else:
+        cap = VideoCapture(config.camera_port, frame_shape=(h, w))
+
         try:
             last_frame = time.time()
             while True:
@@ -91,7 +96,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--camera-port", type=int, default=0)
-    parser.add_argument("--model-path", type=str, default="models/ddrnet_slim.onnx")
+    parser.add_argument("--model-path", type=str, default="models/ddrnet.onnx")
+    parser.add_argument("--resolution", type=str, default="1280x720")
     parser.add_argument("--test", type=str, default="")
 
     config = parser.parse_args()
