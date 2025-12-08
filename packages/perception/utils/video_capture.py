@@ -8,10 +8,10 @@ from numpy.typing import NDArray
 class VideoCapture:
     def __init__(self, camera_port: int, frame_shape: Optional[tuple[int, int]] = None) -> None:
         self.cap = cv2.VideoCapture(camera_port)
-
         if not self.cap.isOpened():
-            raise RuntimeError(f"Could not open camera")
-        
+            raise RuntimeError(f"Could not open camera index {camera_port}")
+        self.cap.set(cv2.CAP_PROP_FPS, 5)
+
         if frame_shape is not None:
             height, width = frame_shape
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)

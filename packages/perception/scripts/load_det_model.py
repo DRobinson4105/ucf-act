@@ -1,6 +1,5 @@
 import os
 import argparse
-import shutil
 
 import torch
 torch.cuda.init()
@@ -37,16 +36,11 @@ def main(config):
             dynamic=False,
         )
 
-    if config.output_path != "models/yolo11n.pt":
-        os.chdir("..")
-        shutil.move()
-
     print(f"Downloaded YOLOv11")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--output-path", type=str, default="models/yolo11n.pt")
     parser.add_argument("--resolution", type=str, default="1280x720")
 
     config = parser.parse_args()

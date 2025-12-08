@@ -12,30 +12,47 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from utils.ddrnet import load_ddrnet_slim
+from utils.gcnet import load_gcnet
 
 def main(config):
-    print(f"Downloading DDRNet")
+    checkpoint_path = f"models/{config.model}.pth"
+    output_path = f"models/{config.model}.onnx"
+    print(f"Downloading {config.model}")
     
     os.makedirs("models", exist_ok=True)
 
-    model = load_ddrnet_slim()
-    checkpoint_id = "1d_K3Af5fKHYwxSo8HkxpnhiekhwovmiP"
-    
-    checkpoint_path = config.output_path.replace(".onnx", ".pth")
+    if config.model == "ddrnet":
+        model = load_ddrnet_slim()
 
-    gdown.download(id=checkpoint_id, output=checkpoint_path)
-    checkpoint = torch.load(checkpoint_path, map_location='cpu') 
+        checkpoint_id = "1d_K3Af5fKHYwxSo8HkxpnhiekhwovmiP"
 
-    state_dict = OrderedDict()
+        gdown.download(id=checkpoint_id, output=checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu') 
 
-    for k, v in checkpoint.items():
-        if k.startswith("model") and not k.startswith("model.seghead_extra"):
-            state_dict[k[6:]] = v
+        state_dict = OrderedDict()
 
-    torch.save(state_dict, checkpoint_path)
+        for k, v in checkpoint.items():
+            if k.startswith("model") and not k.startswith("model.seghead_extra"):
+                state_dict[k[6:]] = v
 
-    model.load_state_dict(state_dict, strict=True)
-    model.eval()
+        torch.save(state_dict, checkpoint_path)
+
+        model.load_state_dict(state_dict, strict=True)
+        model.eval()
+    elif config.model == "gcnet":
+        model = load_gcnet()
+
+        checkpoint_id = "1KersBP95k3b0AELiYlQ1rk4PKUmN-ueu"
+
+        gdown.download(id=checkpoint_id, output=checkpoint_path)
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+
+        state_dict = checkpoint["state_dict"]
+
+        torch.save(state_dict, checkpoint_path)
+
+        model.load_state_dict(state_dict, strict=True)
+        model.eval()
 
     w, h = config.resolution.lower().split('x')
     w, h = int(w), int(h)
@@ -49,21 +66,21 @@ def main(config):
     torch.onnx.export(
         model,
         example_inputs,
-        config.output_path,
+        output_path,
         export_params=True,
         input_names=["input"],
         output_names=["output"]
     )
 
-    onnx_model = onnx.load(config.output_path)
+    onnx_model = onnx.load(output_path)
     onnx.checker.check_model(onnx_model)
 
-    print(f"Downloaded DDRNet")
+    print(f"Downloaded {config.model}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--output-path", type=str, default="models/ddrnet.onnx")
+    parser.add_argument("--model", type=str, default="ddrnet")
     parser.add_argument("--resolution", type=str, default="1280x720")
 
     config = parser.parse_args()

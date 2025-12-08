@@ -45,12 +45,12 @@ def postprocess(frame: np.typing.NDArray[np.uint8], outputs: list[np.typing.NDAr
     return annotated
 
 def main(config):
-    ort_session = ort.InferenceSession(config.model_path, providers=[
-        "TensorrtExecutionProvider", "CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"
+    model_path = f"models/{config.model}.onnx"
+    ort_session = ort.InferenceSession(model_path, providers=[
+        "CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"
     ])
     input_name = ort_session.get_inputs()[0].name
     output_names = [o.name for o in ort_session.get_outputs()]
-
     w, h = config.resolution.lower().split('x')
     w, h = int(w), int(h)
     resolution = (w, h)
@@ -79,7 +79,7 @@ def main(config):
                 print(f"FPS: {1 / (time.time() - last_frame)}")
                 last_frame = time.time()
 
-                inp = preprocess(frame)
+                inp = preprocess(frame, resolution)
                 outputs = ort_session.run(output_names, {input_name: inp})
                 annotated = postprocess(frame, outputs)
 
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--camera-port", type=int, default=0)
-    parser.add_argument("--model-path", type=str, default="models/ddrnet.onnx")
+    parser.add_argument("--model", type=str, default="ddrnet")
     parser.add_argument("--resolution", type=str, default="1280x720")
     parser.add_argument("--test", type=str, default="")
 

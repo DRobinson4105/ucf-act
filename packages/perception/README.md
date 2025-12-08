@@ -6,7 +6,7 @@ conda activate act_perception
 
 # install with cuda 12.1
 conda install -c conda-forge cudnn=9
-pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121 onnxruntime-gpu==1.23.2
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu121 onnxruntime-gpu==1.23.2 tensorrt_cu12==10.14.1.48.post1
 
 # install with cpu
 pip install torch==2.5.1 torchvision==0.20.1 onnxruntime==1.23.2
@@ -18,5 +18,5 @@ pip install -r requirements.txt -c constraints.txt
 python scripts/load_det_model.py
 
 # download segmentation model
-python scripts/load_seg_model.py --model {gcnet, ddrnet}
+python scripts/load_seg_model.py
 ```
