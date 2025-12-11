@@ -1,0 +1,5 @@
+__pycache__
+weights
+recorded_data
+*.ipynb
+data/cityscapes
