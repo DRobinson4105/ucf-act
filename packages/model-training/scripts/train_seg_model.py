@@ -151,7 +151,8 @@ def main(args):
 
         end = time.time()
         elapsed = end - start
-        timestamp = f"{elapsed / 60} m {elapsed % 60} s" if elapsed > 60 else f"{elapsed} s"
+        timestamp = f"{elapsed // 3600}:{elapsed // 60 % 60}:{int(elapsed % 60)}"
+
         print(f"Epoch {epoch+1} ({timestamp}) -> Loss: {train_loss}")
         
         if epoch % train_config["val_interval_epochs"] == 0:
@@ -193,10 +194,9 @@ def main(args):
 
             end = time.time()
             elapsed = end - start
-            timestamp = f"{elapsed / 60} m {elapsed % 60} s" if elapsed > 60 else f"{elapsed} s"
+            timestamp = f"{elapsed // 3600}:{elapsed // 60 % 60}:{int(elapsed % 60)}"
 
-            print(f"Validation ({timestamp}) -> Loss: {val_loss}, MeanIoU: {mean_IoU:4.4f}, Pixel_Acc: {pixel_acc: 4.4f}, Mean_Acc: {mean_acc: 4.4f}, Class IoU:")
-            print(IoU_array)
+            print(f"Validation ({timestamp}) -> Loss: {val_loss}, MeanIoU: {mean_IoU:4.4f}, Pixel_Acc: {pixel_acc:4.4f}, Mean_Acc: {mean_acc:4.4f}, Class IoU: {IoU_array}")
 
             if mean_IoU > best_miou:
                 best_state_dict = model.state_dict()
