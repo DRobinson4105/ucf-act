@@ -1,3 +1,7 @@
+# Dataset Download (if training from scratch)
+
+**Segmentation:** Download `leftImg8bit_trainvaltest.zip` and `gtFine_trainvaltest.zip` from [cityscapes](https://www.cityscapes-dataset.com/downloads) and move `leftImg8bit` and `gtFine` subfolders to `data/cityscapes`.
+
 # Environment Setup
 
 ```bash
@@ -14,9 +18,14 @@ pip install torch==2.5.1 torchvision==0.20.1 onnxruntime==1.23.2
 # install other dependencies while pinning torch==2.5.1 and torchvision==0.20.1
 pip install -r requirements.txt -c constraints.txt
 
-# download detection model (YOLOv11)
-python scripts/load_det_model.py
+# download detection weights (YOLOv11)
+python scripts/load_det_weights.py
 
-# download segmentation model
-python scripts/load_seg_model.py
+# train segmentation model
+python scripts/load_seg_weights.py --model ddrnet
+python scripts/train_seg_model.py --config configs/ddrnet.yaml --stage pretrain
+python scripts/train_seg_model.py --config configs/ddrnet.yaml --stage finetune
+
+# test segmentation model
+python scripts/test_seg_model.py --config configs/ddrnet.yaml
 ```

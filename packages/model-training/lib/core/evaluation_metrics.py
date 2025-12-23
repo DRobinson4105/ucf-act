@@ -1,14 +1,11 @@
 import numpy as np
 
 def get_confusion_matrix(label, pred, size, num_class, ignore=-1):
-    output = pred.cpu().numpy().transpose(0, 2, 3, 1)
-    seg_pred = np.asarray(np.argmax(output, axis=3), dtype=np.uint8)
-    seg_gt = np.asarray(
-    label.cpu().numpy()[:, :size[-2], :size[-1]], dtype=int)
+    seg_pred = pred.cpu().numpy()
+    seg_gt = np.asarray(label.cpu().numpy()[:, :size[-2], :size[-1]], dtype=int)
 
-    ignore_index = seg_gt != ignore
-    seg_gt = seg_gt[ignore_index]
-    seg_pred = seg_pred[ignore_index]
+    seg_pred = seg_pred[seg_gt != ignore]
+    seg_gt = seg_gt[seg_gt != ignore]
 
     index = (seg_gt * num_class + seg_pred).astype('int32')
     label_count = np.bincount(index)

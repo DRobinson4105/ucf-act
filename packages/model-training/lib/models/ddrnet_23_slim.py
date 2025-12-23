@@ -6,7 +6,6 @@ BatchNorm2d = nn.SyncBatchNorm
 bn_mom = 0.1
 
 def conv3x3(in_planes, out_planes, stride=1):
-    """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=False)
 
@@ -196,11 +195,10 @@ class segmenthead(nn.Module):
 
 class DualResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=19, planes=64, spp_planes=128, head_planes=128, augment=False):
+    def __init__(self, block, layers, num_classes=19, planes=64, spp_planes=128, head_planes=128):
         super(DualResNet, self).__init__()
 
         highres_planes = planes * 2
-        self.augment = augment
 
         self.conv1 =  nn.Sequential(
                           nn.Conv2d(3,planes,kernel_size=3, stride=2, padding=1),
@@ -250,8 +248,7 @@ class DualResNet(nn.Module):
 
         self.spp = DAPPM(planes * 16, spp_planes, planes * 4)
 
-        if self.augment:
-            self.seghead_extra = segmenthead(highres_planes, head_planes, num_classes, scale_factor=8)            
+        self.seghead_extra = segmenthead(highres_planes, head_planes, num_classes, scale_factor=8)            
 
         self.final_layer = segmenthead(planes * 4, head_planes, num_classes, scale_factor=8)
 
@@ -308,7 +305,7 @@ class DualResNet(nn.Module):
                         self.compression3(self.relu(layers[2])),
                         size=[height_output, width_output],
                         mode='bilinear')
-        if self.augment:
+        if self.training:
             temp = x_
 
         x = self.layer4(self.relu(x))
@@ -329,7 +326,7 @@ class DualResNet(nn.Module):
 
         x_ = self.final_layer(x + x_)
 
-        if self.augment: 
+        if self.training: 
             x_extra = self.seghead_extra(temp)
             return [x_, x_extra]
         else:

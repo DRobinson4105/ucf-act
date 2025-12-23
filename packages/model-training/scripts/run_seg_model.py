@@ -9,9 +9,7 @@ import torch
 
 import _init_paths
 from lib.utils import VideoCapture
-from lib.models import load_ddrnet_slim
-
-MODEL_OPTIONS = ["ddrnet_slim"]
+from lib.models import model_generators
 
 LABEL_MAP = np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], dtype=np.uint8)
 PALETTE = np.array([
@@ -48,13 +46,13 @@ def main(args):
     # ])
     # input_name = ort_session.get_inputs()[0].name
     # output_names = [o.name for o in ort_session.get_outputs()]
-    if args.model == "ddrnet_slim":
-        model = load_ddrnet_slim()
+    if args.model in model_generators:
+        model = model_generators[args.model](num_classes=2)
         checkpoint_path = f"weights/{args.model}.pth"
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
         model.load_state_dict(checkpoint, strict=True)
     else:
-        raise RuntimeError(f"Unsupported model: {args.model}, options are {MODEL_OPTIONS}")
+        raise RuntimeError(f"Unsupported model: {args.model}, options are {model_generators}")
 
     model.eval()
     model = model.cuda()
@@ -106,7 +104,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--camera-port", type=int, default=0)
-    parser.add_argument("--model", type=str, default="ddrnet", choices=MODEL_OPTIONS)
+    parser.add_argument("--model", type=str, default="ddrnet", choices=model_generators)
     parser.add_argument("--resolution", type=str, default="1280x720")
     parser.add_argument("--test", type=str, default="")
 

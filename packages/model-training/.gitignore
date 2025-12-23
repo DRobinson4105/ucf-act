@@ -1,5 +1,4 @@
 __pycache__
 weights
-recorded_data
-*.ipynb
-data/cityscapes
+data/cityscapes/gtFine
+data/cityscapes/leftImg8bit

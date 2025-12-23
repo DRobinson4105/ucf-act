@@ -1,1 +1,5 @@
-from .cityscapes import Cityscapes as CityscapesDataset
+from .cityscapes import Cityscapes
+
+dataset_generators = {
+    "cityscapes": Cityscapes
+}
