@@ -31,7 +31,10 @@ class UCFSeg(Dataset):
             T.Normalize(mean=mean, std=std)
         ])
 
-        self.target_transform =  lambda x: torch.as_tensor(x, dtype=torch.int64)
+        self.target_transform = T.Compose([
+            T.ToTensor(),
+            lambda x: x.squeeze(0).long()
+        ])
 
     def __len__(self):
         return len(self.images)

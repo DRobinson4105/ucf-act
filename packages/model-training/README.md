@@ -1,8 +1,10 @@
-# Dataset Download (if training from scratch)
+# Model Training
+
+## Dataset Download (if training from scratch)
 
 **Segmentation:** Download `leftImg8bit_trainvaltest.zip` and `gtFine_trainvaltest.zip` from [cityscapes](https://www.cityscapes-dataset.com/downloads) and move `leftImg8bit` and `gtFine` subfolders to `data/cityscapes`.
 
-# Environment Setup
+## Environment Setup
 
 ```bash
 conda create -n act_perception python=3.11 -y
@@ -22,7 +24,7 @@ pip install -r requirements.txt -c constraints.txt
 python scripts/load_det_weights.py
 
 # train segmentation model
-python scripts/load_seg_weights.py --model ddrnet
+python scripts/load_seg_weights.py --config configs/ddrnet.yaml
 python scripts/train_seg_model.py --config configs/ddrnet.yaml --stage pretrain
 python scripts/train_seg_model.py --config configs/ddrnet.yaml --stage finetune
 

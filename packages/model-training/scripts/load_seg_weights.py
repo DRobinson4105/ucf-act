@@ -6,6 +6,7 @@ import gdown
 import torch
 import torch.nn as nn
 import onnx
+import yaml
 
 import _init_paths
 from lib.models import model_generators
@@ -36,15 +37,20 @@ def collapse_head(old_conv):
     return new_conv
 
 def main(args):
-    checkpoint_path = f"weights/{args.model}.pth"
-    output_path = f"weights/{args.model}.onnx"
-    print(f"Downloading {args.model}")
+    with open(args.config, 'r') as fp:
+        config = yaml.safe_load(fp)
+
+    torch.manual_seed(config["seed"])
+
+    checkpoint_path = f"weights/{config['model']}.pth"
+    output_path = f"weights/{config['model']}.onnx"
+    print(f"Downloading {config['model']}")
     
     os.makedirs("weights", exist_ok=True)
 
-    model = model_generators[args.model](num_classes=19)
+    model = model_generators[config["model"]](num_classes=19)
 
-    if args.model == "ddrnet":
+    if config["model"] == "ddrnet":
         checkpoint_id = "1d_K3Af5fKHYwxSo8HkxpnhiekhwovmiP"
 
         gdown.download(id=checkpoint_id, output=checkpoint_path)
@@ -63,7 +69,7 @@ def main(args):
 
         torch.save(model.state_dict(), checkpoint_path)
         model.eval()
-    elif args.model == "gcnet":
+    elif config["model"] == "gcnet":
         checkpoint_id = "1KersBP95k3b0AELiYlQ1rk4PKUmN-ueu"
 
         gdown.download(id=checkpoint_id, output=checkpoint_path)
@@ -79,9 +85,9 @@ def main(args):
         torch.save(model.state_dict(), checkpoint_path)
         model.eval()
     else:
-        raise RuntimeError(f"Unsupported model: {args.model}, options are {MODEL_OPTIONS}")
+        raise RuntimeError(f"Unsupported model: {config['model']}, options are {MODEL_OPTIONS}")
 
-    w, h = args.resolution.lower().split('x')
+    w, h = config["resolution"].lower().split('x')
     w, h = int(w), int(h)
 
     example_inputs = torch.randn(1, 3, h, w)
@@ -102,13 +108,12 @@ def main(args):
     onnx_model = onnx.load(output_path)
     onnx.checker.check_model(onnx_model)
 
-    print(f"Downloaded {args.model}")
+    print(f"Downloaded {config['model']}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--model", type=str, default="ddrnet", choices=MODEL_OPTIONS)
-    parser.add_argument("--resolution", type=str, default="1280x720")
+    parser.add_argument("--config", type=str, default="config/ddrnet.yaml")
 
     args = parser.parse_args()
 

@@ -1,5 +1,6 @@
 import time
 import argparse
+import copy
 
 from tqdm import tqdm
 import numpy as np
@@ -44,8 +45,8 @@ def main(args):
     cudnn.deterministic = config["cudnn"]["deterministic"]
     cudnn.enabled = config["cudnn"]["enabled"]
 
-    num_classes = config["model"]["num_classes"]
-    model_name = config["model"]["name"]
+    model_name = config["model"]
+    num_classes = config["num_classes"]
 
     if model_name in model_generators:
         model = model_generators[model_name](num_classes=num_classes)
@@ -151,7 +152,10 @@ def main(args):
 
         end = time.time()
         elapsed = end - start
-        timestamp = f"{elapsed // 3600}:{elapsed // 60 % 60}:{int(elapsed % 60)}"
+        hours = int(elapsed / 3600)
+        minutes = int(elapsed / 60 % 60)
+        seconds = int(elapsed % 60)
+        timestamp = f"{hours}:{minutes:02d}:{seconds:02d}" if hours > 0 else f"{minutes:02d}:{seconds:02d}"
 
         print(f"Epoch {epoch+1} ({timestamp}) -> Loss: {train_loss}")
         
@@ -194,27 +198,27 @@ def main(args):
 
             end = time.time()
             elapsed = end - start
-            timestamp = f"{elapsed // 3600}:{elapsed // 60 % 60}:{int(elapsed % 60)}"
+            hours = int(elapsed / 3600)
+            minutes = int(elapsed / 60 % 60)
+            seconds = int(elapsed % 60)
+            timestamp = f"{hours}:{minutes:02d}:{seconds:02d}" if hours > 0 else f"{minutes:02d}:{seconds:02d}"
 
             print(f"Validation ({timestamp}) -> Loss: {val_loss}, MeanIoU: {mean_IoU:4.4f}, Pixel_Acc: {pixel_acc:4.4f}, Mean_Acc: {mean_acc:4.4f}, Class IoU: {IoU_array}")
 
             if mean_IoU > best_miou:
-                best_state_dict = model.state_dict()
+                best_state_dict = copy.deepcopy(model.state_dict())
                 best_epoch = epoch
                 best_miou = float(mean_IoU)
+                if "save_path" in train_config:
+                    torch.save(best_state_dict, train_config["save_path"])
+                    print(f"Saved to {train_config['save_path']}")
             elif "patience" in train_config and epoch - best_epoch > train_config["patience"]:
-                torch.save(best_state_dict, train_config["save_path"])
-                print(f"Saved to {train_config['save_path']}")
                 return
-
-    if "save_path" in train_config:
-        torch.save(model.state_dict(), train_config["save_path"])
-        print(f"Saved to {train_config['save_path']}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--config", type=str, default="configs/ddrnet.yaml")
+    parser.add_argument("--config", type=str, default="config/ddrnet.yaml")
     parser.add_argument("--stage", type=str)
 
     args = parser.parse_args()

@@ -3,11 +3,10 @@ cudnn:
   deterministic: false
   enabled: true
 
-seed: 1234
-
-model:
-  name: ddrnet
-  num_classes: 2
+model: ddrnet
+seed: 56
+num_classes: 2
+resolution: '1280x720'
 
 train_stages:
   pretrain:
@@ -36,8 +35,7 @@ train_stages:
       lr: 0.01
       weight_decay: 0.0005
       momentum: 0.9
-    num_epochs: 100
-    val_interval_epochs: 1
+    num_epochs: 200
 
   finetune:
     dataset: ucf_seg
@@ -67,7 +65,6 @@ train_stages:
       weight_decay: 0.0005
       momentum: 0.9
     num_epochs: 100
-    val_interval_epochs: 1
 
 train:
   optimizer: 'sgd'
@@ -75,7 +72,8 @@ train:
   shuffle: true
   ignore_label: 255
   lr_scheduler: 'poly'
-  patience: 10
+  patience: 15
+  val_interval_epochs: 1
 
 val:
   batch_size: 1

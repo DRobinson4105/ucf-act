@@ -32,14 +32,23 @@ def preprocess(frame: np.typing.NDArray[np.uint8], resolution: tuple[int, int]) 
 def postprocess(frame: np.typing.NDArray[np.uint8], outputs: list[np.typing.NDArray[np.float32]]) -> np.typing.NDArray[np.uint8]:
     preds = np.squeeze(outputs.argmax(axis=1), axis=0)
 
-    preds = LABEL_MAP[preds]
+    # preds = LABEL_MAP[preds]
     mask = PALETTE[preds]
 
     annotated = cv2.addWeighted(frame, 0.5, mask, 0.5, 0)
+    annotated = annotated[..., ::-1]
 
     return annotated
 
+@torch.inference_mode
 def main(args):
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+
     # model_path = f"weights/{args.model}.onnx"
     # ort_session = ort.InferenceSession(model_path, providers=[
     #     "CUDAExecutionProvider", "CoreMLExecutionProvider", "CPUExecutionProvider"
@@ -48,14 +57,14 @@ def main(args):
     # output_names = [o.name for o in ort_session.get_outputs()]
     if args.model in model_generators:
         model = model_generators[args.model](num_classes=2)
-        checkpoint_path = f"weights/{args.model}.pth"
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint_path = f"weights/{args.model}{args.checkpoint_suffix}.pth"
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
         model.load_state_dict(checkpoint, strict=True)
     else:
         raise RuntimeError(f"Unsupported model: {args.model}, options are {model_generators}")
 
     model.eval()
-    model = model.cuda()
+    model = model.to(device)
 
     w, h = args.resolution.lower().split('x')
     w, h = int(w), int(h)
@@ -68,7 +77,7 @@ def main(args):
         inp = preprocess(frame, resolution)
 
         # outputs = ort_session.run(output_names, {input_name: inp})
-        outputs = model(torch.from_numpy(inp)).detach().numpy()
+        outputs = model(torch.from_numpy(inp).to(device)).cpu().numpy()
         annotated = postprocess(frame, outputs)
 
         cv2.imshow("Test", annotated)
@@ -88,7 +97,7 @@ def main(args):
 
                 inp = preprocess(frame, resolution)
                 # outputs = ort_session.run(output_names, {input_name: inp})
-                outputs = model(torch.from_numpy(inp)).detach().numpy()
+                outputs = model(torch.from_numpy(inp).to(device)).cpu().numpy()
                 annotated = postprocess(frame, outputs)
 
                 cv2.imshow("window", annotated)
@@ -105,6 +114,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--camera-port", type=int, default=0)
     parser.add_argument("--model", type=str, default="ddrnet", choices=model_generators)
+    parser.add_argument("--checkpoint-suffix", type=str, default="")
     parser.add_argument("--resolution", type=str, default="1280x720")
     parser.add_argument("--test", type=str, default="")
 

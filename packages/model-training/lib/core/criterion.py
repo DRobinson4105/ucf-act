@@ -17,6 +17,8 @@ class CrossEntropy(nn.Module):
         self.align_corners = align_corners
 
     def _forward(self, score, target):
+        if score.dim() == 3:
+            score = score.unsqueeze(0)
         ph, pw = score.size(2), score.size(3)
         h, w = target.size(1), target.size(2)
         if ph != h or pw != w:
