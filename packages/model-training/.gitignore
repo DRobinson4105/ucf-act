@@ -2,3 +2,5 @@ __pycache__
 weights
 data/cityscapes/gtFine
 data/cityscapes/leftImg8bit
+data/ucf-det/whole
+runs

@@ -177,7 +177,6 @@ def main(args):
         elif key == ord('f') or key == ord('F'):
             show_seg = not show_seg
         elif key == ord('c') or key == ord('C'):
-            print(config["curr_polygon"])
             config["curr_polygon"] = []
             render_overlay()
 

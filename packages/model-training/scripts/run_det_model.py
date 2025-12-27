@@ -19,7 +19,7 @@ def main(args):
     else:
         device = "cpu"
 
-    model = YOLO("weights/yolo11n.pt").to(device)
+    model = YOLO(f"weights/{args.checkpoint}").to(device)
 
     w, h = args.resolution.lower().split('x')
     w, h = int(w), int(h)
@@ -62,6 +62,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
+    parser.add_argument("--checkpoint", type=str, default="yolo11n.pt")
     parser.add_argument("--camera-port", type=int, default=0)
     parser.add_argument("--resolution", type=str, default="1280x720")
     parser.add_argument("--test", type=str, default="")

@@ -1,0 +1,8 @@
+path: data/ucf-det
+train: train/images
+val: val/images
+test: test/images
+
+names: [person, bicycle, car, motorcycle, bus, truck, golf_cart, scooter, bicycle_rack]
+
+nc: 9
