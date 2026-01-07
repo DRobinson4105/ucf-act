@@ -1,0 +1,91 @@
+cudnn:
+  benchmark: true
+  deterministic: false
+  enabled: true
+
+model: ddrnet
+seed: 56
+num_classes: 2
+resolution: '1280x720'
+
+train_stages:
+  pretrain:
+    dataset: cityscapes
+    dataset_parameters:
+      root: 'data/cityscapes'
+      num_classes: 2
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    train_dataset_parameters:
+      list_path: 'train.lst'
+      random_flip: true
+      crop_size: [512, 1024]
+    val_dataset_parameters:
+      list_path: 'val.lst'
+      random_flip: false
+    load_path: 'weights/ddrnet.pth'
+    save_path: 'weights/ddrnet_cityscapes.pth'
+    criterion: 'ohem'
+    criterion_parameters:
+      ohem_threshold: 0.9
+      ohem_keep: 131072
+      weight: [1, 0.4]
+      align_corners: false
+    optimizer_parameters:
+      lr: 0.01
+      weight_decay: 0.0005
+      momentum: 0.9
+    num_epochs: 200
+
+  finetune:
+    dataset: ucf_seg
+    dataset_parameters:
+      num_classes: 2
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    train_dataset_parameters:
+      root: 'data/ucf-seg/train'
+      random_flip: true
+      crop_size: [512, 896]
+    val_dataset_parameters:
+      root: 'data/ucf-seg/val'
+      random_flip: false
+    train_dir: 'data/ucf-seg/train'
+    val_dir: 'data/ucf-seg/val'
+    load_path: 'weights/ddrnet_cityscapes.pth'
+    save_path: 'weights/ddrnet_ucf.pth'
+    image_size: [720, 1280]
+    crop_size: [512, 896]
+    criterion: 'cross_entropy'
+    criterion_parameters:
+      weight: [1, 0.4]
+      align_corners: false
+    optimizer_parameters:
+      lr: 0.001
+      weight_decay: 0.0005
+      momentum: 0.9
+    num_epochs: 150
+
+train:
+  optimizer: 'sgd'
+  batch_size: 8
+  ignore_label: 255
+  lr_scheduler: 'poly'
+  patience: 15
+  val_interval_epochs: 1
+
+val:
+  batch_size: 1
+  ignore_label: 255
+
+test:
+  dataset: ucf_seg
+  dataset_parameters:
+    root: 'data/ucf-seg/val'
+    random_flip: false
+    num_classes: 2
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+  load_path: 'weights/ddrnet_ucf.pth'
+  batch_size: 1
+  ignore_label: 255

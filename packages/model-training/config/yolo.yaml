@@ -1,0 +1,16 @@
+cudnn:
+  benchmark: true
+  deterministic: false
+  enabled: true
+
+model: yolo11n
+seed: 56
+
+train:
+  load_path: 'weights/yolo11n.pt'
+  save_path: 'weights/yolo11n_ucf.pt'
+  ultralytics_parameters:
+    data: 'data/ucf-det/ucf_det.yaml'
+    epochs: 100
+    project: 'runs/ucf_det'
+    name: yolo11n
