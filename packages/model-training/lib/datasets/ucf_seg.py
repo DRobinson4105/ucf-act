@@ -32,7 +32,7 @@ class UCFSeg(Dataset):
         ])
 
         self.target_transform = T.Compose([
-            T.ToTensor(),
+            T.PILToTensor(),
             lambda x: x.squeeze(0).long()
         ])
 

@@ -3,14 +3,14 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 class CrossEntropy(nn.Module):
-    def __init__(self, ignore_label=-1, weight=None, align_corners=False):
+    def __init__(self, ignore_label=-1, class_weight=None, weight=None, align_corners=False):
         super(CrossEntropy, self).__init__()
         self.ignore_label = ignore_label
 
-        if weight is not None:
-            weight = torch.Tensor(weight)
+        if class_weight is not None:
+            class_weight = torch.Tensor(class_weight)
         self.criterion = nn.CrossEntropyLoss(
-            weight=weight,
+            weight=class_weight,
             ignore_index=ignore_label
         )
         self.weight = weight
@@ -36,16 +36,16 @@ class CrossEntropy(nn.Module):
 
 class OhemCrossEntropy(nn.Module):
     def __init__(self, ignore_label=-1, ohem_threshold=0.7,
-                 ohem_keep=100000, weight=None, align_corners=False):
+                 ohem_keep=100000, class_weight=None, weight=None, align_corners=False):
         super(OhemCrossEntropy, self).__init__()
         self.thresh = ohem_threshold
         self.min_kept = max(1, ohem_keep)
         self.ignore_label = ignore_label
 
-        if weight is not None:
-            weight = torch.Tensor(weight)
+        if class_weight is not None:
+            class_weight = torch.Tensor(class_weight)
         self.criterion = nn.CrossEntropyLoss(
-            weight=weight,
+            weight=class_weight,
             ignore_index=ignore_label,
             reduction='none'
         )

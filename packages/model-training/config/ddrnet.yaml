@@ -50,8 +50,6 @@ train_stages:
     val_dataset_parameters:
       root: 'data/ucf-seg/val'
       random_flip: false
-    train_dir: 'data/ucf-seg/train'
-    val_dir: 'data/ucf-seg/val'
     load_path: 'weights/ddrnet_cityscapes.pth'
     save_path: 'weights/ddrnet_ucf.pth'
     image_size: [720, 1280]
@@ -59,6 +57,7 @@ train_stages:
     criterion: 'cross_entropy'
     criterion_parameters:
       weight: [1, 0.4]
+      class_weight: [1.56480385, 0.43519615]
       align_corners: false
     optimizer_parameters:
       lr: 0.001
@@ -71,7 +70,7 @@ train:
   batch_size: 8
   ignore_label: 255
   lr_scheduler: 'poly'
-  patience: 15
+  patience: 20
   val_interval_epochs: 1
 
 val:
