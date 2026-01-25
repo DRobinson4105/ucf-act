@@ -32,11 +32,11 @@ def generate_launch_description():
     nodes = [Node(
         package="usb_cam",
         executable="usb_cam_node_exe",
-        namespace=f"{camera}_cam",
+        namespace=[camera, "_cam"],
         name="usb_cam",
         parameters=[params, {
             "video_device": device,
-            "frame_id": f"{camera}_cam",
+            "frame_id": [camera, "_cam"],
         }],
         output="screen",
     ) for camera, device in zip(cameras, devices)]
