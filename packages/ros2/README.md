@@ -40,4 +40,10 @@ ros2 launch livox_ros_driver2 msg_MID360_launch.py
 
 # GPS driver
 ros2 launch bringup gps.launch.py
+
+# Costmap
+ros2 launch bringup costmap.launch.py
+
+# Static transforms
+ros2 launch bringup static_tfs.launch.py
 ```

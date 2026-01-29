@@ -20,4 +20,5 @@ def generate_launch_description():
         include("livox_ros_driver2", "msg_MID360_launch.py"),
         include("bringup", "gps.launch.py"),
         include("bringup", "costmap.launch.py"),
+        include("bringup", "static_tfs.launch.py")
     ])

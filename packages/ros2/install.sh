@@ -21,7 +21,7 @@ PKGS=(
     ros-humble-robot-localization
     ros-humble-ublox-dgnss
     ros-humble-tf2-ros
-    ros-humble-nav-msgs
+    ros-humble-nav2-bringup
 )
 
 sudo apt-get install -y "${PKGS[@]}"
