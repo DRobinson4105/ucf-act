@@ -5,8 +5,6 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory("camera")
-
     symlinks = [
         "platform-3610000.usb-usb-0:4.3:1.0-video-index0",
         "platform-3610000.usb-usb-0:4.4:1.0-video-index0",
@@ -27,7 +25,7 @@ def generate_launch_description():
         "side_BR",
     ]
 
-    params = osp.join(pkg_share, "config", "params.yaml")
+    params = osp.join(get_package_share_directory("bringup"), "config", "camera.yaml")
 
     nodes = [Node(
         package="usb_cam",

@@ -3,6 +3,7 @@ import os.path as osp
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import EnvironmentVariable
 from ament_index_python.packages import get_package_share_directory
 
 def include(pkg: str, launch_file: str, launch_arguments: dict | None = None):
@@ -15,9 +16,17 @@ def include(pkg: str, launch_file: str, launch_arguments: dict | None = None):
     )
 
 def generate_launch_description():
+    fprn_user = EnvironmentVariable("FPRN_USER")
+    fprn_pass = EnvironmentVariable("FPRN_PASS")
+
     return LaunchDescription([
-        include("bringup", "full_cam.launch.py"),
-        include("livox_ros_driver2", "msg_MID360_launch.py"),
-        include("bringup", "gps.launch.py"),
-        include("bringup", "costmap.launch.py"),
+        include("ublox_dgnss", "ntrip_client.launch.py", {
+            "use_https": "false",
+            "host": "ntrip.myfloridagps.com",
+            "port": "25000",
+            "mountpoint": 'ORL1',
+            "username": fprn_user,
+            "password": fprn_pass,
+        }),
+        include("ublox_dgnss", "ublox_rover_hpposllh_navsatfix.launch.py")
     ])

@@ -7,8 +7,6 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory("camera")
-
     device = LaunchConfiguration("device")
     camera = LaunchConfiguration("camera")
 
@@ -21,14 +19,11 @@ def generate_launch_description():
         "side_BR",
     ]
     
-    params = osp.join(pkg_share, "config", "params.yaml")
+    params = osp.join(get_package_share_directory("bringup"), "config", "camera.yaml")
 
     return LaunchDescription([
         DeclareLaunchArgument("device"),
-        DeclareLaunchArgument(
-            "camera",
-            choices=cameras
-        ),
+        DeclareLaunchArgument("camera", choices=cameras),
         Node(
             package="usb_cam",
             executable="usb_cam_node_exe",
