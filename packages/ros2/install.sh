@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Install ros2 and packages
+
 sudo apt-get update && sudo apt-get upgrade -y
 
 sudo apt-get install -y software-properties-common curl
@@ -14,6 +16,8 @@ PKGS=(
     cmake
     build-essential
     python3-colcon-common-extensions
+    libpcl-dev
+    libeigen3-dev
     ros-humble-ros-base
     ros-humble-usb-cam
     ros-humble-robot-localization
@@ -27,6 +31,8 @@ PKGS=(
 
 sudo apt-get install -y "${PKGS[@]}"
 
+# Setup workspace
+
 [[ "$(pwd)" == */ros2 ]] || { echo "Error: must be in ros2 workspace (ucf-act/packages/ros2)"; exit 1; }
 
 export ACT_ROS_WS="$(pwd)"
@@ -34,10 +40,18 @@ echo "export ACT_ROS_WS=$ACT_ROS_WS" >> ~/.bashrc
 
 source /opt/ros/humble/setup.bash
 
-git clone https://github.com/drobinson4105/livox_ros_driver2.git src/livox_ros_driver2
+# Install livox driver
+
+git clone https://github.com/DRobinson4105/livox_ros_driver2.git src/livox_ros_driver2
 cd src/livox_ros_driver2
 ./build.sh humble
 cd ../..
+
+# Install fast lio
+
+git clone https://github.com/DRobinson4105/FAST_LIO_ROS2.git src/FAST_LIO_ROS2 --recursive
+
+# Build workspace
 
 ./build.sh
 
