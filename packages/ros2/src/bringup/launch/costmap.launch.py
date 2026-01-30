@@ -14,6 +14,7 @@ def generate_launch_description():
             namespace="costmap",
             name="costmap",
             parameters=[params],
+            remappings=[("bond", "/bond")],
             output="screen",
         ),
         Node(
@@ -22,6 +23,7 @@ def generate_launch_description():
             namespace="costmap",
             name="lifecycle_manager",
             parameters=[params],
+            remappings=[("bond", "/bond")],
             output="screen",
         )
     ])

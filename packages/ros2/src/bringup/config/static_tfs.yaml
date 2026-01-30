@@ -1,10 +1,10 @@
 - frame-id: base_link
   child-frame-id: livox_frame
-  x: 0
+  x: 1.7018
   y: 0
-  z: 0
+  z: 0.8382
   roll: 0
-  pitch: -0.5235987756
+  pitch: 0.4974
   yaw: 0
 - frame-id: odom
   child-frame-id: base_link
