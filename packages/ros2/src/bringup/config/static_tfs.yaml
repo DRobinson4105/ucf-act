@@ -6,6 +6,14 @@
   roll: 0
   pitch: 0.4974
   yaw: 0
+- frame-id: base_link
+  child-frame-id: gps_frame
+  x: 1.4351
+  y: 0.4572
+  z: 1.65735
+  roll: 0
+  pitch: 0
+  yaw: 0
 - frame-id: odom
   child-frame-id: base_link
   x: 0

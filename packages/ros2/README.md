@@ -15,8 +15,7 @@ FPRN_PASS=your_password
 
 After making changes, rebuild with:
 ```bash
-colcon build --symlink-install --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
-source install/setup.bash
+bash build.sh
 ```
 
 ## Run

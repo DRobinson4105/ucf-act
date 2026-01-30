@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Installing ROS 2 and necessary packages"
-
 sudo apt-get update && sudo apt-get upgrade -y
 
 sudo apt-get install -y software-properties-common curl
@@ -22,27 +20,26 @@ PKGS=(
     ros-humble-ublox-dgnss
     ros-humble-tf2-ros
     ros-humble-nav2-bringup
+    ros-humble-rviz2
+    ros-humble-rviz-default-plugins
+    ros-humble-rviz-common
 )
 
 sudo apt-get install -y "${PKGS[@]}"
 
-echo "Installed"
-echo "Building ROS 2 workspace"
-
 [[ "$(pwd)" == */ros2 ]] || { echo "Error: must be in ros2 workspace (ucf-act/packages/ros2)"; exit 1; }
+
 export ACT_ROS_WS="$(pwd)"
+echo "export ACT_ROS_WS=$ACT_ROS_WS" >> ~/.bashrc
 
 source /opt/ros/humble/setup.bash
 
-git clone https://github.com/Livox-SDK/livox_ros_driver2.git src/livox_ros_driver2
+git clone https://github.com/drobinson4105/livox_ros_driver2.git src/livox_ros_driver2
 cd src/livox_ros_driver2
 ./build.sh humble
 cd ../..
 
-colcon build
-source install/setup.bash
+./build.sh
 
 echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 echo "source ${ACT_ROS_WS}/install/setup.bash" >> ~/.bashrc
-
-echo "Built"

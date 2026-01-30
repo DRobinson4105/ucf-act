@@ -30,7 +30,7 @@
 
       pointcloud:
         data_type: PointCloud2
-        topic: /livox/lidar
+        topic: /livox/lidar_pc2
         marking: true
         clearing: true
         obstacle_range: 12.0  
