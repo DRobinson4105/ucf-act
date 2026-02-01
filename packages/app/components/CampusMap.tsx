@@ -1,6 +1,5 @@
 import { CAMPUS_LOCATIONS, UCF_CENTER } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
-import { mapStyle } from "@/constants/mapStyle";
 import { findPath, PathNode } from "@/utils/pathfinding";
 import * as Location from "expo-location";
 import { MapPin, Navigation } from "lucide-react-native";
@@ -243,7 +242,7 @@ export default function CampusMap({
           style={{ flex: 1 }}
           provider={PROVIDER_DEFAULT}
           mapType={Platform.OS === "web" ? undefined : "standard"}
-          customMapStyle={Platform.OS === "web" ? undefined : mapStyle}
+          // customMapStyle={Platform.OS === "web" ? undefined : mapStyle}
           initialRegion={{
             latitude: UCF_CENTER.latitude,
             longitude: UCF_CENTER.longitude,

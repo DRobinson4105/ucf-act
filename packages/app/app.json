@@ -17,11 +17,13 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.tutturu.app",
       "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        },
         "NSLocationAlwaysAndWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
         "NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
         "NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
         "UIBackgroundModes": [
-          "location",
           "location"
         ],
         "ITSAppUsesNonExemptEncryption": false
