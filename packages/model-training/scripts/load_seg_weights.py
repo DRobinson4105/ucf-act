@@ -11,8 +11,6 @@ import yaml
 import _init_paths
 from lib.models import model_generators
 
-MODEL_OPTIONS=["ddrnet", "gcnet"]
-
 def collapse_head(old_conv):
     new_conv = nn.Conv2d(
         in_channels=old_conv.in_channels,
@@ -68,7 +66,6 @@ def main(args):
         model.seghead_extra.conv2 = collapse_head(model.seghead_extra.conv2)
 
         torch.save(model.state_dict(), checkpoint_path)
-        model.eval()
     elif config["model"] == "gcnet":
         checkpoint_id = "1KersBP95k3b0AELiYlQ1rk4PKUmN-ueu"
 
@@ -83,31 +80,10 @@ def main(args):
         model.decode_head.aux_cls_seg_c4 = collapse_head(model.decode_head.aux_cls_seg_c4)
         
         torch.save(model.state_dict(), checkpoint_path)
-        model.eval()
     else:
-        raise RuntimeError(f"Unsupported model: {config['model']}, options are {MODEL_OPTIONS}")
+        raise RuntimeError(f"Unsupported model: {config['model']}, options are {model_generators}")
 
-    w, h = config["resolution"].lower().split('x')
-    w, h = int(w), int(h)
-
-    example_inputs = torch.randn(1, 3, h, w)
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-    example_inputs = (example_inputs - mean) / std
-    example_inputs = (example_inputs,)
-
-    torch.onnx.export(
-        model,
-        example_inputs,
-        output_path,
-        export_params=True,
-        input_names=["input"],
-        output_names=["output"]
-    )
-
-    onnx_model = onnx.load(output_path)
-    onnx.checker.check_model(onnx_model)
-
+    model.eval()
     print(f"Downloaded {config['model']}")
 
 if __name__ == "__main__":
