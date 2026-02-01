@@ -53,7 +53,7 @@ git clone https://github.com/DRobinson4105/FAST_LIO_ROS2.git src/FAST_LIO_ROS2 -
 
 # Build workspace
 
-./build.sh
+bash scripts/build.sh
 
 echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 echo "source ${ACT_ROS_WS}/install/setup.bash" >> ~/.bashrc

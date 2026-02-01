@@ -1,21 +1,29 @@
 - frame-id: base_link
   child-frame-id: livox_frame
-  x: 1.7018
+  x: 1.7272
   y: 0
-  z: 0.8382
+  z: 0.6223
   roll: 0
   pitch: 0.4974
   yaw: 0
 - frame-id: base_link
   child-frame-id: gps_frame
-  x: 1.4351
-  y: 0.4572
-  z: 1.65735
+  x: 1.4478
+  y: 0.4699
+  z: 1.4224
   roll: 0
   pitch: 0
   yaw: 0
-- frame-id: odom
+- frame-id: body
   child-frame-id: base_link
+  x: -1.232
+  y: -0.023
+  z: -1.415
+  roll: 0
+  pitch: -0.4974
+  yaw: 0
+- frame-id: odom
+  child-frame-id: camera_init
   x: 0
   y: 0
   z: 0

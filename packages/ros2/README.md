@@ -2,7 +2,7 @@
 
 ## Setup
 
-1. From the ros2 workspace root, run `bash install.sh` to install necessary packages and build the workspace.
+1. From the ros2 workspace root, run `bash scripts/install.sh` to install necessary packages and build the workspace.
 2. Register an account with [FPRN](https://www.myfloridagps.com/sbc/Account/Register) and subscribe to all GNSS Real-Time Corrections for RTK corrections.
 3. Create a .env file in the workspace root with the following keys and your values.
 
@@ -13,10 +13,7 @@ FPRN_PASS=your_password
 
 ## Build
 
-After making changes, rebuild with:
-```bash
-bash build.sh
-```
+After making changes, rebuild with `bash scripts/build.sh`.
 
 ## Run
 

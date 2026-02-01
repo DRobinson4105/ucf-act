@@ -28,5 +28,7 @@ def generate_launch_description():
             "username": fprn_user,
             "password": fprn_pass,
         }),
-        include("ublox_dgnss", "ublox_rover_hpposllh_navsatfix.launch.py")
+        include("ublox_dgnss", "ublox_rover_hpposllh_navsatfix.launch.py", {
+            "frame_id": "gps_frame"
+        }),
     ])
