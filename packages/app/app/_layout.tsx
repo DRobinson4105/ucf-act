@@ -1,11 +1,12 @@
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { RideProvider } from "@/contexts/RideContext";
 import {
-    Inter_400Regular,
-    Inter_700Bold,
-    useFonts,
+  Inter_400Regular,
+  Inter_700Bold,
+  useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
@@ -16,6 +17,9 @@ import "../global.css";
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
+const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
+  unsavedChangesWarning: false,
+});
 
 function RootLayoutNav() {
   return (
@@ -71,14 +75,16 @@ export default function RootLayout() {
   }
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <AuthProvider>
-          <RideProvider>
-            <NavigationWrapper />
-          </RideProvider>
-        </AuthProvider>
-      </GestureHandlerRootView>
-    </QueryClientProvider>
+    <ConvexProvider client={convex}>
+      <QueryClientProvider client={queryClient}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <AuthProvider>
+            <RideProvider>
+              <NavigationWrapper />
+            </RideProvider>
+          </AuthProvider>
+        </GestureHandlerRootView>
+      </QueryClientProvider>
+    </ConvexProvider>
   );
 }
