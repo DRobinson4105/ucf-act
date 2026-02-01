@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { auth } from "./auth";
 
 export const requestRide = mutation({
   args: {
@@ -15,25 +16,20 @@ export const requestRide = mutation({
     }),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthenticated called to requestRide");
+    const userId = await auth.getUserId(ctx);
+    if (!userId) {
+      throw new Error("Unauthenticated call to requestRide");
     }
-    // const user = await ctx.db
-    //   .query("users")
-    //   .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
-    //   .unique();
 
-    // if (!user) throw new Error("User not found");
-
+    // Placeholder for ride creation logic
     // const rideId = await ctx.db.insert("rides", {
-    //   userId: user._id,
+    //   userId: userId,
     //   origin: args.origin,
     //   destination: args.destination,
     //   status: "requested",
     //   startTime: Date.now(),
     // });
-    // return rideId;
+
     return "mock_ride_id";
   },
 });
@@ -41,9 +37,23 @@ export const requestRide = mutation({
 export const getActiveRide = query({
   args: {},
   handler: async (ctx) => {
-    // const identity = await ctx.auth.getUserIdentity();
-    // if (!identity) return null;
-    // ... logic to find active ride
+    // return null;
     return null;
+  },
+});
+
+export const myHistory = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await auth.getUserId(ctx);
+    if (!userId) return [];
+
+    const rides = await ctx.db
+      .query("rides")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc") // Most recent first
+      .collect();
+
+    return rides;
   },
 });

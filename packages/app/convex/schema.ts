@@ -1,19 +1,23 @@
+import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 export default defineSchema({
+  ...authTables,
   users: defineTable({
-    name: v.string(),
+    name: v.optional(v.string()),
+    image: v.optional(v.string()),
     email: v.optional(v.string()),
+    emailVerificationTime: v.optional(v.number()),
     phone: v.optional(v.string()),
-    // We'll store the auth provider ID here (e.g. from the token)
-    tokenIdentifier: v.string(),
+    campusId: v.optional(v.string()),
+    hasCompletedOnboarding: v.optional(v.boolean()),
     settings: v.optional(
       v.object({
         notificationsEnabled: v.boolean(),
       })
     ),
-  }).index("by_token", ["tokenIdentifier"]),
+  }).index("email", ["email"]),
 
   rides: defineTable({
     userId: v.id("users"),
@@ -57,4 +61,16 @@ export default defineSchema({
     batteryLevel: v.number(),
     lastUpdated: v.number(),
   }),
+
+  notifications: defineTable({
+    userId: v.id("users"),
+    title: v.string(),
+    message: v.string(),
+    type: v.union(v.literal("ride_update"), v.literal("promo"), v.literal("system")),
+    read: v.boolean(),
+    timestamp: v.number(),
+    data: v.optional(v.any()), // For extra payload like rideId
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_read", ["userId", "read"]),
 });

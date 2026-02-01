@@ -1,24 +1,26 @@
 import Colors from "@/constants/colors";
-import { useRide } from "@/contexts/RideContext";
+import { api } from "@/convex/_generated/api";
+import { useMutation, useQuery } from "convex/react";
 import { Bell, CheckCheck } from "lucide-react-native";
 import React from "react";
 import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function NotificationsScreen() {
   const insets = useSafeAreaInsets();
-  const { notifications, markNotificationAsRead, markAllNotificationsAsRead } =
-    useRide();
+  const notifications = useQuery(api.notifications.list) || [];
+  const markAsRead = useMutation(api.notifications.markAsRead);
+  const markAllAsRead = useMutation(api.notifications.markAllAsRead);
 
-  const formatTime = (date: Date) => {
-    const now = new Date();
-    const diff = Math.floor((now.getTime() - date.getTime()) / 1000 / 60);
+  const formatTime = (timestamp: number) => {
+    const now = Date.now();
+    const diff = Math.floor((now - timestamp) / 1000 / 60);
 
     if (diff < 1) return "Just now";
     if (diff < 60) return `${diff}m ago`;
@@ -28,7 +30,7 @@ export default function NotificationsScreen() {
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
-    }).format(date);
+    }).format(new Date(timestamp));
   };
 
   const getNotificationIcon = (type: string) => {
@@ -41,7 +43,7 @@ export default function NotificationsScreen() {
         <Text style={styles.title}>Notifications</Text>
         {notifications.some((n) => !n.read) && (
           <TouchableOpacity
-            onPress={markAllNotificationsAsRead}
+            onPress={() => markAllAsRead()}
             style={styles.markAllButton}
           >
             <CheckCheck size={20} color={Colors.accent} />
@@ -64,12 +66,12 @@ export default function NotificationsScreen() {
           <View style={styles.list}>
             {notifications.map((notification) => (
               <TouchableOpacity
-                key={notification.id}
+                key={notification._id}
                 style={[
                   styles.notificationCard,
                   !notification.read && styles.unreadCard,
                 ]}
-                onPress={() => markNotificationAsRead(notification.id)}
+                onPress={() => markAsRead({ id: notification._id })}
               >
                 <View style={styles.iconContainer}>
                   {getNotificationIcon(notification.type)}

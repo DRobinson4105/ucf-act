@@ -1,14 +1,10 @@
+import { Password } from "@convex-dev/auth/providers/Password";
+import { convexAuth } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 
-export const sendVerificationCode = mutation({
-  args: { phone: v.string() },
-  handler: async (ctx, args) => {
-    // TODO: Implement actual SMS sending (Twilio, etc.)
-    // For now, we'll just log it or return a mock success
-    console.log(`Sending code to ${args.phone}`);
-    return { success: true, message: "Code sent" };
-  },
+export const { auth } = convexAuth({
+  providers: [Password],
 });
 
 export const verifyCode = mutation({

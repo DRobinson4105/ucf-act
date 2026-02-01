@@ -1,37 +1,37 @@
-import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
-import { useRide } from "@/contexts/RideContext";
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
 import { Clock, MapPin } from "lucide-react-native";
 import React from "react";
 import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
-  const { rideHistory } = useRide();
+  const rideHistory = useQuery(api.rides.myHistory) || [];
 
-  const getLocationName = (id: string) => {
-    return CAMPUS_LOCATIONS.find((l) => l.id === id)?.name || "Unknown";
+  const getLocationName = (location: { name?: string }) => {
+    return location.name || "Unknown Location";
   };
 
-  const formatDate = (date: Date) => {
+  const formatDate = (timestamp: number) => {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
-    }).format(date);
+    }).format(new Date(timestamp));
   };
 
-  const getDuration = (start?: Date, end?: Date) => {
+  const getDuration = (start: number, end?: number) => {
     if (!start || !end) return null;
-    const diff = Math.floor((end.getTime() - start.getTime()) / 1000 / 60);
+    const diff = Math.floor((end - start) / 1000 / 60);
     return `${diff} min`;
   };
 
@@ -56,16 +56,18 @@ export default function HistoryScreen() {
         ) : (
           <View style={styles.list}>
             {rideHistory.map((ride) => (
-              <TouchableOpacity key={ride.id} style={styles.rideCard}>
+              <TouchableOpacity key={ride._id} style={styles.rideCard}>
                 <View style={styles.rideHeader}>
                   <View style={styles.vehicleInfo}>
-                    <Text style={styles.vehicleId}>{ride.vehicle.id}</Text>
+                    <Text style={styles.vehicleId}>
+                      {ride.cartId ? `Cart` : "Unassigned"}
+                    </Text>
                     <View style={styles.statusBadge}>
-                      <Text style={styles.statusText}>Completed</Text>
+                      <Text style={styles.statusText}>{ride.status}</Text>
                     </View>
                   </View>
                   <Text style={styles.date}>
-                    {formatDate(ride.requestedAt)}
+                    {formatDate(ride.startTime)}
                   </Text>
                 </View>
 
@@ -80,24 +82,24 @@ export default function HistoryScreen() {
                     <View style={styles.locationRow}>
                       <MapPin size={16} color={Colors.accent} />
                       <Text style={styles.locationText}>
-                        {getLocationName(ride.pickupLocationId)}
+                        {getLocationName(ride.origin)}
                       </Text>
                     </View>
 
                     <View style={styles.locationRow}>
                       <MapPin size={16} color={Colors.primary} />
                       <Text style={styles.locationText}>
-                        {getLocationName(ride.dropoffLocationId)}
+                        {getLocationName(ride.destination)}
                       </Text>
                     </View>
                   </View>
                 </View>
 
-                {ride.pickupAt && ride.completedAt && (
+                {ride.endTime && (
                   <View style={styles.footer}>
                     <Clock size={14} color={Colors.textSecondary} />
                     <Text style={styles.duration}>
-                      {getDuration(ride.pickupAt, ride.completedAt)}
+                      {getDuration(ride.startTime, ride.endTime)}
                     </Text>
                   </View>
                 )}
@@ -185,6 +187,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "600" as const,
     color: Colors.white,
+    textTransform: "capitalize",
   },
   date: {
     fontSize: 13,

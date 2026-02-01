@@ -1,13 +1,14 @@
 import Colors from "@/constants/colors";
-import { useRide } from "@/contexts/RideContext";
+// import { useRide } from "@/contexts/RideContext";
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
 import { Tabs } from "expo-router";
 import { Bell, History, Home, User } from "lucide-react-native";
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 export default function TabLayout() {
-  const { notifications } = useRide();
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = useQuery(api.notifications.unreadCount) ?? 0;
 
   return (
     <Tabs

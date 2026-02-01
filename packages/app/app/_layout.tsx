@@ -1,13 +1,15 @@
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { RideProvider } from "@/contexts/RideContext";
+import { ConvexAuthProvider } from "@convex-dev/auth/react";
 import {
   Inter_400Regular,
   Inter_700Bold,
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexReactClient } from "convex/react";
 import { Stack, useRouter, useSegments } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -20,6 +22,12 @@ const queryClient = new QueryClient();
 const convex = new ConvexReactClient(process.env.EXPO_PUBLIC_CONVEX_URL!, {
   unsavedChangesWarning: false,
 });
+
+const secureStorage = {
+  getItem: SecureStore.getItemAsync,
+  setItem: SecureStore.setItemAsync,
+  removeItem: SecureStore.deleteItemAsync,
+};
 
 function RootLayoutNav() {
   return (
@@ -39,7 +47,7 @@ function RootLayoutNav() {
 }
 
 function NavigationWrapper() {
-  const { hasCompletedOnboarding, isLoading } = useAuth();
+  const { hasCompletedOnboarding, isLoading, isAuthenticated } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -48,12 +56,22 @@ function NavigationWrapper() {
 
     const inOnboarding = segments[0] === "onboarding";
 
-    if (!hasCompletedOnboarding && !inOnboarding) {
-      router.replace("/onboarding");
-    } else if (hasCompletedOnboarding && inOnboarding) {
-      router.replace("/(tabs)");
+    // If authenticated but hasn't completed onboarding -> onboarding
+    // If authenticated and completed onboarding -> tabs
+    // If not authenticated -> onboarding (which has login)
+
+    // Simplified:
+    // If not authenticated, go to onboarding/login
+    // If authenticated but no onboarding flag? (We might store onboarding in user profile now)
+
+    if (!isAuthenticated) {
+        if (!inOnboarding) router.replace("/onboarding");
+    } else if (isAuthenticated && !hasCompletedOnboarding && !inOnboarding) {
+        router.replace("/onboarding");
+    } else if (isAuthenticated && hasCompletedOnboarding && inOnboarding) {
+        router.replace("/(tabs)");
     }
-  }, [hasCompletedOnboarding, isLoading, segments, router]);
+  }, [hasCompletedOnboarding, isLoading, isAuthenticated, segments, router]);
 
   return <RootLayoutNav />;
 }
@@ -75,7 +93,7 @@ export default function RootLayout() {
   }
 
   return (
-    <ConvexProvider client={convex}>
+    <ConvexAuthProvider client={convex} storage={secureStorage}>
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <AuthProvider>
@@ -85,6 +103,6 @@ export default function RootLayout() {
           </AuthProvider>
         </GestureHandlerRootView>
       </QueryClientProvider>
-    </ConvexProvider>
+    </ConvexAuthProvider>
   );
 }

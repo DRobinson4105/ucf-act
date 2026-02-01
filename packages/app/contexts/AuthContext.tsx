@@ -1,112 +1,71 @@
+import { api } from "@/convex/_generated/api";
+import { useAuthActions } from "@convex-dev/auth/react";
 import createContextHook from "@nkzw/create-context-hook";
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useConvexAuth, useQuery } from "convex/react";
+import * as AppleAuthentication from "expo-apple-authentication";
+import { useMemo } from "react";
 
 interface User {
-  id: string;
-  name: string;
+  _id: string;
+  name?: string;
   email?: string;
-  phoneNumber?: string;
-  campusId?: string;
+  phone?: string;
   hasCompletedOnboarding?: boolean;
 }
 
-const USER_STORAGE_KEY = "act_user";
-const ONBOARDING_STORAGE_KEY = "act_onboarding_complete";
-
 export const [AuthProvider, useAuth] = createContextHook(() => {
-  const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
+  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
+  const { signIn, signOut } = useAuthActions();
 
-  useEffect(() => {
-    loadUser();
-  }, []);
+  // Fetch the current user profile from Convex
+  // This will be null if not authenticated or user setup not complete
+  const user = useQuery(api.users.currentUser);
 
-  const loadUser = async () => {
+  const loginWithApple = async () => {
     try {
-      const [storedUser, onboardingComplete] = await Promise.all([
-        AsyncStorage.getItem(USER_STORAGE_KEY),
-        AsyncStorage.getItem(ONBOARDING_STORAGE_KEY),
-      ]);
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
 
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
+      if (credential.identityToken) {
+        await signIn("apple", {
+             idToken: credential.identityToken,
+             // Optional: pass name/email if first time, but Apple usually provides it in token or separate fields
+             // name: credential.fullName?.givenName,
+        });
       }
-
-      setHasCompletedOnboarding(onboardingComplete === "true");
-    } catch (error) {
-      console.error("Error loading user:", error);
-    } finally {
-      setIsLoading(false);
+    } catch (e: any) {
+      if (e.code === "ERR_CANCELED") {
+        // handle that the user canceled the sign-in flow
+      } else {
+        // handle other errors
+        console.error("Apple Sign In Error:", e);
+      }
     }
   };
 
-  const updateUser = useCallback(
-    async (updates: Partial<User>) => {
-      if (!user) return;
+  const logout = async () => {
+    await signOut();
+  };
 
-      const updatedUser = { ...user, ...updates };
-      setUser(updatedUser);
-
-      try {
-        await AsyncStorage.setItem(
-          USER_STORAGE_KEY,
-          JSON.stringify(updatedUser)
-        );
-      } catch (error) {
-        console.error("Error updating user:", error);
-      }
-    },
-    [user]
-  );
-
-  const completeOnboarding = useCallback(async (userData: Omit<User, "id">) => {
-    try {
-      const newUser: User = {
-        id: Date.now().toString(),
-        ...userData,
-        hasCompletedOnboarding: true,
-      };
-
-      await Promise.all([
-        AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(newUser)),
-        AsyncStorage.setItem(ONBOARDING_STORAGE_KEY, "true"),
-      ]);
-
-      setUser(newUser);
-      setHasCompletedOnboarding(true);
-    } catch (error) {
-      console.error("Error completing onboarding:", error);
-      throw error;
-    }
-  }, []);
-
-  const logout = useCallback(async () => {
-    try {
-      await AsyncStorage.removeItem(USER_STORAGE_KEY);
-      setUser(null);
-    } catch (error) {
-      console.error("Error logging out:", error);
-    }
-  }, []);
+  const hasCompletedOnboarding = !!(user?.name); // Example: if name is set, onboarding done?
+  // Or we can rely on a specific field in the user object
+  // For now, let's assume if we have a user object, we are partially onboarded,
+  // but we might want a specific flag.
+  // The original context had `hasCompletedOnboarding`.
 
   return useMemo(
     () => ({
       user,
-      isLoading,
-      hasCompletedOnboarding,
-      updateUser,
-      completeOnboarding,
+      isLoading: isAuthLoading || (isAuthenticated && user === undefined),
+      isAuthenticated,
+      hasCompletedOnboarding: !!user, // Simplified for now
+      loginWithApple,
       logout,
     }),
-    [
-      user,
-      isLoading,
-      hasCompletedOnboarding,
-      updateUser,
-      completeOnboarding,
-      logout,
-    ]
+    [user, isAuthLoading, isAuthenticated, loginWithApple, logout]
   );
 });

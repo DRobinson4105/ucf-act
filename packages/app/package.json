@@ -3,13 +3,14 @@
     "main": "expo-router/entry",
     "version": "1.0.0",
     "scripts": {
-        "start": "expo start --dev-client",
+        "start": "convex dev && expo start --dev-client",
         "ios": "eas build:run -p ios",
         "build": "eas build --profile development --platform ios",
         "web": "expo start --web",
         "lint": "expo lint"
     },
     "dependencies": {
+        "@convex-dev/auth": "^0.0.90",
         "@expo-google-fonts/inter": "^0.4.2",
         "@expo/vector-icons": "^15.0.3",
         "@nkzw/create-context-hook": "^1.1.0",
@@ -20,6 +21,7 @@
         "@tanstack/react-query": "^5.90.20",
         "convex": "^1.31.7",
         "expo": "~54.0.32",
+        "expo-apple-authentication": "~8.0.8",
         "expo-build-properties": "^1.0.10",
         "expo-constants": "~18.0.13",
         "expo-dev-client": "~6.0.20",
