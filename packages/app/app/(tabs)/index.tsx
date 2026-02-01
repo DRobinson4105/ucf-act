@@ -6,10 +6,10 @@ import { useDebouncedNavigation } from "@/hooks/useDebouncedNavigation";
 import { Calendar, Clock, Search } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
-  ScrollView,
-  Text,
-  TouchableOpacity,
-  View,
+    ScrollView,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -53,14 +53,14 @@ export default function HomeScreen() {
     <View className="flex-1 bg-background">
       <View className="px-5 pb-5 bg-background" style={{ paddingTop: insets.top + 20 }}>
         <TouchableOpacity
-          className="flex-row items-center bg-surface rounded-2xl px-4 py-4 gap-3 shadow-md border border-border"
+          className="flex-row items-center bg-card rounded-2xl px-4 py-4 gap-3 shadow-md border border-border"
           onPress={() => router.push("/plan-ride")}
           activeOpacity={0.7}
           disabled={router.isNavigating}
         >
-          <Search size={20} color={Colors.textSecondary} />
+          <Search size={22} color={Colors.accent} />
           <Text className="flex-1 text-lg font-semibold text-text">Where to?</Text>
-          <View className="flex-row items-center bg-card px-3 py-2 rounded-xl gap-1.5">
+          <View className="flex-row items-center bg-surface px-3 py-2 rounded-xl gap-1.5 border border-white/5">
             <Calendar size={16} color={Colors.text} />
             <Text className="text-sm font-semibold text-text">Later</Text>
           </View>
@@ -73,10 +73,11 @@ export default function HomeScreen() {
       >
         {recentLocations.length > 0 && (
           <View className="px-5 pt-2">
+            <Text className="text-lg font-bold text-text mb-3 px-1">Recent Locations</Text>
             {recentLocations.map((location) => (
               <TouchableOpacity
                 key={location.id}
-                className="flex-row items-center bg-surface rounded-2xl p-4 mb-3 gap-4 border border-border"
+                className="flex-row items-center bg-card rounded-2xl p-4 mb-3 gap-4 border border-border shadow-sm"
                 onPress={() => {
                   router.push({
                     pathname: "/plan-ride",
@@ -85,8 +86,8 @@ export default function HomeScreen() {
                 }}
                 disabled={router.isNavigating}
               >
-                <View className="w-12 h-12 rounded-xl bg-card items-center justify-center">
-                  <Clock size={20} color={Colors.textSecondary} />
+                <View className="w-12 h-12 rounded-xl bg-surface items-center justify-center border border-white/5">
+                  <Clock size={20} color={Colors.accent} />
                 </View>
                 <View className="flex-1">
                   <Text className="text-lg font-semibold text-text mb-1">{location.name}</Text>

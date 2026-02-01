@@ -16,6 +16,7 @@ import {
 import React, { useEffect, useRef, useState } from "react";
 import {
     Animated,
+    Dimensions,
     FlatList,
     Keyboard,
     ScrollView,
@@ -26,6 +27,8 @@ import {
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 type SelectionMode = "pickup" | "dropoff" | null;
 type ViewMode = "planning" | "choosing" | "finding" | "tracking";
@@ -390,6 +393,7 @@ export default function PlanRideScreen() {
           }
         }}
         expandRef={sheetRef}
+        maxHeight={viewMode === "choosing" ? SCREEN_HEIGHT * 0.5 : undefined}
       >
         {viewMode === "finding" ? (
           <View style={styles.findingContent}>
