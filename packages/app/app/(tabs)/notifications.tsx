@@ -106,7 +106,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     flexDirection: "row",
@@ -124,7 +124,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: 6,
     paddingHorizontal: 12,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.card,
     borderRadius: 12,
   },
   markAllText: {
@@ -158,7 +158,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   notificationCard: {
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 16,
     flexDirection: "row",
@@ -167,14 +167,14 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
   },
   unreadCard: {
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.card,
     borderColor: Colors.accent,
   },
   iconContainer: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.card,
     alignItems: "center",
     justifyContent: "center",
   },

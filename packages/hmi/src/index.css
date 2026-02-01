@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  html, body {
+    @apply h-full w-full overflow-hidden;
+  }
+
+  body {
+    @apply m-0 p-0 font-sans bg-background text-text-primary;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    @apply h-full w-full;
+  }
+}
+
+@layer components {
+  .glass-effect {
+    @apply backdrop-blur-sm bg-surface/80 border border-border;
+  }
+
+  .bento-card {
+    @apply rounded-2xl border border-border bg-surface shadow-lg;
+  }
+
+  .status-indicator {
+    @apply w-2 h-2 rounded-full transition-all duration-300;
+  }
+
+  .zone-clear {
+    @apply bg-primary/20 border-primary/40;
+  }
+
+  .zone-detected {
+    @apply bg-danger/30 border-danger/60 animate-pulse;
+  }
+}
+
+.leaflet-container {
+  background: #1a1a1a !important;
+}
+
+.leaflet-tile {
+  filter: invert(1) hue-rotate(180deg) brightness(0.8) contrast(1.2);
+}
+
+.leaflet-control-container .leaflet-control {
+  background: rgba(26, 26, 26, 0.9) !important;
+  border: 1px solid #333333 !important;
+  border-radius: 8px !important;
+  color: white !important;
+}
+
+.leaflet-control-zoom a {
+  background: rgba(26, 26, 26, 0.9) !important;
+  color: white !important;
+  border: 1px solid #333333 !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: rgba(42, 42, 42, 0.9) !important;
+}

@@ -160,7 +160,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   profileSection: {
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     paddingVertical: 32,
     alignItems: "center",
     borderBottomWidth: 1,
@@ -202,7 +202,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   campusIdBadge: {
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.card,
     paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 12,
@@ -210,7 +210,7 @@ const styles = StyleSheet.create({
   campusIdText: {
     fontSize: 13,
     fontWeight: "600" as const,
-    color: Colors.primary,
+    color: Colors.accent,
   },
   statsContainer: {
     marginTop: 24,
@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   menuCard: {
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderRadius: 16,
     overflow: "hidden",
     borderWidth: 1,
@@ -269,7 +269,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: Colors.surface,
+    backgroundColor: Colors.card,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -286,7 +286,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 32,
     paddingVertical: 16,
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: Colors.error,

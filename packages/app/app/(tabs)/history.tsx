@@ -59,7 +59,7 @@ export default function HistoryScreen() {
               <TouchableOpacity key={ride.id} style={styles.rideCard}>
                 <View style={styles.rideHeader}>
                   <View style={styles.vehicleInfo}>
-                    <Text style={styles.vehicleId}>{ride.vehicleId}</Text>
+                    <Text style={styles.vehicleId}>{ride.vehicle.id}</Text>
                     <View style={styles.statusBadge}>
                       <Text style={styles.statusText}>Completed</Text>
                     </View>
@@ -118,7 +118,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingBottom: 20,
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
@@ -153,7 +153,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   rideCard: {
-    backgroundColor: Colors.white,
+    backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
   vehicleId: {
     fontSize: 16,
     fontWeight: "700" as const,
-    color: Colors.primary,
+    color: Colors.accent,
   },
   statusBadge: {
     backgroundColor: Colors.success,
@@ -205,7 +205,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accent,
   },
   dotDestination: {
-    backgroundColor: Colors.primary,
+    backgroundColor: Colors.accent,
   },
   line: {
     width: 2,

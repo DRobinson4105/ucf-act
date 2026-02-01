@@ -1,4 +1,4 @@
-import { Ride } from "../types/ride";
+import { Ride } from "@/types/ride";
 
 export const MOCK_PAST_RIDES: Ride[] = [
   {
@@ -11,7 +11,12 @@ export const MOCK_PAST_RIDES: Ride[] = [
     completedAt: new Date(
       Date.now() - 2 * 24 * 60 * 60 * 1000 + 12 * 60 * 1000
     ),
-    vehicleId: "ACT-001",
+    vehicle: {
+      id: "ACT-003",
+      model: "EZGO Express S4",
+      color: "White",
+      licensePlate: "XYZ-789"
+    }
   },
   {
     id: "2",
@@ -23,7 +28,12 @@ export const MOCK_PAST_RIDES: Ride[] = [
     completedAt: new Date(
       Date.now() - 3 * 24 * 60 * 60 * 1000 + 10 * 60 * 1000
     ),
-    vehicleId: "ACT-002",
+    vehicle: {
+      id: "ACT-002",
+      model: "EZGO Express S4",
+      color: "White",
+      licensePlate: "XYZ-789"
+    }
   },
   {
     id: "3",
@@ -35,7 +45,12 @@ export const MOCK_PAST_RIDES: Ride[] = [
     completedAt: new Date(
       Date.now() - 5 * 24 * 60 * 60 * 1000 + 15 * 60 * 1000
     ),
-    vehicleId: "ACT-001",
+    vehicle: {
+      id: "ACT-001",
+      model: "EZGO Express S4",
+      color: "White",
+      licensePlate: "XYZ-789"
+    }
   },
   {
     id: "4",
@@ -47,6 +62,11 @@ export const MOCK_PAST_RIDES: Ride[] = [
     completedAt: new Date(
       Date.now() - 7 * 24 * 60 * 60 * 1000 + 14 * 60 * 1000
     ),
-    vehicleId: "ACT-003",
+    vehicle: {
+      id: "ACT-003",
+      model: "EZGO Express S4",
+      color: "White",
+      licensePlate: "XYZ-789"
+    }
   },
 ];
