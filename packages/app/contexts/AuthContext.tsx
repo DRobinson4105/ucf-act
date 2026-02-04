@@ -5,15 +5,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 interface User {
   id: string;
   name: string;
-  email: string;
+  email?: string;
+  phoneNumber?: string;
   campusId?: string;
+  hasCompletedOnboarding?: boolean;
 }
 
 const USER_STORAGE_KEY = "act_user";
+const ONBOARDING_STORAGE_KEY = "act_onboarding_complete";
 
 export const [AuthProvider, useAuth] = createContextHook(() => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
 
   useEffect(() => {
     loadUser();
@@ -21,19 +25,16 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const loadUser = async () => {
     try {
-      const stored = await AsyncStorage.getItem(USER_STORAGE_KEY);
-      if (stored) {
-        setUser(JSON.parse(stored));
-      } else {
-        const mockUser: User = {
-          id: "1",
-          name: "Campus User",
-          email: "user@campus.edu",
-          campusId: "STU123456",
-        };
-        setUser(mockUser);
-        await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(mockUser));
+      const [storedUser, onboardingComplete] = await Promise.all([
+        AsyncStorage.getItem(USER_STORAGE_KEY),
+        AsyncStorage.getItem(ONBOARDING_STORAGE_KEY),
+      ]);
+
+      if (storedUser) {
+        setUser(JSON.parse(storedUser));
       }
+
+      setHasCompletedOnboarding(onboardingComplete === "true");
     } catch (error) {
       console.error("Error loading user:", error);
     } finally {
@@ -60,6 +61,27 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     [user]
   );
 
+  const completeOnboarding = useCallback(async (userData: Omit<User, "id">) => {
+    try {
+      const newUser: User = {
+        id: Date.now().toString(),
+        ...userData,
+        hasCompletedOnboarding: true,
+      };
+
+      await Promise.all([
+        AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(newUser)),
+        AsyncStorage.setItem(ONBOARDING_STORAGE_KEY, "true"),
+      ]);
+
+      setUser(newUser);
+      setHasCompletedOnboarding(true);
+    } catch (error) {
+      console.error("Error completing onboarding:", error);
+      throw error;
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await AsyncStorage.removeItem(USER_STORAGE_KEY);
@@ -73,9 +95,18 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     () => ({
       user,
       isLoading,
+      hasCompletedOnboarding,
       updateUser,
+      completeOnboarding,
       logout,
     }),
-    [user, isLoading, updateUser, logout]
+    [
+      user,
+      isLoading,
+      hasCompletedOnboarding,
+      updateUser,
+      completeOnboarding,
+      logout,
+    ]
   );
 });

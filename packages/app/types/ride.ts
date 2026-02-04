@@ -6,6 +6,13 @@ export type RideStatus =
   | "completed"
   | "cancelled";
 
+export interface Vehicle {
+  id: string;
+  model: string;
+  color: string;
+  licensePlate?: string;
+}
+
 export interface Ride {
   id: string;
   pickupLocationId: string;
@@ -14,9 +21,9 @@ export interface Ride {
   requestedAt: Date;
   pickupAt?: Date;
   completedAt?: Date;
-  vehicleId?: string;
   estimatedWaitTime?: number;
   vehiclePosition?: { latitude: number; longitude: number };
+  vehicle: Vehicle;
 }
 
 export interface Notification {

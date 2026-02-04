@@ -1,8 +1,8 @@
 {
   "folders": [
     { "path": "./" },
-    { "path": "./packages/api" },
-    { "path": "./packages/app" }
+    { "path": "./packages/hmi" },
+    { "path": "./packages/app" },
   ],
   "settings": {
     "editor.defaultFormatter": "biomejs.biome",

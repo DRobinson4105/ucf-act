@@ -1,9 +1,13 @@
 import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
 import { Ride } from "@/types/ride";
-import { Clock, Navigation, X } from "lucide-react-native";
+import { MapPin } from "lucide-react-native";
 import React, { useCallback, useEffect, useRef } from "react";
-import { Modal, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  Modal,
+  Text,
+  View
+} from "react-native";
 import CampusMap from "./CampusMap";
 
 interface RideTrackingModalProps {
@@ -171,7 +175,7 @@ export default function RideTrackingModal({
         };
       case "assigned":
         return {
-          title: `${ride.vehicleId} is on the way`,
+          title: `${ride.vehicle.id} is on the way`,
           subtitle: `Arriving in ${ride.estimatedWaitTime} min`,
           color: Colors.accent,
         };
@@ -205,188 +209,74 @@ export default function RideTrackingModal({
       transparent={false}
       onRequestClose={onClose}
     >
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <View
-              style={[styles.statusDot, { backgroundColor: statusInfo.color }]}
-            />
-            <View>
-              <Text style={styles.headerTitle}>{statusInfo.title}</Text>
-              <Text style={styles.headerSubtitle}>{statusInfo.subtitle}</Text>
-            </View>
+      <View className="flex-1 bg-background">
+        <View className="absolute top-[60px] left-5 right-5 bg-green-50 rounded-xl p-3 z-10">
+          <Text className="text-sm text-green-800 text-center font-semibold">{statusInfo.subtitle}</Text>
+        </View>
+
+        <CampusMap
+          selectedPickup={ride.pickupLocationId}
+          selectedDropoff={ride.dropoffLocationId}
+          onSelectPickup={() => {}}
+          onSelectDropoff={() => {}}
+          selectingType="pickup"
+          vehiclePosition={ride.vehiclePosition}
+          showRoute={true}
+          interactive={false}
+          fullScreen={true}
+        />
+
+        <View className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl px-5 pt-3 pb-5 max-h-[60%] shadow-lg">
+          <View className="w-10 h-1 bg-border rounded-full self-center mb-4" />
+
+          <View className="bg-[#1A1A1A] rounded-2xl p-4 mb-4">
+            <Text className="text-sm text-white mb-1">The driver will arrive in</Text>
+            <Text className="text-xl font-bold text-white">
+              {String(ride.estimatedWaitTime || 0).padStart(2, "0")}:
+              {Math.floor(Math.random() * 60)
+                .toString()
+                .padStart(2, "0")}{" "}
+              Mins
+            </Text>
           </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
-            <X size={24} color={Colors.text} />
-          </TouchableOpacity>
-        </View>
 
-        <View style={styles.mapContainer}>
-          <CampusMap
-            selectedPickup={ride.pickupLocationId}
-            selectedDropoff={ride.dropoffLocationId}
-            onSelectPickup={() => {}}
-            onSelectDropoff={() => {}}
-            selectingType="pickup"
-            vehiclePosition={ride.vehiclePosition}
-          />
-        </View>
-
-        <View style={styles.details}>
-          <View style={styles.routeInfo}>
-            <View style={styles.routeItem}>
-              <View
-                style={[styles.routeDot, { backgroundColor: Colors.accent }]}
-              />
-              <View style={styles.routeTextContainer}>
-                <Text style={styles.routeLabel}>Pickup</Text>
-                <Text style={styles.routeLocation}>{pickupLocation?.name}</Text>
+          <View className="bg-surface rounded-2xl p-4 mb-4">
+            <View className="flex-row justify-between items-center mb-4">
+              <View>
+                <Text className="text-lg font-bold text-text mb-1">
+                  {ride.vehicle?.licensePlate || "ACT-001"}
+                </Text>
+                <Text className="text-sm text-textSecondary">
+                  {ride.vehicle?.model || "ACT Golf Cart"} •{" "}
+                  {ride.vehicle?.color || "White"}
+                </Text>
+              </View>
+              <View className="w-[60px] h-[60px] bg-white rounded-xl items-center justify-center">
+                <Text className="text-4xl">🚗</Text>
               </View>
             </View>
+          </View>
 
-            <View style={styles.routeLine} />
-
-            <View style={styles.routeItem}>
-              <View
-                style={[styles.routeDot, { backgroundColor: Colors.primary }]}
-              />
-              <View style={styles.routeTextContainer}>
-                <Text style={styles.routeLabel}>Drop-off</Text>
-                <Text style={styles.routeLocation}>
-                  {dropoffLocation?.name}
+          <View className="gap-4">
+            <View className="flex-row items-start gap-3">
+              <View className="w-5 h-5 rounded-full bg-text mt-0.5" />
+              <View className="flex-1">
+                <Text className="text-xs text-textSecondary mb-0.5 font-semibold">Start Location</Text>
+                <Text className="text-[15px] text-text font-semibold">
+                  {pickupLocation?.name || "Your Current Location"}
                 </Text>
               </View>
             </View>
-          </View>
-
-          {ride.vehicleId && (
-            <View style={styles.vehicleInfo}>
-              <View style={styles.infoRow}>
-                <Navigation size={18} color={Colors.accent} />
-                <Text style={styles.infoText}>Vehicle: {ride.vehicleId}</Text>
+            <View className="flex-row items-start gap-3">
+              <MapPin size={20} color={Colors.text} />
+              <View className="flex-1">
+                <Text className="text-xs text-textSecondary mb-0.5 font-semibold">Your Destination</Text>
+                <Text className="text-[15px] text-text font-semibold">{dropoffLocation?.name}</Text>
               </View>
-              {ride.estimatedWaitTime && ride.status !== "in-progress" && (
-                <View style={styles.infoRow}>
-                  <Clock size={18} color={Colors.accent} />
-                  <Text style={styles.infoText}>
-                    ETA: {ride.estimatedWaitTime} min
-                  </Text>
-                </View>
-              )}
             </View>
-          )}
+          </View>
         </View>
       </View>
     </Modal>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 20,
-    paddingTop: 60,
-    backgroundColor: Colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  headerLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    flex: 1,
-  },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: "700" as const,
-    color: Colors.text,
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  closeButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.surface,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  mapContainer: {
-    padding: 16,
-    marginTop: 20,
-  },
-  details: {
-    padding: 20,
-  },
-  routeInfo: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginBottom: 16,
-  },
-  routeItem: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  routeDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginTop: 4,
-  },
-  routeLine: {
-    width: 2,
-    height: 24,
-    backgroundColor: Colors.border,
-    marginLeft: 5,
-    marginVertical: 8,
-  },
-  routeTextContainer: {
-    flex: 1,
-  },
-  routeLabel: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    marginBottom: 2,
-    textTransform: "uppercase",
-    fontWeight: "600" as const,
-  },
-  routeLocation: {
-    fontSize: 16,
-    color: Colors.text,
-    fontWeight: "600" as const,
-  },
-  vehicleInfo: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-  },
-  infoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  infoText: {
-    fontSize: 15,
-    color: Colors.text,
-    fontWeight: "500" as const,
-  },
-});

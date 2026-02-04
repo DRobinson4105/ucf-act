@@ -1,8 +1,8 @@
+import { MOCK_PAST_RIDES } from "@/mocks/rides";
+import { Notification, Ride, RideStatus } from "@/types/ride";
 import createContextHook from "@nkzw/create-context-hook";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MOCK_PAST_RIDES } from "../mocks/rides";
-import { Notification, Ride, RideStatus } from "../types/ride";
 
 const STORAGE_KEY = "act_rides";
 const NOTIFICATIONS_KEY = "act_notifications";
@@ -101,6 +101,12 @@ export const [RideProvider, useRide] = createContextHook(() => {
         status: "pending",
         requestedAt: new Date(),
         estimatedWaitTime: Math.floor(Math.random() * 5) + 3,
+        vehicle: {
+          id: "",
+          model: "",
+          color: "",
+          licensePlate: ""
+        },
       };
 
       setCurrentRide(ride);
@@ -113,14 +119,39 @@ export const [RideProvider, useRide] = createContextHook(() => {
       setTimeout(() => {
         setCurrentRide((prev) => {
           if (!prev) return null;
+
+          const vehicleModels = [
+            "ACT Golf Cart",
+            "E-Z-GO RXV",
+            "Club Car Onward",
+            "Yamaha Drive2",
+          ];
+          const vehicleColors = [
+            "White",
+            "Silver",
+            "Navy Blue",
+            "Forest Green",
+          ];
+
+          const vehicleId = `ACT-${String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")}`;
+          const licensePlate = `ACT-${Math.floor(1000 + Math.random() * 9000)}`;
+
           const updated = {
             ...prev,
             status: "assigned" as RideStatus,
-            vehicleId: `ACT-${String(Math.floor(Math.random() * 999) + 1).padStart(3, "0")}`,
+            vehicleId,
+            vehicle: {
+              id: vehicleId,
+              model:
+                vehicleModels[Math.floor(Math.random() * vehicleModels.length)],
+              color:
+                vehicleColors[Math.floor(Math.random() * vehicleColors.length)],
+              licensePlate,
+            },
           };
           addNotification({
-            title: "Ride Assigned",
-            message: `Vehicle ${updated.vehicleId} is on the way!`,
+            title: "Cart Assigned",
+            message: `Self-driving cart ${updated.vehicleId} is on the way!`,
             type: "ride-update",
           });
           return updated;
@@ -147,14 +178,14 @@ export const [RideProvider, useRide] = createContextHook(() => {
         if (status === "arriving") {
           updatedRide.pickupAt = new Date();
           addNotification({
-            title: "Vehicle Arriving",
-            message: "Your ACT is almost there!",
+            title: "Cart Arriving",
+            message: "Your self-driving cart is almost there!",
             type: "ride-update",
           });
         } else if (status === "in-progress") {
           addNotification({
             title: "Trip Started",
-            message: "Enjoy your ride!",
+            message: "Enjoy your autonomous ride!",
             type: "ride-update",
           });
         } else if (status === "completed") {
