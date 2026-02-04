@@ -2,7 +2,7 @@
   child-frame-id: livox_frame
   x: 1.7272
   y: 0
-  z: 0.6223
+  z: 0.80
   roll: 0
   pitch: 0.4974
   yaw: 0
@@ -28,5 +28,5 @@
   y: 0
   z: 0
   roll: 0
-  pitch: 0
+  pitch: 0.4974
   yaw: 0

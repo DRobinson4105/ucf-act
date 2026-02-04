@@ -13,7 +13,7 @@ FPRN_PASS=your_password
 
 ## Build
 
-After making changes, rebuild with `bash scripts/build.sh`.
+After making changes, rebuild with `./scripts/build.sh`.
 
 ## Run
 

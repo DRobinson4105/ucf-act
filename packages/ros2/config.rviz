@@ -63,7 +63,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 158
+      Max Intensity: 223
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: PointCloud2
@@ -78,7 +78,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /livox/lidar
+        Value: /livox/lidar_pc2
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
@@ -110,9 +110,15 @@ Visualization Manager:
         All Enabled: true
         base_link:
           Value: true
+        body:
+          Value: true
+        camera_init:
+          Value: true
         gps_frame:
           Value: true
         livox_frame:
+          Value: true
+        map:
           Value: true
         odom:
           Value: true
@@ -122,12 +128,16 @@ Visualization Manager:
       Show Axes: true
       Show Names: false
       Tree:
-        odom:
-          base_link:
-            gps_frame:
-              {}
-            livox_frame:
-              {}
+        map:
+          odom:
+            base_link:
+              gps_frame:
+                {}
+              livox_frame:
+                {}
+            camera_init:
+              body:
+                {}
       Update Interval: 0
       Value: true
   Enabled: true
@@ -191,10 +201,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.7497969269752502
+      Pitch: 0.07979708909988403
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.4502854347229
+      Yaw: 4.325283527374268
     Saved: ~
 Window Geometry:
   Displays:

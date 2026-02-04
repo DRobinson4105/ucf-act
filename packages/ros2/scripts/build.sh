@@ -3,10 +3,15 @@ set -euo pipefail
 
 cd ${ACT_ROS_WS}
 
-rm -r install log build
-
 rosdep install --from-paths src --ignore-src -y
-colcon build --symlink-install --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
+
+if [ -n "${1:-}" ]; then
+  colcon build --symlink-install --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble --packages-select $1
+else
+  rm -rf install log build
+  colcon build --symlink-install --cmake-args -DROS_EDITION=ROS2 -DHUMBLE_ROS=humble
+fi
+
 set +u
 source install/setup.bash
 set -u

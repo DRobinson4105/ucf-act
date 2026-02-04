@@ -12,16 +12,26 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package="robot_localization",
+            executable="ekf_node",
+            name="ekf_local_node",
+            parameters=[params],
+            remappings=[
+                ("/odometry/filtered", "/odometry/local"),
+            ],
+            output="screen"
+        ),
+        Node(
+            package="robot_localization",
             executable="navsat_transform_node",
             name="navsat_transform_node",
             parameters=[params],
             remappings=[
                 ("/imu", "/livox/imu"),
                 ("/gps/fix", "/fix"),
-                ("/odometry/filtered", "/Odometry"),
+                ("/odometry/filtered", "/odometry/local"),
                 ("/odometry/gps", "/odometry/gps"),
             ],
-            output="screen",
+            output="screen"
         ),
         Node(
             package="robot_localization",
@@ -29,8 +39,8 @@ def generate_launch_description():
             name="ekf_global_node",
             parameters=[params],
             remappings=[
-                ("/odometry/filtered", "/odometry/filtered"),
+                ("/odometry/filtered", "/odometry/global"),
             ],
-            output="screen",
+            output="screen"
         )
     ])

@@ -1,49 +1,83 @@
-navsat_transform_node:
+convert_odom_frame_node:
   ros__parameters:
-    base_link_frame: body
-    gps_frame: gps_frame
-    odom_frame: camera_init
-    frequency: 20.0
-    delay: 0.0
-    sensor_timeout: 0.2
-    use_odometry_yaw: true
-    gps_topic: /fix
-    odom_topic: /Odometry
-    publish_filtered_gps: true
-    filtered_gps_topic: /odometry/gps
-    broadcast_cartesian_transform: false
-    broadcast_utm_transform: false
-    zero_altitude: true
-    use_local_cartesian: false
-    magnetic_declination_radians: 0.0
-    yaw_offset: 0.0
-    wait_for_datum: false
+    in_topic: /Odometry
+    out_topic: /odometry/fastlio
+    in_parent_frame: camera_init
+    in_child_frame: body
+    out_parent_frame: odom
+    out_child_frame: base_link
 
-ekf_global_node:
+ekf_local_node:
   ros__parameters:
     frequency: 10.0
     sensor_timeout: 0.2
     two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    print_diagnostics: true
+    debug: false
+    permit_corrected_publication: false
+    publish_acceleration: false
+    publish_tf: true
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+    odom0: /Odometry
+    odom0_config: [
+      true, true, false,
+      false, false, true,
+      false, false, false,
+      false, false, false,
+      false, false, false
+    ]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: true
+
+navsat_transform_node:
+  ros__parameters:
+    magnetic_declination_radians: 0.0
+    yaw_offset: 0.0
+    zero_altitude: true
+    publish_filtered_gps: true
+    use_odometry_yaw: true
+    wait_for_datum: false
+    use_local_cartesian: false
+    frequency: 5.0
+    delay: 0.0
+    transform_timeout: 0.2
+    broadcast_cartesian_transform: false
+    broadcast_cartesian_transform_as_parent_frame: false
+    
+ekf_global_node:
+  ros__parameters:
+    frequency: 10.0
+    sensor_timeout: 5.0
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    print_diagnostics: true
+    debug: false
+    permit_corrected_publication: false
+    publish_acceleration: false
+    publish_tf: true
     map_frame: map
     odom_frame: odom
     base_link_frame: base_link
     world_frame: map
-    publish_tf: true
-    publish_acceleration: false
-    print_diagnostics: true
-    odom0: /Odometry
-    odom0_queue_size: 5
-    odom0_nodelay: true
+    odom0: /odometry/local
     odom0_config: [
-      true, true, false,
+      false, false, false,
       false, false, true,
-      true, true, false,
-      false, false, true,
+      true, false, false,
+      false, false, false,
       false, false, false
     ]
+    odom0_queue_size: 5
+    odom0_differential: false
+    odom0_relative: false
     odom1: /odometry/gps
-    odom1_queue_size: 5
-    odom1_nodelay: true
     odom1_config: [
       true, true, false,
       false, false, false,
@@ -51,5 +85,6 @@ ekf_global_node:
       false, false, false,
       false, false, false
     ]
+    odom1_queue_size: 5
     odom1_differential: false
     odom1_relative: false

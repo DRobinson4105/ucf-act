@@ -31,7 +31,7 @@ PKGS=(
 
 sudo apt-get install -y "${PKGS[@]}"
 
-# Setup workspace
+# Set up workspace
 
 [[ "$(pwd)" == */ros2 ]] || { echo "Error: must be in ros2 workspace (ucf-act/packages/ros2)"; exit 1; }
 
@@ -39,6 +39,10 @@ export ACT_ROS_WS="$(pwd)"
 echo "export ACT_ROS_WS=$ACT_ROS_WS" >> ~/.bashrc
 
 source /opt/ros/humble/setup.bash
+
+# Set up bringup package
+
+chmod +x src/bringup/hooks/dotenv.sh
 
 # Install livox driver
 
@@ -53,7 +57,8 @@ git clone https://github.com/DRobinson4105/FAST_LIO_ROS2.git src/FAST_LIO_ROS2 -
 
 # Build workspace
 
-bash scripts/build.sh
+chmod +x ./scripts/build.sh
+./scripts/build.sh
 
 echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 echo "source ${ACT_ROS_WS}/install/setup.bash" >> ~/.bashrc
