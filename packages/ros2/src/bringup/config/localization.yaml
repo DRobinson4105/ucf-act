@@ -1,12 +1,3 @@
-convert_odom_frame_node:
-  ros__parameters:
-    in_topic: /Odometry
-    out_topic: /odometry/fastlio
-    in_parent_frame: camera_init
-    in_child_frame: body
-    out_parent_frame: odom
-    out_child_frame: base_link
-
 ekf_local_node:
   ros__parameters:
     frequency: 10.0

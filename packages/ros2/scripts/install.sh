@@ -55,6 +55,15 @@ cd ../..
 
 git clone https://github.com/DRobinson4105/FAST_LIO_ROS2.git src/FAST_LIO_ROS2 --recursive
 
+# Install perception models
+
+mkdir -p src/perception/models
+wget -O src/perception/models/seg.onnx https://huggingface.co/DavidRobinson05/ddrnet23slim_ucf/resolve/main/seg.onnx
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=src/perception/models/seg.onnx \
+  --saveEngine=src/perception/models/seg.engine \
+  --fp16
+
 # Build workspace
 
 chmod +x ./scripts/build.sh

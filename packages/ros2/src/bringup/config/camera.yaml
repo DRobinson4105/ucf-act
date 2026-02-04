@@ -5,7 +5,7 @@
     pixel_format: "mjpeg2rgb"
     image_width: 1280
     image_height: 720
-    camera_info_url: "package://camera/config/camera_info.yaml"
+    camera_info_url: "package://bringup/config/camera_info.yaml"
     brightness: -1
     contrast: -1
     saturation: -1
