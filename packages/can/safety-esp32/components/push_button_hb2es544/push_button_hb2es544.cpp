@@ -1,10 +1,10 @@
-#include "wireless_remote.hh"
+#include "push_button_hb2es544.hh"
 
 // =============================================================================
 // Initialization
 // =============================================================================
 
-esp_err_t wireless_remote_init(const wireless_remote_config_t *config) {
+esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     gpio_config_t io_conf = {
@@ -22,8 +22,8 @@ esp_err_t wireless_remote_init(const wireless_remote_config_t *config) {
 // State Reading
 // =============================================================================
 
-// Returns true when remote e-stop button is pressed
-bool wireless_remote_is_active(const wireless_remote_config_t *config) {
+// Returns true when e-stop is active (mushroom button pressed)
+bool push_button_hb2es544_read_active(const push_button_hb2es544_config_t *config) {
     if (!config) return false;
     return gpio_get_level(config->gpio) == config->active_level;
 }

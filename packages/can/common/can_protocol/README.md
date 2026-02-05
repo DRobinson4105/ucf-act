@@ -30,7 +30,7 @@ CAN bus protocol definitions shared between all nodes. Standard frames use 11-bi
 | 5 | Steering | 4 |
 | 6 | Braking | 4 |
 
-See `uim2852_protocol.h` for CAN ID encoding formula and protocol details.
+See `stepper_protocol_uim2852.h` for CAN ID encoding formula and protocol details.
 
 ## Frame Layouts
 
@@ -135,9 +135,9 @@ See `uim2852_protocol.h` for CAN ID encoding formula and protocol details.
 | Code | Reason | Description |
 |------|--------|-------------|
 | 0x00 | NONE | No e-stop |
-| 0x01 | MUSHROOM | Mushroom button pressed |
-| 0x02 | REMOTE | Wireless remote kill |
-| 0x03 | ULTRASONIC | Obstacle detected |
+| 0x01 | MUSHROOM | Push button HB2-ES544 pressed |
+| 0x02 | REMOTE | RF remote EV1527 kill |
+| 0x03 | ULTRASONIC | Ultrasonic A02YYUW obstacle or not responding |
 | 0x04 | ORIN_ERROR | Orin heartbeat state == FAULT |
 | 0x05 | ORIN_TIMEOUT | Orin heartbeat timeout |
 | 0x06 | CONTROL_TIMEOUT | Control heartbeat timeout |

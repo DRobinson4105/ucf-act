@@ -23,7 +23,7 @@ extern "C" {
 #define CAN_ID_CONTROL_STATUS        0x121   // Throttle, F/R, sensors, positions
 
 // UIM2852CA Motors - use CAN 2.0B extended 29-bit frames with SimpleCAN protocol
-// See uim2852_protocol.h for CAN ID calculation and protocol details
+// See stepper_protocol_uim2852.h for CAN ID calculation and protocol details
 #define UIM2852_MASTER_ID            4   // Producer ID for host controller
 #define UIM2852_NODE_STEERING        5   // Steering motor node ID
 #define UIM2852_NODE_BRAKING         6   // Braking motor node ID
@@ -56,9 +56,9 @@ typedef struct {
 
 // E-stop reasons (why e-stop is active)
 #define ESTOP_REASON_NONE            0x00
-#define ESTOP_REASON_MUSHROOM        0x01
-#define ESTOP_REASON_REMOTE          0x02
-#define ESTOP_REASON_ULTRASONIC      0x03
+#define ESTOP_REASON_MUSHROOM        0x01   // push_button_hb2es544 pressed
+#define ESTOP_REASON_REMOTE          0x02   // rf_remote_ev1527 kill active
+#define ESTOP_REASON_ULTRASONIC      0x03   // ultrasonic_a02yyuw obstacle or fault
 #define ESTOP_REASON_ORIN_ERROR      0x04
 #define ESTOP_REASON_ORIN_TIMEOUT    0x05
 #define ESTOP_REASON_CONTROL_TIMEOUT 0x06

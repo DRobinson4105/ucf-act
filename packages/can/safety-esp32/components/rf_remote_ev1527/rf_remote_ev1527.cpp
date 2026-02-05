@@ -1,10 +1,10 @@
-#include "nc_mushroom.hh"
+#include "rf_remote_ev1527.hh"
 
 // =============================================================================
 // Initialization
 // =============================================================================
 
-esp_err_t nc_mushroom_init(const nc_mushroom_config_t *config) {
+esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     gpio_config_t io_conf = {
@@ -22,8 +22,8 @@ esp_err_t nc_mushroom_init(const nc_mushroom_config_t *config) {
 // State Reading
 // =============================================================================
 
-// Returns true when e-stop is active (mushroom button pressed)
-bool nc_mushroom_read_active(const nc_mushroom_config_t *config) {
+// Returns true when remote e-stop button is pressed
+bool rf_remote_ev1527_is_active(const rf_remote_ev1527_config_t *config) {
     if (!config) return false;
     return gpio_get_level(config->gpio) == config->active_level;
 }

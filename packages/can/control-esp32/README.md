@@ -65,7 +65,7 @@ Note: The system automatically returns to READY and can re-enable autonomous mod
 | Steering | 5 | Linear actuator for steering column |
 | Braking | 6 | Linear actuator for brake pedal |
 
-Master controller ID: 4. See `uim2852_protocol.h` for CAN ID encoding.
+Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 ## Pin Configuration
 
@@ -98,12 +98,13 @@ Master controller ID: 4. See `uim2852_protocol.h` for CAN ID encoding.
 | Component | Description |
 |-----------|-------------|
 | `throttle_mux` | DG408 8-channel mux + DPDT throttle relay control |
-| `uim2852_motor` | UIM2852CA servo stepper motor control API |
+| `stepper_motor_uim2852` | UIM2852CA closed-loop stepper motor control API |
 | `enable_relay` | MOSFET driver for pedal microswitch bypass relay |
 | `override_sensors` | Pedal ADC reading + F/R optocoupler debouncing |
 | `can_twai` | CAN bus driver wrapper (shared) |
 | `can_protocol` | Message definitions and encode/decode (shared) |
 | `heartbeat` | WS2812 status LED driver (shared) |
+| `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared) |
 
 ## Throttle Control
 

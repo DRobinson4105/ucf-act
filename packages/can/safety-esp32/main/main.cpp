@@ -8,19 +8,19 @@
 #include "can_twai.hh"
 #include "heartbeat.hh"
 #include "heartbeat_monitor.hh"
-#include "nc_mushroom.hh"
+#include "push_button_hb2es544.hh"
 #include "power_relay.hh"
-#include "ultrasonic.hh"
-#include "wireless_remote.hh"
+#include "ultrasonic_a02yyuw.hh"
+#include "rf_remote_ev1527.hh"
 
 // Safety ESP32 - E-stop and autonomous permission control
 //
-// Monitors physical e-stop inputs (mushroom button, wireless remote, ultrasonic)
+// Monitors physical e-stop inputs (push button HB2-ES544, RF remote EV1527, ultrasonic A02YYUW)
 // and node heartbeats (Orin, Control). When any e-stop condition is active,
 // disables power relay and broadcasts CAN_ID_SAFETY_AUTO_ALLOWED = 0 to block
 // autonomous mode. Control ESP32 must receive allowed=1 before enabling actuators.
 //
-// E-stop priority: mushroom > remote > ultrasonic > orin_error > orin_timeout
+// E-stop priority: push_button > rf_remote > ultrasonic > orin_error > orin_timeout
 //                  > control_timeout > control_error
 
 namespace {
@@ -45,30 +45,32 @@ constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
 constexpr TickType_t CAN_RX_TIMEOUT = pdMS_TO_TICKS(10);
 constexpr TickType_t SAFETY_LOOP_INTERVAL = pdMS_TO_TICKS(50);
 constexpr TickType_t HEARTBEAT_SEND_INTERVAL = pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS);
+
 // =============================================================================
 // GPIO Pin Assignments
 // =============================================================================
 
 // E-stop inputs
-constexpr gpio_num_t NC_MUSHROOM_GPIO = GPIO_NUM_6;
-constexpr int NC_MUSHROOM_ACTIVE_LEVEL = 1;
+constexpr gpio_num_t PUSH_BUTTON_HB2ES544_GPIO = GPIO_NUM_6;
+constexpr int PUSH_BUTTON_HB2ES544_ACTIVE_LEVEL = 1;
 
-constexpr gpio_num_t REMOTE_GPIO = GPIO_NUM_7;
-constexpr int REMOTE_ACTIVE_LEVEL = 1;
+constexpr gpio_num_t RF_REMOTE_EV1527_GPIO = GPIO_NUM_7;
+constexpr int RF_REMOTE_EV1527_ACTIVE_LEVEL = 1;
 
 // Power relay output (cuts power to actuators when e-stop active)
 constexpr gpio_num_t POWER_RELAY_GPIO = GPIO_NUM_2;
 constexpr bool POWER_RELAY_ACTIVE_HIGH = true;
 
-// CAN bus
+// CAN bus (WAVESHARE SN65HVD230 transceiver)
 constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
 // Ultrasonic sensor (A02YYUW)
-constexpr uart_port_t ULTRASONIC_UART = UART_NUM_1;
-constexpr int ULTRASONIC_RX_GPIO = GPIO_NUM_9;
-constexpr int ULTRASONIC_BAUD_RATE = 9600;
-constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 300;
+constexpr uart_port_t ULTRASONIC_A02YYUW_UART = UART_NUM_1;
+constexpr int ULTRASONIC_A02YYUW_TX_GPIO = GPIO_NUM_10;  // Sensor RX (mode select)
+constexpr int ULTRASONIC_A02YYUW_RX_GPIO = GPIO_NUM_11;  // Sensor TX (data output)
+constexpr int ULTRASONIC_A02YYUW_BAUD_RATE = 9600;
+constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 1000;
 
 // Status LED (WS2812)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
@@ -78,9 +80,9 @@ constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
 // =============================================================================
 
 // E-stop input states
-static bool g_mushroom_active = false;
-static bool g_remote_active = false;
-static bool g_obstacle_detected = false;
+static bool g_push_button_active = false;
+static bool g_rf_remote_active = false;
+static bool g_ultrasonic_triggered = false;  // obstacle detected OR sensor fault
 static bool g_orin_error = false;
 static bool g_control_error = false;
 
@@ -97,10 +99,10 @@ static int g_node_control = -1;
 // Component Configurations
 // =============================================================================
 
-static nc_mushroom_config_t g_mushroom_cfg;
-static wireless_remote_config_t g_remote_cfg;
+static push_button_hb2es544_config_t g_push_button_cfg;
+static rf_remote_ev1527_config_t g_rf_remote_cfg;
 static power_relay_config_t g_relay_cfg;
-static ultrasonic_config_t g_ultrasonic_cfg;
+static ultrasonic_a02yyuw_config_t g_ultrasonic_cfg;
 static heartbeat_config_t g_heartbeat_led_cfg;
 
 // =============================================================================
@@ -110,8 +112,8 @@ static heartbeat_config_t g_heartbeat_led_cfg;
 static const char* estop_reason_to_string(uint8_t reason) {
     switch (reason) {
         case ESTOP_REASON_NONE:            return "none";
-        case ESTOP_REASON_MUSHROOM:        return "mushroom";
-        case ESTOP_REASON_REMOTE:          return "remote";
+        case ESTOP_REASON_MUSHROOM:        return "push_button";
+        case ESTOP_REASON_REMOTE:          return "rf_remote";
         case ESTOP_REASON_ULTRASONIC:      return "ultrasonic";
         case ESTOP_REASON_ORIN_ERROR:      return "orin_error";
         case ESTOP_REASON_ORIN_TIMEOUT:    return "orin_timeout";
@@ -190,29 +192,32 @@ void safety_task(void *param) {
 
     while (true) {
         // Read hardware inputs
-        g_mushroom_active = nc_mushroom_read_active(&g_mushroom_cfg);
-        g_remote_active = wireless_remote_is_active(&g_remote_cfg);
+        g_push_button_active = push_button_hb2es544_read_active(&g_push_button_cfg);
+        g_rf_remote_active = rf_remote_ev1527_is_active(&g_rf_remote_cfg);
 
-        // Read ultrasonic sensor
+        // Check ultrasonic sensor - triggered if obstacle detected OR sensor not responding
+        // (fail-safe: if we can't confirm path is clear, assume it's blocked)
         uint16_t distance_mm = 0;
-        g_obstacle_detected = ultrasonic_is_too_close(ULTRASONIC_STOP_DISTANCE_MM, &distance_mm);
+        bool obstacle_detected = ultrasonic_a02yyuw_is_too_close(ULTRASONIC_STOP_DISTANCE_MM, &distance_mm);
+        bool sensor_healthy = ultrasonic_a02yyuw_is_healthy();
+        g_ultrasonic_triggered = obstacle_detected || !sensor_healthy;
 
         // Check heartbeat timeouts
         heartbeat_monitor_check_timeouts(&g_hb_monitor);
         bool orin_timeout = !heartbeat_monitor_is_alive(&g_hb_monitor, g_node_orin);
         bool control_timeout = !heartbeat_monitor_is_alive(&g_hb_monitor, g_node_control);
 
-        // Determine E-stop state and reason
+        // Determine E-stop state and reason (priority order)
         bool estop_active = false;
         uint8_t estop_reason = ESTOP_REASON_NONE;
 
-        if (g_mushroom_active) {
+        if (g_push_button_active) {
             estop_active = true;
             estop_reason = ESTOP_REASON_MUSHROOM;
-        } else if (g_remote_active) {
+        } else if (g_rf_remote_active) {
             estop_active = true;
             estop_reason = ESTOP_REASON_REMOTE;
-        } else if (g_obstacle_detected) {
+        } else if (g_ultrasonic_triggered) {
             estop_active = true;
             estop_reason = ESTOP_REASON_ULTRASONIC;
         } else if (g_orin_error) {
@@ -279,12 +284,12 @@ void safety_task(void *param) {
 
         // Log on state change
         if (estop_reason != last_estop_reason) {
-            ESP_LOGI(TAG, "Auto: %s (estop:%s) | mushroom=%d wireless=%d ultrasonic=%d orin_err=%d ctrl_err=%d relay=%d",
+            ESP_LOGI(TAG, "Auto: %s (estop:%s) | btn=%d remote=%d ultra=%d | orin=%d ctrl=%d",
                      auto_allowed ? "ALLOWED" : "BLOCKED",
                      estop_reason_to_string(estop_reason),
-                     g_mushroom_active, g_remote_active, g_obstacle_detected, 
-                     g_orin_error, g_control_error,
-                     power_relay_is_enabled(&g_relay_cfg));
+                     g_push_button_active, g_rf_remote_active, g_ultrasonic_triggered, 
+                     (g_orin_error || orin_timeout) ? 1 : 0,
+                     (g_control_error || control_timeout) ? 1 : 0);
             last_estop_reason = estop_reason;
         }
 
@@ -331,33 +336,32 @@ void main_task(void *param) {
     heartbeat_monitor_init(&g_hb_monitor, &hb_cfg);
     
     // Register nodes to monitor (Safety only cares about Orin and Control)
-    // Motor monitoring is handled by Control ESP32
     g_node_orin = heartbeat_monitor_register(&g_hb_monitor, "Orin", HEARTBEAT_TIMEOUT_MS);
     g_node_control = heartbeat_monitor_register(&g_hb_monitor, "Control", HEARTBEAT_TIMEOUT_MS);
 
-    // Configure NC mushroom button
-    g_mushroom_cfg = {
-        .gpio = NC_MUSHROOM_GPIO,
-        .active_level = NC_MUSHROOM_ACTIVE_LEVEL,
+    // Configure push button e-stop (mxuteek HB2-ES544)
+    g_push_button_cfg = {
+        .gpio = PUSH_BUTTON_HB2ES544_GPIO,
+        .active_level = PUSH_BUTTON_HB2ES544_ACTIVE_LEVEL,
         .enable_pullup = true,
         .enable_pulldown = false,
     };
 
-    esp_err_t err = nc_mushroom_init(&g_mushroom_cfg);
+    esp_err_t err = push_button_hb2es544_init(&g_push_button_cfg);
     if (err != ESP_OK)
-        ESP_LOGE(TAG, "NC mushroom init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Push button HB2-ES544 init failed: %s", esp_err_to_name(err));
 
-    // Configure wireless remote
-    g_remote_cfg = {
-        .gpio = REMOTE_GPIO,
-        .active_level = REMOTE_ACTIVE_LEVEL,
+    // Configure RF remote e-stop (DieseRC EV1527)
+    g_rf_remote_cfg = {
+        .gpio = RF_REMOTE_EV1527_GPIO,
+        .active_level = RF_REMOTE_EV1527_ACTIVE_LEVEL,
         .enable_pullup = true,
         .enable_pulldown = false,
     };
 
-    err = wireless_remote_init(&g_remote_cfg);
+    err = rf_remote_ev1527_init(&g_rf_remote_cfg);
     if (err != ESP_OK)
-        ESP_LOGE(TAG, "Wireless remote init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "RF remote EV1527 init failed: %s", esp_err_to_name(err));
 
     // Configure power relay (starts disabled = safe)
     g_relay_cfg = {
@@ -371,19 +375,19 @@ void main_task(void *param) {
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Power relay init failed: %s", esp_err_to_name(err));
 
-    // Configure ultrasonic sensor
+    // Configure ultrasonic sensor (A02YYUW)
     g_ultrasonic_cfg = {
-        .uart_num = ULTRASONIC_UART,
-        .tx_gpio = UART_PIN_NO_CHANGE,
-        .rx_gpio = ULTRASONIC_RX_GPIO,
-        .baud_rate = ULTRASONIC_BAUD_RATE,
+        .uart_num = ULTRASONIC_A02YYUW_UART,
+        .tx_gpio = ULTRASONIC_A02YYUW_TX_GPIO,
+        .rx_gpio = ULTRASONIC_A02YYUW_RX_GPIO,
+        .baud_rate = ULTRASONIC_A02YYUW_BAUD_RATE,
     };
 
-    err = ultrasonic_init(&g_ultrasonic_cfg);
+    err = ultrasonic_a02yyuw_init(&g_ultrasonic_cfg);
     if (err != ESP_OK)
-        ESP_LOGE(TAG, "Ultrasonic init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Ultrasonic A02YYUW init failed: %s", esp_err_to_name(err));
 
-    // Initialize TWAI for CAN communication
+    // Initialize TWAI for CAN communication (via WAVESHARE SN65HVD230 transceiver)
     err = can_twai_init_default(TWAI_TX_GPIO, TWAI_RX_GPIO);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "TWAI init failed: %s", esp_err_to_name(err));

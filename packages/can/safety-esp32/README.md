@@ -5,8 +5,8 @@ ESP-IDF firmware for the Safety ESP32-C6. Monitors all safety inputs and control
 ## Safety Logic
 
 The Safety ESP32 continuously monitors:
-1. **Hardware e-stops**: Mushroom button, wireless remote
-2. **Obstacle detection**: Ultrasonic sensor (threshold: 300mm=~1ft)
+1. **Hardware e-stops**: Push button (HB2-ES544), RF remote (EV1527)
+2. **Obstacle detection**: Ultrasonic sensor A02YYUW (threshold: 1000mm=~3.3ft)
 3. **Node liveness**: Orin and Control heartbeats (timeout: 500ms)
 4. **Node health**: Orin and Control state fields (FAULT state triggers e-stop)
 
@@ -15,9 +15,9 @@ The Safety ESP32 continuously monitors:
 - DISABLED immediately when any e-stop condition detected
 
 **E-stop priority** (first match wins):
-1. Mushroom button pressed
-2. Wireless remote kill
-3. Ultrasonic obstacle detected
+1. Push button pressed (HB2-ES544)
+2. RF remote kill (EV1527)
+3. Ultrasonic triggered (A02YYUW obstacle detected OR sensor not responding)
 4. Orin heartbeat state == FAULT
 5. Orin heartbeat timeout (500ms)
 6. Control heartbeat timeout (500ms)
@@ -50,9 +50,9 @@ The Safety ESP32 continuously monitors:
 | Code | Constant | Trigger |
 |------|----------|---------|
 | 0x00 | NONE | System OK |
-| 0x01 | MUSHROOM | NC mushroom button opened (pressed) |
-| 0x02 | REMOTE | Wireless remote kill signal active |
-| 0x03 | ULTRASONIC | Object detected within 300mm |
+| 0x01 | MUSHROOM | Push button HB2-ES544 opened (pressed) |
+| 0x02 | REMOTE | RF remote EV1527 kill signal active |
+| 0x03 | ULTRASONIC | Ultrasonic A02YYUW obstacle (<1000mm) or not responding |
 | 0x04 | ORIN_ERROR | Orin heartbeat state == FAULT |
 | 0x05 | ORIN_TIMEOUT | No Orin heartbeat for 500ms |
 | 0x06 | CONTROL_TIMEOUT | No Control heartbeat for 500ms |
@@ -72,10 +72,11 @@ The Safety ESP32 continuously monitors:
 | 2 | Power Relay | Output | Active HIGH, pull-down |
 | 4 | CAN TX | Output | TWAI peripheral |
 | 5 | CAN RX | Input | TWAI peripheral |
-| 6 | NC Mushroom | Input | Pull-up, active HIGH (switch opens on press) |
-| 7 | Wireless Remote | Input | Pull-up, active HIGH |
+| 6 | Push Button HB2-ES544 | Input | Pull-up, active HIGH (NC switch opens on press) |
+| 7 | RF Remote EV1527 | Input | Pull-up, active HIGH |
 | 8 | Status LED | Output | WS2812 RGB LED |
-| 9 | Ultrasonic RX | Input | UART1 RX, 9600 baud |
+| 10 | Ultrasonic A02YYUW TX | Output | UART1 TX (sensor RX, mode select) |
+| 11 | Ultrasonic A02YYUW RX | Input | UART1 RX, 9600 baud (sensor TX) |
 
 ### LED Behavior
 
@@ -89,9 +90,9 @@ The Safety ESP32 continuously monitors:
 
 | Component | Description |
 |-----------|-------------|
-| `nc_mushroom` | NC push button input with configurable active level |
-| `wireless_remote` | Radio relay input with configurable active level |
-| `ultrasonic` | UART distance sensor, JSN-SR04T compatible |
+| `push_button_hb2es544` | mxuteek HB2-ES544 NC e-stop push button |
+| `rf_remote_ev1527` | DieseRC 433MHz RF remote (EV1527 encoding) |
+| `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor |
 | `power_relay` | 24V relay/transistor control for motor power |
 | `can_twai` | CAN bus driver wrapper (shared) |
 | `can_protocol` | Message definitions (shared) |
@@ -103,7 +104,7 @@ The Safety ESP32 continuously monitors:
 - **Protocol**: 4-byte UART frames at 9600 baud
 - **Frame format**: `0xFF | HIGH_BYTE | LOW_BYTE | CHECKSUM`
 - **Checksum**: `(0xFF + HIGH + LOW) & 0xFF`
-- **Stop threshold**: 300mm
+- **Stop threshold**: 1000mm (~3.3 ft)
 - **Sample timeout**: 200ms (stale readings ignored)
 
 ## Build

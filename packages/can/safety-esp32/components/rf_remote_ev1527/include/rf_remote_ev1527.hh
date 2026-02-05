@@ -8,12 +8,15 @@ extern "C" {
 #endif
 
 // =============================================================================
-// Wireless Remote E-Stop Driver
+// RF Remote E-Stop Driver (DieseRC EV1527 433MHz)
 // =============================================================================
 // Reads the state of a wireless remote control e-stop receiver.
 //
 // Hardware:
-//   - Wireless receiver module (e.g., 433MHz or 2.4GHz)
+//   - DieseRC 433MHz universal wireless remote control switch
+//   - Receiver: DC 12V 1CH RF relay module
+//   - Encoding: EV1527 learning code
+//   - Includes 2 transmitter remotes
 //   - Output pin goes to active level when remote button pressed
 //   - Wired to GPIO with configurable pull-up/pull-down
 //
@@ -32,7 +35,7 @@ extern "C" {
 // Configuration
 // =============================================================================
 
-// wireless_remote_config_t - receiver input configuration
+// rf_remote_ev1527_config_t - receiver input configuration
 //   gpio:            GPIO pin connected to receiver output
 //   active_level:    Logic level when remote button is pressed (0 or 1)
 //   enable_pullup:   true to enable internal pull-up resistor
@@ -42,14 +45,14 @@ typedef struct {
     int active_level;
     bool enable_pullup;
     bool enable_pulldown;
-} wireless_remote_config_t;
+} rf_remote_ev1527_config_t;
 
 // =============================================================================
 // Initialization
 // =============================================================================
 
 // Initialize GPIO for wireless remote receiver input
-esp_err_t wireless_remote_init(const wireless_remote_config_t *config);
+esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config);
 
 // =============================================================================
 // State Reading
@@ -58,7 +61,7 @@ esp_err_t wireless_remote_init(const wireless_remote_config_t *config);
 // Check if wireless remote e-stop is active
 // Returns true when remote button is pressed (e-stop engaged)
 // Returns false when remote button is released (safe to operate)
-bool wireless_remote_is_active(const wireless_remote_config_t *config);
+bool rf_remote_ev1527_is_active(const rf_remote_ev1527_config_t *config);
 
 #ifdef __cplusplus
 }

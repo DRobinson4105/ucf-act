@@ -10,7 +10,7 @@
 #include "can_twai.hh"
 #include "heartbeat.hh"
 #include "throttle_mux.hh"
-#include "uim2852_motor.h"
+#include "stepper_motor_uim2852.h"
 #include "enable_relay.hh"
 #include "override_sensors.hh"
 
@@ -54,7 +54,7 @@ constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;  // max 1 level change per 1
 // GPIO Pin Assignments
 // =============================================================================
 
-// CAN bus
+// CAN bus (WAVESHARE SN65HVD230 transceiver)
 constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
@@ -133,11 +133,11 @@ static uint32_t g_last_throttle_change_ms = 0;
 static uint8_t g_heartbeat_seq = 0;
 
 // =============================================================================
-// Motor Instances
+// Stepper Motor Instances (UIM2852CA)
 // =============================================================================
 
-static uim2852_motor_t g_steering_motor = {};
-static uim2852_motor_t g_braking_motor = {};
+static stepper_motor_uim2852_t g_steering_stepper = {};
+static stepper_motor_uim2852_t g_braking_stepper = {};
 static constexpr TickType_t MOTOR_TIMEOUT_TICKS = pdMS_TO_TICKS(1000);
 
 // =============================================================================
@@ -159,8 +159,8 @@ static const char* control_state_to_string(uint8_t state) {
 static const char* estop_reason_to_string(uint8_t reason) {
     switch (reason) {
         case ESTOP_REASON_NONE:            return "none";
-        case ESTOP_REASON_MUSHROOM:        return "mushroom";
-        case ESTOP_REASON_REMOTE:          return "remote";
+        case ESTOP_REASON_MUSHROOM:        return "push_button";
+        case ESTOP_REASON_REMOTE:          return "rf_remote";
         case ESTOP_REASON_ULTRASONIC:      return "ultrasonic";
         case ESTOP_REASON_ORIN_ERROR:      return "orin_error";
         case ESTOP_REASON_ORIN_TIMEOUT:    return "orin_timeout";
@@ -188,15 +188,14 @@ static uint32_t get_time_ms() {
 // =============================================================================
 
 // Immediately disable all autonomous actuators and transition to OVERRIDE state.
-// Called when human override is detected (pedal, F/R change) or safety blocks auto.
 static void trigger_override(uint8_t reason) {
     ESP_LOGW(TAG, "OVERRIDE TRIGGERED: %s", override_reason_to_string(reason));
 
     throttle_mux_disable();
     throttle_mux_emergency_stop();
     enable_relay_deenergize();
-    uim2852_motor_emergency_stop(&g_steering_motor);
-    uim2852_motor_emergency_stop(&g_braking_motor);
+    stepper_motor_uim2852_emergency_stop(&g_steering_stepper);
+    stepper_motor_uim2852_emergency_stop(&g_braking_stepper);
 
     g_override_reason = reason;
     g_throttle_current = 0;
@@ -204,10 +203,7 @@ static void trigger_override(uint8_t reason) {
     g_control_state = CONTROL_STATE_OVERRIDE;
 }
 
-// Check preconditions for enabling autonomous mode:
-// - F/R must be in Forward
-// - Pedal must not be pressed and must be re-armed (released for 500ms)
-// - No active faults
+// Check preconditions for enabling autonomous mode
 static bool check_enable_preconditions() {
     // Must be in Forward
     fr_state_t fr = override_sensors_get_fr_state();
@@ -238,79 +234,41 @@ static bool check_enable_preconditions() {
 }
 
 // Start the enable sequence
-// sequence: DG408 level 0 -> GPIO 10 HIGH (MOSFET) -> wait 200ms -> GPIO 9 HIGH (throttle relay)
 static void start_enable_sequence() {
     ESP_LOGI(TAG, "Starting autonomous enable sequence");
 
-    // 1. Set DG408 to level 0 (channel 0 = 4.7kΩ = idle)
+    // Set DG408 to level 0
     throttle_mux_set_level(0);
     g_throttle_current = 0;
     g_last_throttle_change_ms = get_time_ms();
 
-    // 2. GPIO 10 HIGH: energize IRLZ44N MOSFET -> JD-2912 coil -> bypass pedal microswitch
+    // Energize MOSFET relay
     enable_relay_energize();
 
-    // 3. Record start time for 200ms wait
     g_enable_start_ms = get_time_ms();
-
-    // 4. Transition to ENABLING state
     g_control_state = CONTROL_STATE_ENABLING;
 }
 
-// Complete the enable sequence (called after 200ms settle time)
+// Complete the enable sequence
 static void complete_enable_sequence() {
     ESP_LOGI(TAG, "Completing autonomous enable sequence");
 
-    // 1. Enable actuator motors
-    uim2852_motor_enable(&g_steering_motor);
+    stepper_motor_uim2852_enable(&g_steering_stepper);
     vTaskDelay(pdMS_TO_TICKS(5));
-    uim2852_motor_enable(&g_braking_motor);
+    stepper_motor_uim2852_enable(&g_braking_stepper);
 
-    // 2. GPIO 9 HIGH: energize throttle relay (AEDIKO module)
-    //    Curtis now reads DG408 output instead of manual pedal pot
     throttle_mux_enable_autonomous();
 
-    // 3. Transition to ACTIVE (autonomous) state
     g_control_state = CONTROL_STATE_ACTIVE;
     g_override_reason = OVERRIDE_REASON_NONE;
 
     ESP_LOGI(TAG, "AUTONOMOUS MODE ACTIVE");
 }
 
-// Gracefully disable autonomous mode
-// static void disable_autonomous() {
-//     ESP_LOGI(TAG, "Disabling autonomous mode (graceful)");
-
-//     // 1. Ramp throttle to level 0
-//     throttle_mux_set_level(0);
-//     g_throttle_current = 0;
-//     g_throttle_target = 0;
-
-//     // 2. Disable throttle mux and switch to manual
-//     throttle_mux_disable_autonomous();
-
-//     // 3. De-energize enable relay
-//     enable_relay_deenergize();
-
-//     // 4. Disable motors
-//     uim2852_motor_disable(&g_steering_motor);
-//     uim2852_motor_disable(&g_braking_motor);
-
-//     // 5. Transition to READY state
-//     g_control_state = CONTROL_STATE_READY;
-//     g_override_reason = OVERRIDE_REASON_NONE;
-
-//     ESP_LOGI(TAG, "Returned to MANUAL mode");
-// }
-
 // =============================================================================
 // CAN RX Task
 // =============================================================================
 
-// Receives CAN frames and updates global state. Handles:
-// - Orin commands (throttle, steering, braking)
-// - Safety auto-allowed permission
-// - UIM2852CA motor responses (extended frames)
 void can_rx_task(void *param) {
     (void)param;
     twai_message_t msg{};
@@ -324,37 +282,33 @@ void can_rx_task(void *param) {
 
         TickType_t now = xTaskGetTickCount();
 
-        // Handle extended frames from UIM2852CA motors
+        // Handle extended frames from UIM2852CA stepper motors
         if (msg.extd) {
-            // Try to process as motor response
-            if (uim2852_motor_process_frame(&g_steering_motor, &msg)) {
-                // Check for motor faults
-                if (uim2852_motor_stall_detected(&g_steering_motor) ||
-                    uim2852_motor_has_error(&g_steering_motor)) {
-                    ESP_LOGW(TAG, "Steering motor fault detected");
+            if (stepper_motor_uim2852_process_frame(&g_steering_stepper, &msg)) {
+                if (stepper_motor_uim2852_stall_detected(&g_steering_stepper) ||
+                    stepper_motor_uim2852_has_error(&g_steering_stepper)) {
+                    ESP_LOGW(TAG, "Steering stepper motor fault detected");
                     g_fault_code = CONTROL_FAULT_MOTOR_COMM;
                     if (g_control_state == CONTROL_STATE_ACTIVE)
                         trigger_override(OVERRIDE_REASON_NONE);
                 }
-            } else if (uim2852_motor_process_frame(&g_braking_motor, &msg)) {
-                // Check for motor faults
-                if (uim2852_motor_stall_detected(&g_braking_motor) ||
-                    uim2852_motor_has_error(&g_braking_motor)) {
-                    ESP_LOGW(TAG, "Braking motor fault detected");
+            } else if (stepper_motor_uim2852_process_frame(&g_braking_stepper, &msg)) {
+                if (stepper_motor_uim2852_stall_detected(&g_braking_stepper) ||
+                    stepper_motor_uim2852_has_error(&g_braking_stepper)) {
+                    ESP_LOGW(TAG, "Braking stepper motor fault detected");
                     g_fault_code = CONTROL_FAULT_MOTOR_COMM;
                     if (g_control_state == CONTROL_STATE_ACTIVE)
                         trigger_override(OVERRIDE_REASON_NONE);
                 }
             }
-            continue;  // Extended frame processed, move to next
+            continue;
         }
 
-        // Process Orin command (0x111) - throttle, steering, braking
+        // Process Orin command (0x111)
         if (msg.identifier == CAN_ID_ORIN_COMMAND && msg.data_length_code >= 8) {
             orin_command_t cmd;
             can_decode_orin_command(msg.data, &cmd);
             
-            // Clamp throttle to valid range
             int8_t throttle_level = (int8_t)(cmd.throttle & 0x07);
             if (throttle_level > THROTTLE_LEVEL_MAX) throttle_level = THROTTLE_LEVEL_MAX;
             g_throttle_target = throttle_level;
@@ -367,7 +321,7 @@ void can_rx_task(void *param) {
                 throttle_level, cmd.steering_position, cmd.braking_position, cmd.sequence);
         }
 
-        // Process Safety auto allowed (0x101) - Safety controls autonomous permission
+        // Process Safety auto allowed (0x101)
         else if (msg.identifier == CAN_ID_SAFETY_AUTO_ALLOWED && msg.data_length_code >= 3) {
             safety_auto_allowed_t auto_msg;
             can_decode_safety_auto_allowed(msg.data, &auto_msg);
@@ -391,59 +345,48 @@ void can_rx_task(void *param) {
 // Control Task
 // =============================================================================
 
-// Main state machine and command execution. Runs at 50Hz.
-// Monitors override sensors, manages state transitions, executes actuator commands.
 void control_task(void *param) {
     (void)param;
 
     ESP_LOGI(TAG, "Control task started");
 
-    // Initialize UIM2852CA motors
-    uim2852_motor_config_t steer_cfg = UIM2852_MOTOR_CONFIG_DEFAULT();
+    // Initialize UIM2852CA stepper motors
+    stepper_motor_uim2852_config_t steer_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
     steer_cfg.node_id = UIM2852_NODE_STEERING;
-    uim2852_motor_init(&g_steering_motor, &steer_cfg);
+    stepper_motor_uim2852_init(&g_steering_stepper, &steer_cfg);
 
-    uim2852_motor_config_t brake_cfg = UIM2852_MOTOR_CONFIG_DEFAULT();
+    stepper_motor_uim2852_config_t brake_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
     brake_cfg.node_id = UIM2852_NODE_BRAKING;
-    uim2852_motor_init(&g_braking_motor, &brake_cfg);
+    stepper_motor_uim2852_init(&g_braking_stepper, &brake_cfg);
 
-    // Configure motors (query microstepping, set motion parameters)
-    uim2852_motor_configure(&g_steering_motor);
+    stepper_motor_uim2852_configure(&g_steering_stepper);
     vTaskDelay(pdMS_TO_TICKS(10));
-    uim2852_motor_configure(&g_braking_motor);
+    stepper_motor_uim2852_configure(&g_braking_stepper);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Ensure motors are disabled at startup
-    uim2852_motor_disable(&g_steering_motor);
-    uim2852_motor_disable(&g_braking_motor);
+    stepper_motor_uim2852_disable(&g_steering_stepper);
+    stepper_motor_uim2852_disable(&g_braking_stepper);
 
-    // Initialize throttle state
     g_throttle_current = 0;
     g_throttle_target = 0;
 
     g_control_state = CONTROL_STATE_READY;
     ESP_LOGI(TAG, "Control ready, waiting for commands");
 
-    // Previous state tracking for change-based logging
     uint8_t prev_state = 0xFF;
     fr_state_t prev_fr = FR_STATE_INVALID;
     int8_t prev_thr_target = -1;
     int8_t prev_thr_current = -1;
     bool prev_auto_allowed = false;
 
-    // Initial delay to let nodes report in
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     while (true) {
         uint32_t now_ms = get_time_ms();
 
-        // Update override sensor debounce state
         override_sensors_update(now_ms);
-
-        // Check F/R sensor state
         fr_state_t fr_state = override_sensors_get_fr_state();
 
-        // Check for invalid F/R state (both switches active)
         if (fr_state == FR_STATE_INVALID) {
             if (g_fault_code != CONTROL_FAULT_SENSOR_INVALID) {
                 ESP_LOGE(TAG, "F/R sensor INVALID state detected!");
@@ -455,24 +398,17 @@ void control_task(void *param) {
             }
         }
 
-        // State machine
         switch (g_control_state) {
             case CONTROL_STATE_INIT:
-                // Should not reach here after init
                 g_control_state = CONTROL_STATE_READY;
                 break;
 
             case CONTROL_STATE_READY:
-                // Manual mode - waiting for Safety to allow autonomous
-                // Auto is allowed when Safety broadcasts allowed=1 (no e-stop, all nodes alive)
                 if (g_auto_allowed && check_enable_preconditions())
                 	start_enable_sequence();
                 break;
 
             case CONTROL_STATE_ENABLING:
-                // Transitioning to autonomous - waiting for settle time
-                
-                // Check for abort conditions
                 if (!g_auto_allowed) {
                     ESP_LOGW(TAG, "Enable sequence aborted (auto blocked)");
                     enable_relay_deenergize();
@@ -481,7 +417,6 @@ void control_task(void *param) {
                     break;
                 }
 
-                // Check override sensors during enable
                 if (override_sensors_pedal_pressed()) {
                     ESP_LOGW(TAG, "Enable aborted: pedal pressed");
                     enable_relay_deenergize();
@@ -498,27 +433,21 @@ void control_task(void *param) {
                     break;
                 }
 
-                // Check if settle time has elapsed
                 if ((now_ms - g_enable_start_ms) >= ENABLE_SEQUENCE_MS)
                     complete_enable_sequence();
                 break;
 
             case CONTROL_STATE_ACTIVE:
-                // Autonomous mode active
-
-                // OVERRIDE CHECK 1: Pedal pressed (IMMEDIATE, no debounce)
                 if (override_sensors_pedal_pressed()) {
                     trigger_override(OVERRIDE_REASON_PEDAL);
                     break;
                 }
 
-                // OVERRIDE CHECK 2: F/R moved from Forward (debounced)
                 if (fr_state != FR_STATE_FORWARD) {
                     trigger_override(OVERRIDE_REASON_FR_CHANGED);
                     break;
                 }
 
-                // OVERRIDE CHECK 3: Safety blocked autonomous (e-stop or node timeout)
                 if (!g_auto_allowed) {
                     ESP_LOGW(TAG, "Safety blocked auto (estop:%s)", 
                         estop_reason_to_string(g_auto_estop_reason));
@@ -526,7 +455,7 @@ void control_task(void *param) {
                     break;
                 }
 
-                // Execute throttle commands with slew rate limiting (max 1 level per 100ms)
+                // Execute throttle commands with slew rate limiting
                 if (g_throttle_current != g_throttle_target) {
                     if ((now_ms - g_last_throttle_change_ms) >= THROTTLE_SLEW_INTERVAL_MS) {
                         if (g_throttle_current < g_throttle_target) g_throttle_current++;
@@ -537,21 +466,18 @@ void control_task(void *param) {
                     }
                 }
 
-                // Send position commands to motors
                 {
-                    esp_err_t err = uim2852_motor_go_absolute(&g_steering_motor, g_steering_cmd);
+                    esp_err_t err = stepper_motor_uim2852_go_absolute(&g_steering_stepper, g_steering_cmd);
                     if (err != ESP_OK)
                         ESP_LOGW(TAG, "[CAN TX] Steering cmd failed: %s", esp_err_to_name(err));
 
-                    err = uim2852_motor_go_absolute(&g_braking_motor, g_braking_cmd);
+                    err = stepper_motor_uim2852_go_absolute(&g_braking_stepper, g_braking_cmd);
                     if (err != ESP_OK)
                         ESP_LOGW(TAG, "[CAN TX] Braking cmd failed: %s", esp_err_to_name(err));
                 }
                 break;
 
             case CONTROL_STATE_OVERRIDE:
-                // Override triggered - auto-clear when conditions are met
-                // Conditions: pedal released and rearmed, F/R in forward, auto allowed
                 g_throttle_current = 0;
                 
                 if (g_auto_allowed && 
@@ -564,12 +490,11 @@ void control_task(void *param) {
                 break;
 
             case CONTROL_STATE_FAULT:
-                // Fault state - requires power cycle to clear
                 g_throttle_current = 0;
                 break;
         }
 
-        // Log only on state change
+        // Log on state change
         if (g_control_state != prev_state || fr_state != prev_fr ||
             g_throttle_target != prev_thr_target || g_throttle_current != prev_thr_current ||
             g_auto_allowed != prev_auto_allowed) {
@@ -594,8 +519,6 @@ void control_task(void *param) {
 // Heartbeat Task
 // =============================================================================
 
-// Sends periodic CAN heartbeat (0x120) and status (0x121) frames.
-// Also updates WS2812 LED state indicator.
 void heartbeat_task(void *param) {
     heartbeat_config_t *cfg = static_cast<heartbeat_config_t *>(param);
 
@@ -604,14 +527,12 @@ void heartbeat_task(void *param) {
     while (true) {
         TickType_t now = xTaskGetTickCount();
 
-        // Update LED heartbeat - show error if in fault/override state
         if (g_control_state == CONTROL_STATE_FAULT || 
             g_control_state == CONTROL_STATE_OVERRIDE)
             heartbeat_set_error(true);
         else heartbeat_set_error(false);
         heartbeat_tick(cfg, now);
 
-        // Send CAN heartbeat
         uint8_t hb_data[8] = {0};
         hb_data[0] = g_heartbeat_seq++;
         hb_data[1] = g_control_state;
@@ -621,29 +542,20 @@ void heartbeat_task(void *param) {
         if (err != ESP_OK)
             ESP_LOGW(TAG, "[CAN TX] Heartbeat failed: %s", esp_err_to_name(err));
 
-        // Send expanded status frame
         uint8_t status_data[8] = {0};
         
-        // Byte 0: Current throttle level (0-7 or 0xFF if disabled)
         status_data[0] = (g_control_state == CONTROL_STATE_ACTIVE) 
                          ? (uint8_t)g_throttle_current : 0xFF;
         
-        // Byte 1: F/R state
         status_data[1] = (uint8_t)override_sensors_get_fr_state();
-        
-        // Byte 2: Sensor flags
         uint8_t sensor_flags = override_sensors_get_flags();
+
         if (enable_relay_is_energized()) sensor_flags |= SENSOR_FLAG_ENABLE_RELAY;
         if (throttle_mux_is_autonomous()) sensor_flags |= SENSOR_FLAG_THROTTLE_RELAY;
         status_data[2] = sensor_flags;
         
-        // Byte 3: Override reason
         status_data[3] = g_override_reason;
-        
-        // Byte 4-5: Steering command
         can_pack_le16s(&status_data[4], g_steering_cmd);
-        
-        // Byte 6-7: Braking command
         can_pack_le16s(&status_data[6], g_braking_cmd);
 
         err = can_twai_send(CAN_ID_CONTROL_STATUS, status_data, pdMS_TO_TICKS(10));
@@ -658,8 +570,6 @@ void heartbeat_task(void *param) {
 // Main Task
 // =============================================================================
 
-// Initialization and task startup. Configures all peripherals, then spawns
-// CAN RX, Control, and Heartbeat tasks before deleting itself.
 void main_task(void *param) {
     (void)param;
 
@@ -668,7 +578,7 @@ void main_task(void *param) {
     ESP_LOGI(TAG, "Target: %s", CONFIG_IDF_TARGET);
 #endif
 
-    // Initialize TWAI for 1 Mbps, standard frames
+    // Initialize TWAI (via WAVESHARE SN65HVD230 transceiver)
     esp_err_t err = can_twai_init_default(TWAI_TX_GPIO, TWAI_RX_GPIO);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "TWAI init failed: %s", esp_err_to_name(err));
@@ -678,16 +588,13 @@ void main_task(void *param) {
         return;
     }
 
-    // Initialize throttle mux (DG408 + throttle relay)
     err = throttle_mux_init(&g_throttle_mux_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Throttle mux init failed: %s", esp_err_to_name(err));
         g_fault_code = CONTROL_FAULT_THROTTLE_INIT;
         g_control_state = CONTROL_STATE_FAULT;
-        // Continue to show fault state
     }
 
-    // Initialize enable relay
     err = enable_relay_init(&g_enable_relay_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Enable relay init failed: %s", esp_err_to_name(err));
@@ -695,7 +602,6 @@ void main_task(void *param) {
         g_control_state = CONTROL_STATE_FAULT;
     }
 
-    // Initialize override sensors
     err = override_sensors_init(&g_override_sensors_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Override sensors init failed: %s", esp_err_to_name(err));
@@ -703,7 +609,6 @@ void main_task(void *param) {
         g_control_state = CONTROL_STATE_FAULT;
     }
 
-    // Initialize heartbeat LED (WS2812 on GPIO8)
     static heartbeat_config_t heartbeat_cfg = {
         .gpio = HEARTBEAT_LED_GPIO,
         .interval_ticks = pdMS_TO_TICKS(500),
@@ -726,7 +631,6 @@ void main_task(void *param) {
 
     if (g_fault_code != CONTROL_FAULT_NONE) heartbeat_set_error(true);
 
-    // Log initial sensor state
     ESP_LOGI(TAG, "Initial F/R state: %d", override_sensors_get_fr_state());
     ESP_LOGI(TAG, "Initial pedal: %u mV (%s)", 
         override_sensors_get_pedal_mv(),
@@ -734,12 +638,10 @@ void main_task(void *param) {
 
     ESP_LOGI(TAG, "Starting control tasks");
 
-    // Start tasks
     xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, nullptr);
     xTaskCreate(control_task, "control", CONTROL_TASK_STACK, nullptr, CONTROL_TASK_PRIO, nullptr);
     xTaskCreate(heartbeat_task, "heartbeat", HEARTBEAT_TASK_STACK, &heartbeat_cfg, HEARTBEAT_TASK_PRIO, nullptr);
 
-    // Main task complete - delete self
     vTaskDelete(nullptr);
 }
 }

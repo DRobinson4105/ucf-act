@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "wireless_remote.cpp"
+    SRCS "rf_remote_ev1527.cpp"
     INCLUDE_DIRS "include"
     REQUIRES driver
 )
