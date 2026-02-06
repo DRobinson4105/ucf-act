@@ -1,0 +1,43 @@
+act_global_path_manager:
+  ros__parameters:
+    map_frame: map
+    input_topic: /ui/global_route_wgs84_json
+    output_topic_clean: /global_path
+    output_topic_raw: /global_path_raw
+    output_topic_profile: /global_path_profile
+    output_topic_meta: /global_path_meta
+    output_topic_points_raw: /global_path_points_raw
+    output_topic_points_clean: /global_path_points_clean
+    datum_lat: 28.6017759
+    datum_lon: -81.2005371
+    datum_alt: 0.0
+
+fake_odom_integrator:
+  ros__parameters:
+    odom_topic: /odometry/local
+    cmd_vel_topic: /cmd_vel
+    odom_frame: odom
+    base_frame: base_link
+    publish_hz: 50.0
+    initial_x: 0.0
+    initial_y: 0.0
+    initial_yaw: -2.06
+
+mock_livox_pointcloud_publisher:
+  ros__parameters:
+    topic: /livox/lidar_pc2
+    world_frame: odom
+    sensor_frame: livox_frame
+    publish_hz: 10.0
+    point_z: 1.0
+    points_per_obstacle: 24
+    obstacle_radius: 0.3
+    use_tf: true
+
+follow_path_client:
+  ros__parameters:
+    global_path_topic: /global_path
+    action_name: /follow_path
+    controller_id: FollowPath
+    goal_checker_id: general_goal_checker
+    progress_checker_id: progress_checker

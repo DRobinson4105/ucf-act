@@ -1,0 +1,26 @@
+<launch>
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="map_to_odom"
+        args="0 0 0 0 0 0 map odom" output="screen"/>
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="base_to_livox"
+        args="--x 1.7272 --y 0 --z 0.80 --roll 0 --pitch 0.4974 --yaw 0 --frame-id base_link --child-frame-id livox_frame"
+        output="screen"/>
+  <node pkg="act_navigation" exec="fake_odom_integrator" name="fake_odom_integrator" output="screen">
+    <param from="$(find-pkg-share act_navigation)/config/act_mock_nodes.yaml"/>
+  </node>
+  <node pkg="act_navigation" exec="mock_livox_pointcloud_publisher" name="mock_livox_pointcloud_publisher" output="screen">
+    <param from="$(find-pkg-share act_navigation)/config/act_mock_nodes.yaml"/>
+  </node>
+  <node pkg="act_navigation" exec="act_global_path_manager" name="act_global_path_manager" output="screen">
+    <param from="$(find-pkg-share act_navigation)/config/act_mock_nodes.yaml"/>
+  </node>
+  <node pkg="nav2_controller" exec="controller_server" name="controller_server" output="screen">
+    <param from="$(find-pkg-share act_navigation)/config/nav2_mppi_mock.yaml"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager" name="lifecycle_manager" output="screen">
+    <param from="$(find-pkg-share act_navigation)/config/nav2_mppi_mock.yaml"/>
+  </node>
+  <node pkg="act_navigation" exec="follow_path_client" name="follow_path_client" output="screen">
+    <param from="$(find-pkg-share act_navigation)/config/act_mock_nodes.yaml"/>
+  </node>
+</launch>
+

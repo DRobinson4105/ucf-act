@@ -6,3 +6,4 @@ src/FAST_LIO_ROS2
 .env
 *.onnx
 *.engine
+.clang-format

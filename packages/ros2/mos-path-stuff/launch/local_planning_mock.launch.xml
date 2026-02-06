@@ -1,0 +1,16 @@
+<launch>
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="map_to_odom" args="0 0 0 0 0 0 map odom" output="screen"/>
+  <node pkg="act_navigation" exec="fake_odom_integrator" name="fake_odom_integrator" output="screen"/>
+  <node pkg="act_navigation" exec="mock_occupancy_grid_publisher" name="mock_occupancy_grid_publisher" output="screen">
+    <param name="topic" value="/fused_grid"/>
+    <param name="frame_id" value="map"/>
+    <param name="width" value="200"/>
+    <param name="height" value="200"/>
+    <param name="resolution" value="0.05"/>
+    <param name="origin_x" value="-5.0"/>
+    <param name="origin_y" value="-5.0"/>
+    <param name="default_value" value="0"/>
+    <param name="publish_hz" value="1.0"/>
+  </node>
+</launch>
+

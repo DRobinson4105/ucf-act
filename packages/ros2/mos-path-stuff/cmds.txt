@@ -1,0 +1,10 @@
+ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map base_link
+ros2 run act_navigation act_global_path_manager --ros-args -p datum_lat:=28.602123 -p datum_lon:=-81.200456 -p datum_alt:=0.0
+ros2 topic pub --once /ui/global_route_wgs84_json std_msgs/msg/String "{data: '$(tr -d '\n' < su-millican.json)'}"
+rviz2
+- /global_path
+- /global_path_raw
+- /global_path_profile
+- /global_path_meta
+
+
