@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>act_navigation</name>
+  <name>navigation</name>
   <version>0.0.1</version>
   <description>Mock global path + MPPI + costmap pipeline</description>
   <maintainer email="you@todo.todo">you</maintainer>

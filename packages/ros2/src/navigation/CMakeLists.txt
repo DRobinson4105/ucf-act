@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(act_navigation)
+project(navigation)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -80,4 +80,3 @@ install(DIRECTORY
 )
 
 ament_package()
-
