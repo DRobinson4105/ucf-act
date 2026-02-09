@@ -31,6 +31,61 @@ PKGS=(
 
 sudo apt-get install -y "${PKGS[@]}"
 
+# Build OpenCV
+
+wget -O opencv.zip https://github.com/opencv/opencv/archive/4.10.0.zip
+unzip opencv.zip
+
+wget -O opencv_contrib.zip https://github.com/opencv/opencv_contrib/archive/4.10.0.zip
+unzip opencv_contrib.zip
+
+mkdir -p build && cd build
+cmake ../opencv-4.10.0 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DOPENCV_EXTRA_MODULES_PATH="../opencv_contrib-4.10.0/modules" \
+  -DCMAKE_INSTALL_PREFIX="/usr/local" \
+  -DPYTHON2_EXECUTABLE="" \
+  -DPYTHON2_INCLUDE_DIR="" \
+  -DPYTHON2_LIBRARY="" \
+  -DPYTHON2_NUMPY_INCLUDE_DIRS="" \
+  -DBUILD_opencv_python2=OFF \
+  -DBUILD_opencv_python3=OFF \
+  -DWITH_CUDA=ON \
+  -DWITH_CUDNN=ON \
+  -DWITH_CUBLAS=ON \
+  -DOPENCV_DNN_CUDA=ON \
+  -DENABLE_FAST_MATH=ON \
+  -DCUDA_FAST_MATH=ON \
+  -DCUDA_ARCH_BIN="8.7" \
+  -DCUDA_ARCH_PTX="" \
+  -DWITH_NVCUVID=ON \
+  -DWITH_NVCUVENC=ON \
+  -DBUILD_opencv_cudacodec=ON \
+  -DBUILD_opencv_cudaarithm=ON \
+  -DBUILD_opencv_cudaimgproc=ON \
+  -DBUILD_opencv_cudawarping=ON \
+  -DBUILD_opencv_cudafilters=ON \
+  -DBUILD_opencv_viz=OFF \
+  -DBUILD_TESTS=OFF \
+  -DBUILD_PERF_TESTS=OFF \
+  -DBUILD_EXAMPLES=OFF \
+  -DOPENCV_ENABLE_NONFREE=OFF \
+  -DWITH_OPENVINO=OFF \
+  -DWITH_GTK=ON \
+  -DWITH_V4L=ON \
+  -DWITH_GSTREAMER=ON
+cmake --build . -j$(nproc)
+
+sudo make install
+sudo ldconfig
+
+cd ..
+
+rm -rf opencv-4.5.0
+sudo rm -rf build
+rm -rf opencv_contrib
+rm opencv.zip
+
 # Set up workspace
 
 [[ "$(pwd)" == */ros2 ]] || { echo "Error: must be in ros2 workspace (ucf-act/packages/ros2)"; exit 1; }
