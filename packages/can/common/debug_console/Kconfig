@@ -1,0 +1,12 @@
+menu "Debug Console"
+
+    config ENABLE_DEBUG_CONSOLE
+        bool "Enable debug serial console"
+        default n
+        help
+            Enables an interactive command-line interface over UART0
+            for testing with partial hardware.  Provides commands to
+            bypass heartbeat checks, simulate sensors, and inject
+            Orin commands.  Must be OFF for production deployments.
+
+endmenu
