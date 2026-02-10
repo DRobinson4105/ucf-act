@@ -66,38 +66,46 @@ extern "C" {
 // ============================================================================
 // Unified Fault Codes (NODE_FAULT_*)
 // ============================================================================
-// Single namespace with ranged values. Every heartbeat uses the same byte.
+// Two encoding modes in the same byte:
 //   0x00:       No fault
-//   0x01-0x0F:  System / Safety (e-stop causes)
-//   0x10-0x1F:  Planner faults
-//   0x20-0x3F:  Control faults
+//   0x01-0x7F:  E-stop BITMASK (Safety heartbeat only) — multiple bits can be set
+//   0x80-0x8F:  Planner faults (scalar, one at a time)
+//   0x90-0x9F:  Control faults (scalar, one at a time)
 //   0xFF:       General / unspecified
+//
+// Safety's fault_code is a bitmask: if button AND remote are both active,
+// fault_code = 0x01 | 0x02 = 0x03. Use node_estop_to_string() to decode.
+// Planner/Control fault_code is a single scalar value.
 
 // Common
 #define NODE_FAULT_NONE              0x00
 #define NODE_FAULT_GENERAL           0xFF   // Unspecified fault
 
-// System / Safety e-stop causes (0x01-0x0F)
-#define NODE_FAULT_ESTOP_MUSHROOM        0x01   // push_button_hb2es544 pressed
-#define NODE_FAULT_ESTOP_REMOTE          0x02   // rf_remote_ev1527 kill active
-#define NODE_FAULT_ESTOP_ULTRASONIC      0x03   // ultrasonic_a02yyuw obstacle or fault
-#define NODE_FAULT_ESTOP_PLANNER         0x04   // Planner reported FAULT state
-#define NODE_FAULT_ESTOP_PLANNER_TIMEOUT 0x05   // Planner heartbeat timeout
-#define NODE_FAULT_ESTOP_CONTROL         0x06   // Control ESP32 reported FAULT state
-#define NODE_FAULT_ESTOP_CONTROL_TIMEOUT 0x07   // Control ESP32 heartbeat timeout
+// E-stop bitmask flags (0x01-0x40, used only by Safety heartbeat)
+// Multiple bits can be set simultaneously when multiple e-stops are active.
+#define NODE_FAULT_ESTOP_BUTTON          0x01   // bit 0: push_button_hb2es544 pressed
+#define NODE_FAULT_ESTOP_REMOTE          0x02   // bit 1: rf_remote_ev1527 kill active
+#define NODE_FAULT_ESTOP_ULTRASONIC      0x04   // bit 2: ultrasonic_a02yyuw obstacle or unhealthy
+#define NODE_FAULT_ESTOP_PLANNER         0x08   // bit 3: Planner reported FAULT state
+#define NODE_FAULT_ESTOP_PLANNER_TIMEOUT 0x10   // bit 4: Planner heartbeat timeout
+#define NODE_FAULT_ESTOP_CONTROL         0x20   // bit 5: Control ESP32 reported FAULT state
+#define NODE_FAULT_ESTOP_CONTROL_TIMEOUT 0x40   // bit 6: Control ESP32 heartbeat timeout
 
-// Planner faults (0x10-0x1F)
-#define NODE_FAULT_PERCEPTION        0x10   // Camera/LiDAR failure
-#define NODE_FAULT_LOCALIZATION      0x11   // Localization lost
-#define NODE_FAULT_PLANNING          0x12   // Path planner failure
-#define NODE_FAULT_PLANNER_HARDWARE  0x13   // Planner hardware issue (thermal, etc.)
+// Mask for any estop bit set
+#define NODE_FAULT_ESTOP_ANY         0x7F
 
-// Control faults (0x20-0x3F)
-#define NODE_FAULT_THROTTLE_INIT     0x20   // Throttle mux init failed
-#define NODE_FAULT_CAN_TX            0x21   // CAN transmit failures
-#define NODE_FAULT_MOTOR_COMM        0x22   // Stepper communication lost
-#define NODE_FAULT_SENSOR_INVALID    0x23   // F/R sensor invalid reading
-#define NODE_FAULT_RELAY_INIT        0x24   // Relay initialization failed
+// Planner faults (0x80-0x8F, scalar)
+#define NODE_FAULT_PERCEPTION        0x80   // Camera/LiDAR failure
+#define NODE_FAULT_LOCALIZATION      0x81   // Localization lost
+#define NODE_FAULT_PLANNING          0x82   // Path planner failure
+#define NODE_FAULT_PLANNER_HARDWARE  0x83   // Planner hardware issue (thermal, etc.)
+
+// Control faults (0x90-0x9F, scalar)
+#define NODE_FAULT_THROTTLE_INIT     0x90   // Throttle mux init failed
+#define NODE_FAULT_CAN_TX            0x91   // CAN transmit failures
+#define NODE_FAULT_MOTOR_COMM        0x92   // Stepper communication lost
+#define NODE_FAULT_SENSOR_INVALID    0x93   // F/R sensor invalid reading
+#define NODE_FAULT_RELAY_INIT        0x94   // Relay initialization failed
 
 // ============================================================================
 // Heartbeat Flags
@@ -243,17 +251,51 @@ static inline const char* node_state_to_string(uint8_t state) {
     }
 }
 
+// Decode an estop bitmask into a human-readable string.
+// Returns a pointer to a static buffer — NOT thread-safe, but fine for
+// sequential ESP_LOG calls. Multiple active faults separated by '+'.
+// Example: fault=0x05 -> "button+ultrasonic"
+static inline const char* node_estop_to_string(uint8_t fault) {
+    if (fault == NODE_FAULT_NONE) return "none";
+
+    // Static buffer sized for worst case: all 7 flags with '+' separators
+    // "button+remote+ultrasonic+planner+planner_timeout+control+control_timeout" = 71 chars
+    static char buf[80];
+    char *p = buf;
+    char *end = buf + sizeof(buf);
+
+    #define ESTOP_APPEND(flag, name) do { \
+        if ((fault & (flag)) && p < end) { \
+            if (p != buf && p < end) *p++ = '+'; \
+            const char *s = name; \
+            while (*s && p < end - 1) *p++ = *s++; \
+        } \
+    } while(0)
+
+    ESTOP_APPEND(NODE_FAULT_ESTOP_BUTTON,          "button");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_REMOTE,           "remote");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_ULTRASONIC,       "ultrasonic");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER,          "planner");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER_TIMEOUT,  "planner_timeout");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL,          "control");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL_TIMEOUT,  "control_timeout");
+
+    #undef ESTOP_APPEND
+
+    *p = '\0';
+    return buf;
+}
+
+// Decode a fault code into a human-readable string.
+// For estop bitmask values (0x01-0x7F), delegates to node_estop_to_string().
+// For scalar planner/control faults (0x80+), returns a fixed string.
 static inline const char* node_fault_to_string(uint8_t fault) {
+    // Estop bitmask range (0x01-0x7F)
+    if (fault != NODE_FAULT_NONE && fault <= NODE_FAULT_ESTOP_ANY)
+        return node_estop_to_string(fault);
+
     switch (fault) {
         case NODE_FAULT_NONE:                return "none";
-        // System / Safety e-stop causes
-        case NODE_FAULT_ESTOP_MUSHROOM:      return "estop_mushroom";
-        case NODE_FAULT_ESTOP_REMOTE:        return "estop_remote";
-        case NODE_FAULT_ESTOP_ULTRASONIC:    return "estop_ultrasonic";
-        case NODE_FAULT_ESTOP_PLANNER:       return "estop_planner";
-        case NODE_FAULT_ESTOP_PLANNER_TIMEOUT: return "estop_planner_timeout";
-        case NODE_FAULT_ESTOP_CONTROL:       return "estop_control";
-        case NODE_FAULT_ESTOP_CONTROL_TIMEOUT: return "estop_control_timeout";
         // Planner faults
         case NODE_FAULT_PERCEPTION:          return "perception";
         case NODE_FAULT_LOCALIZATION:        return "localization";

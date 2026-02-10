@@ -24,7 +24,7 @@ extern "C" {
 // ============================================================================
 
 typedef struct {
-    bool push_button_active;     // Physical mushroom e-stop pressed
+    bool push_button_active;     // Physical push button e-stop pressed
     bool rf_remote_active;       // RF remote e-stop engaged
     bool ultrasonic_too_close;   // Obstacle within stop distance
     bool ultrasonic_healthy;     // Sensor responding within timeout

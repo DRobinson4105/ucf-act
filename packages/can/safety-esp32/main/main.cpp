@@ -22,9 +22,7 @@
 #include "safety_logic.h"
 #include "system_state.h"
 
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-#include "debug_console.h"
-#endif
+
 
 // Safety ESP32 - System state authority and e-stop monitoring
 //
@@ -54,7 +52,7 @@ static const char *TAG = "SAFETY";
 
 constexpr int CAN_RX_TASK_STACK = 4096;
 constexpr int SAFETY_TASK_STACK = 4096;
-constexpr int HEARTBEAT_TASK_STACK = 2048;
+constexpr int HEARTBEAT_TASK_STACK = 4096;
 constexpr UBaseType_t CAN_RX_TASK_PRIO = 7;
 constexpr UBaseType_t SAFETY_TASK_PRIO = 6;
 constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
@@ -123,7 +121,9 @@ static volatile uint8_t g_control_node_state = NODE_STATE_INIT;
 static volatile uint8_t g_control_flags = 0;
 
 // System target state (Safety is the authority)
-static volatile uint8_t g_target_state = NODE_STATE_INIT;
+// Starts as READY (not INIT) to prevent heartbeat_task from broadcasting INIT
+// during the 2-second startup delay before safety_task runs its first evaluation.
+static volatile uint8_t g_target_state = NODE_STATE_READY;
 
 // Safety heartbeat sequence counter
 static volatile uint8_t g_safety_hb_seq = 0;
@@ -229,10 +229,18 @@ static void track_can_tx(esp_err_t err) {
     }
     g_can_tx_fail_count++;
     if (g_can_tx_fail_count >= CAN_TX_FAIL_THRESHOLD) {
-        ESP_LOGE(TAG, "CAN TX failed %d consecutive times, initiating recovery",
-                 g_can_tx_fail_count);
-        taskEXIT_CRITICAL(&g_can_tx_lock);
-        attempt_can_recovery();
+        bool bus_ok = can_twai_bus_ok();
+        g_can_tx_fail_count = 0;  // reset regardless
+        if (!bus_ok) {
+            ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
+                     CAN_TX_FAIL_THRESHOLD);
+            taskEXIT_CRITICAL(&g_can_tx_lock);
+            attempt_can_recovery();
+        } else {
+            ESP_LOGW(TAG, "CAN TX failed %d times (bus OK, no partner?)",
+                     CAN_TX_FAIL_THRESHOLD);
+            taskEXIT_CRITICAL(&g_can_tx_lock);
+        }
     } else {
         taskEXIT_CRITICAL(&g_can_tx_lock);
     }
@@ -265,11 +273,14 @@ static void send_safety_heartbeat(bool log_as_change) {
             ESP_LOGW(TAG, "[CAN TX] Heartbeat: target=%s fault:%s",
                      node_state_to_string(g_target_state),
                      node_fault_to_string(g_estop_fault_code));
-        } else {
-            ESP_LOGD(TAG, "[CAN TX] Heartbeat periodic: target=%s fault:%s",
+        }
+#ifdef CONFIG_LOG_HEARTBEAT_TX
+        else {
+            ESP_LOGI(TAG, "[CAN TX] Heartbeat periodic: target=%s fault:%s",
                      node_state_to_string(g_target_state),
                      node_fault_to_string(g_estop_fault_code));
         }
+#endif
     } else {
         ESP_LOGE(TAG, "[CAN TX] Heartbeat failed: %s", esp_err_to_name(err));
     }
@@ -310,6 +321,13 @@ void can_rx_task(void *param) {
                 ESP_LOGI(TAG, "[CAN RX] Planner state: %s -> %s",
                          node_state_to_string(prev_state), node_state_to_string(hb.state));
             }
+#ifdef CONFIG_LOG_HEARTBEAT_RX
+            else {
+                ESP_LOGI(TAG, "[CAN RX] Planner HB: seq=%u state=%s fault=%s flags=0x%02X",
+                         hb.sequence, node_state_to_string(hb.state),
+                         node_fault_to_string(hb.fault_code), hb.flags);
+            }
+#endif
         }
 
         // Process Control ESP32 heartbeat (0x120)
@@ -331,6 +349,13 @@ void can_rx_task(void *param) {
                 ESP_LOGI(TAG, "[CAN RX] Control state: %s -> %s",
                          node_state_to_string(prev_state), node_state_to_string(hb.state));
             }
+#ifdef CONFIG_LOG_HEARTBEAT_RX
+            else {
+                ESP_LOGI(TAG, "[CAN RX] Control HB: seq=%u state=%s fault=%s flags=0x%02X",
+                         hb.sequence, node_state_to_string(hb.state),
+                         node_fault_to_string(hb.fault_code), hb.flags);
+            }
+#endif
         }
     }
 }
@@ -373,10 +398,32 @@ void safety_task(void *param) {
         inputs.planner_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_planner);
         inputs.control_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_control);
 
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-        // Debug bypass: pretend nodes are alive when bypassed
-        if (g_dbg_safety.bypass_planner) inputs.planner_alive = true;
-        if (g_dbg_safety.bypass_control) inputs.control_alive = true;
+        // Apply test bypasses
+#ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
+        inputs.planner_alive = true;
+#endif
+#ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
+        inputs.control_alive = true;
+#endif
+#ifdef CONFIG_BYPASS_PUSH_BUTTON
+        inputs.push_button_active = false;
+#endif
+#ifdef CONFIG_BYPASS_RF_REMOTE
+        inputs.rf_remote_active = false;
+#endif
+#ifdef CONFIG_BYPASS_ULTRASONIC
+        inputs.ultrasonic_too_close = false;
+        inputs.ultrasonic_healthy = true;
+#endif
+
+#ifdef CONFIG_LOG_ESTOP_INPUTS
+        ESP_LOGI(TAG, "[INPUTS] button=%d remote=%d ultra_close=%d ultra_healthy=%d planner=%s(%s) control=%s(%s)",
+                 inputs.push_button_active, inputs.rf_remote_active,
+                 inputs.ultrasonic_too_close, inputs.ultrasonic_healthy,
+                 inputs.planner_alive ? "alive" : "DEAD",
+                 node_state_to_string(g_planner_state),
+                 inputs.control_alive ? "alive" : "DEAD",
+                 node_state_to_string(g_control_node_state));
 #endif
 
         // Evaluate all safety conditions (pure function — no side effects)
@@ -398,6 +445,16 @@ void safety_task(void *param) {
         };
         system_state_result_t ss_out = system_state_step(&ss_in);
 
+#ifdef CONFIG_LOG_STATE_MACHINE
+        ESP_LOGI(TAG, "[SM] estop=%d planner=%s control=%s p_complete=%d c_complete=%d target=%s -> %s",
+                 decision.estop_active,
+                 node_state_to_string(g_planner_state),
+                 node_state_to_string(g_control_node_state),
+                 ss_in.planner_enable_complete, ss_in.control_enable_complete,
+                 node_state_to_string(g_target_state),
+                 node_state_to_string(ss_out.new_target));
+#endif
+
         // Apply new target state
         uint8_t prev_target = g_target_state;
         g_target_state = ss_out.new_target;
@@ -407,16 +464,6 @@ void safety_task(void *param) {
                      node_state_to_string(prev_target),
                      node_state_to_string(ss_out.new_target));
         }
-
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-        // Update debug status for console 'status' command
-        g_dbg_safety.estop_active   = decision.estop_active;
-        g_dbg_safety.fault_code     = decision.fault_code;
-        g_dbg_safety.target_state   = g_target_state;
-        g_dbg_safety.relay_on       = decision.relay_enable;
-        g_dbg_safety.planner_alive  = inputs.planner_alive;
-        g_dbg_safety.control_alive  = inputs.control_alive;
-#endif
 
         // Control power relay based on safety decision
         if (decision.relay_enable) {
@@ -431,6 +478,8 @@ void safety_task(void *param) {
             heartbeat_set_error(true);
         }
 
+        // Relay state changes are logged by the power_relay component itself
+
         // Send immediate heartbeat on target state change
         if (ss_out.target_changed) {
             send_safety_heartbeat(true);
@@ -438,12 +487,10 @@ void safety_task(void *param) {
 
         // Log on fault code change
         if (decision.fault_code != last_fault_code) {
-            ESP_LOGI(TAG, "Estop: %s (fault:%s) | target:%s | btn=%d remote=%d ultra=%d | planner=%s ctrl=%s",
+            ESP_LOGI(TAG, "Estop %-6s (%s) | target=%s | planner=%s control=%s",
                      decision.estop_active ? "ACTIVE" : "clear",
                      node_fault_to_string(decision.fault_code),
                      node_state_to_string(g_target_state),
-                     inputs.push_button_active, inputs.rf_remote_active,
-                     safety_compute_ultrasonic_trigger(inputs.ultrasonic_too_close, inputs.ultrasonic_healthy),
                      node_state_to_string(g_planner_state),
                      node_state_to_string(g_control_node_state));
             last_fault_code = decision.fault_code;
@@ -604,8 +651,21 @@ void main_task(void *param) {
     if (err != ESP_OK)
         ESP_LOGW(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
 
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-    debug_console_init_safety();
+    // Log active bypasses
+#ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
+    ESP_LOGW(TAG, "BYPASS: Planner heartbeat check DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
+    ESP_LOGW(TAG, "BYPASS: Control heartbeat check DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_PUSH_BUTTON
+    ESP_LOGW(TAG, "BYPASS: Push button e-stop DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_RF_REMOTE
+    ESP_LOGW(TAG, "BYPASS: RF remote e-stop DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_ULTRASONIC
+    ESP_LOGW(TAG, "BYPASS: Ultrasonic sensor DISABLED");
 #endif
 
     ESP_LOGI(TAG, "Starting safety tasks");

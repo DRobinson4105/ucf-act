@@ -82,39 +82,43 @@ All nodes share the same state enum. Safety commands forward transitions; nodes 
 
 ## Unified Fault Codes (NODE_FAULT_*)
 
-Single namespace with ranged values. Every heartbeat's byte 2 uses the same encoding.
+Two encoding modes in the same byte:
+- **E-stop bitmask (0x01-0x7F)**: Used only by Safety's heartbeat. Multiple bits can be set simultaneously.
+- **Scalar faults (0x80+)**: Used by Planner and Control heartbeats. One value at a time.
 
-### System / Safety e-stop causes (0x01-0x0F)
+### E-stop bitmask (Safety heartbeat only)
 
-| Code | Constant | Trigger |
-|------|----------|---------|
-| 0x00 | NONE | No fault |
-| 0x01 | ESTOP_MUSHROOM | Push button HB2-ES544 pressed |
-| 0x02 | ESTOP_REMOTE | RF remote EV1527 kill active |
-| 0x03 | ESTOP_ULTRASONIC | Ultrasonic A02YYUW obstacle or fault |
-| 0x04 | ESTOP_PLANNER | Planner reported FAULT state |
-| 0x05 | ESTOP_PLANNER_TIMEOUT | Planner heartbeat timeout (500ms) |
-| 0x06 | ESTOP_CONTROL | Control reported FAULT state |
-| 0x07 | ESTOP_CONTROL_TIMEOUT | Control heartbeat timeout (500ms) |
+Multiple conditions can be active at once. The fault_code byte is OR'd together. For example, button + remote = 0x01 | 0x02 = 0x03.
 
-### Planner faults (0x10-0x1F)
+| Bit | Code | Constant | Trigger |
+|-----|------|----------|---------|
+| - | 0x00 | NONE | No fault |
+| 0 | 0x01 | ESTOP_BUTTON | Push button HB2-ES544 pressed |
+| 1 | 0x02 | ESTOP_REMOTE | RF remote EV1527 kill active |
+| 2 | 0x04 | ESTOP_ULTRASONIC | Ultrasonic A02YYUW obstacle or fault |
+| 3 | 0x08 | ESTOP_PLANNER | Planner reported FAULT state |
+| 4 | 0x10 | ESTOP_PLANNER_TIMEOUT | Planner heartbeat timeout (500ms) |
+| 5 | 0x20 | ESTOP_CONTROL | Control reported FAULT state |
+| 6 | 0x40 | ESTOP_CONTROL_TIMEOUT | Control heartbeat timeout (500ms) |
 
-| Code | Constant | Description |
-|------|----------|-------------|
-| 0x10 | PERCEPTION | Camera/LiDAR failure |
-| 0x11 | LOCALIZATION | Localization lost |
-| 0x12 | PLANNING | Path planner failure |
-| 0x13 | PLANNER_HARDWARE | Planner hardware issue (thermal, etc.) |
-
-### Control faults (0x20-0x3F)
+### Planner faults (0x80-0x8F, scalar)
 
 | Code | Constant | Description |
 |------|----------|-------------|
-| 0x20 | THROTTLE_INIT | Throttle mux initialization failed |
-| 0x21 | CAN_TX | CAN transmit failures |
-| 0x22 | MOTOR_COMM | Stepper communication lost |
-| 0x23 | SENSOR_INVALID | F/R sensor invalid reading |
-| 0x24 | RELAY_INIT | Relay initialization failed |
+| 0x80 | PERCEPTION | Camera/LiDAR failure |
+| 0x81 | LOCALIZATION | Localization lost |
+| 0x82 | PLANNING | Path planner failure |
+| 0x83 | PLANNER_HARDWARE | Planner hardware issue (thermal, etc.) |
+
+### Control faults (0x90-0x9F, scalar)
+
+| Code | Constant | Description |
+|------|----------|-------------|
+| 0x90 | THROTTLE_INIT | Throttle mux initialization failed |
+| 0x91 | CAN_TX | CAN transmit failures |
+| 0x92 | MOTOR_COMM | Stepper communication lost |
+| 0x93 | SENSOR_INVALID | F/R sensor invalid reading |
+| 0x94 | RELAY_INIT | Relay initialization failed |
 
 ### General
 

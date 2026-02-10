@@ -57,18 +57,20 @@ Safety's heartbeat `state` field = system target state (NODE_STATE_*). Its `faul
 | Planner | 500ms | sequence, state (FAULT triggers e-stop) |
 | Control | 500ms | sequence, state (FAULT triggers e-stop) |
 
-## E-stop Fault Codes (NODE_FAULT_ESTOP_*)
+## E-stop Fault Bitmask (NODE_FAULT_ESTOP_*)
 
-| Code | Constant | Trigger |
-|------|----------|---------|
-| 0x00 | NONE | System OK |
-| 0x01 | ESTOP_MUSHROOM | Push button HB2-ES544 pressed |
-| 0x02 | ESTOP_REMOTE | RF remote EV1527 kill signal active |
-| 0x03 | ESTOP_ULTRASONIC | Ultrasonic A02YYUW obstacle (<1000mm) or not responding |
-| 0x04 | ESTOP_PLANNER | Planner heartbeat state == FAULT |
-| 0x05 | ESTOP_PLANNER_TIMEOUT | No Planner heartbeat for 500ms |
-| 0x06 | ESTOP_CONTROL | Control heartbeat state == FAULT |
-| 0x07 | ESTOP_CONTROL_TIMEOUT | No Control heartbeat for 500ms |
+The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can be set simultaneously when multiple e-stop conditions are active. For example, if both the push button and RF remote are active, fault_code = 0x03 (0x01 | 0x02).
+
+| Bit | Code | Constant | Trigger |
+|-----|------|----------|---------|
+| - | 0x00 | NONE | System OK |
+| 0 | 0x01 | ESTOP_BUTTON | Push button HB2-ES544 pressed |
+| 1 | 0x02 | ESTOP_REMOTE | RF remote EV1527 kill signal active |
+| 2 | 0x04 | ESTOP_ULTRASONIC | Ultrasonic A02YYUW obstacle (<1000mm) or not responding |
+| 3 | 0x08 | ESTOP_PLANNER | Planner heartbeat state == FAULT |
+| 4 | 0x10 | ESTOP_PLANNER_TIMEOUT | No Planner heartbeat for 500ms |
+| 5 | 0x20 | ESTOP_CONTROL | Control heartbeat state == FAULT |
+| 6 | 0x40 | ESTOP_CONTROL_TIMEOUT | No Control heartbeat for 500ms |
 
 ## Pin Configuration
 
@@ -105,7 +107,6 @@ Safety's heartbeat `state` field = system target state (NODE_STATE_*). Its `faul
 | `heartbeat_monitor` | CAN node liveness tracking (shared) |
 | `safety_logic` | Extracted e-stop evaluation logic (shared, tested) |
 | `system_state` | System state machine — target state advancement (shared, tested) |
-| `debug_console` | Interactive UART REPL for bench testing (Kconfig-gated, off by default) |
 
 ## Ultrasonic Sensor
 
@@ -115,13 +116,29 @@ Safety's heartbeat `state` field = system target state (NODE_STATE_*). Its `faul
 - **Stop threshold**: 1000mm (~3.3 ft)
 - **Sample timeout**: 200ms (stale readings ignored)
 
-## Debug Console
+## Test Bypasses
 
-An optional interactive UART console for bench testing without the full system connected. Disabled by default. See [common/debug_console/README.md](../common/debug_console/README.md) for details.
+Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under "Test Bypasses", or add to `sdkconfig.defaults`:
 
-Commands: `bypass planner|control|all`, `unbypass planner|control|all`, `status`
+| Flag | Effect |
+|------|--------|
+| `CONFIG_BYPASS_PLANNER_HEARTBEAT` | Pretend Planner heartbeat is alive (skip timeout) |
+| `CONFIG_BYPASS_CONTROL_HEARTBEAT` | Pretend Control heartbeat is alive (skip timeout) |
+| `CONFIG_BYPASS_PUSH_BUTTON` | Force push button e-stop to inactive (not pressed) |
+| `CONFIG_BYPASS_RF_REMOTE` | Force RF remote e-stop to inactive (not engaged) |
+| `CONFIG_BYPASS_ULTRASONIC` | Force ultrasonic clear and healthy (skip sensor) |
 
-Enable with `CONFIG_ENABLE_DEBUG_CONSOLE=y` in sdkconfig.defaults.
+## Debug Logging
+
+Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under "Debug Logging":
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
+| `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received heartbeat, not just state changes |
+| `CONFIG_LOG_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
+| `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every cycle |
+| `CONFIG_LOG_CAN_RECOVERY` | on | Log CAN bus recovery attempts |
 
 ## Build
 

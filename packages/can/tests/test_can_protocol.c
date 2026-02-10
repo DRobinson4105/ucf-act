@@ -187,7 +187,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void) {
     node_heartbeat_t hb_in = {
         .sequence = 55,
         .state = NODE_STATE_READY,
-        .fault_code = NODE_FAULT_ESTOP_MUSHROOM,
+        .fault_code = NODE_FAULT_ESTOP_BUTTON,
         .flags = 0,
     };
     
@@ -199,7 +199,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void) {
     
     assert(hb_out.sequence == 55);
     assert(hb_out.state == NODE_STATE_READY);
-    assert(hb_out.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
+    assert(hb_out.fault_code == NODE_FAULT_ESTOP_BUTTON);
 }
 
 static void test_safety_heartbeat_reserved_bytes_zero(void) {
@@ -318,14 +318,18 @@ static void test_node_fault_all_values(void) {
     // Common
     assert(strcmp(node_fault_to_string(NODE_FAULT_NONE), "none") == 0);
     assert(strcmp(node_fault_to_string(NODE_FAULT_GENERAL), "general") == 0);
-    // System / Safety e-stop causes
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_MUSHROOM), "estop_mushroom") == 0);
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_REMOTE), "estop_remote") == 0);
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_ULTRASONIC), "estop_ultrasonic") == 0);
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER), "estop_planner") == 0);
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER_TIMEOUT), "estop_planner_timeout") == 0);
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL), "estop_control") == 0);
-    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL_TIMEOUT), "estop_control_timeout") == 0);
+    // System / Safety e-stop causes (bitmask — single bits)
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_BUTTON), "button") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_REMOTE), "remote") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_ULTRASONIC), "ultrasonic") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER), "planner") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER_TIMEOUT), "planner_timeout") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL), "control") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL_TIMEOUT), "control_timeout") == 0);
+    // Estop bitmask combinations
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_BUTTON | NODE_FAULT_ESTOP_REMOTE), "button+remote") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_BUTTON | NODE_FAULT_ESTOP_REMOTE | NODE_FAULT_ESTOP_ULTRASONIC),
+                 "button+remote+ultrasonic") == 0);
     // Planner faults
     assert(strcmp(node_fault_to_string(NODE_FAULT_PERCEPTION), "perception") == 0);
     assert(strcmp(node_fault_to_string(NODE_FAULT_LOCALIZATION), "localization") == 0);

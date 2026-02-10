@@ -69,7 +69,7 @@ esp_err_t power_relay_disable(const power_relay_config_t *config) {
     int level = config->active_high ? 0 : 1;
     esp_err_t err = gpio_set_level(config->gpio, level);
     if (err == ESP_OK) {
-        if (s_enabled) ESP_LOGI(TAG, "Power relay DISABLED (safe state)");
+        if (s_enabled) ESP_LOGI(TAG, "Power relay DISABLED");
         s_enabled = false;
     }
     return err;

@@ -22,9 +22,7 @@
 #include "override_sensors.hh"
 #include "control_logic.h"
 
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-#include "debug_console.h"
-#endif
+
 
 // Control ESP32 - Autonomous control execution
 //
@@ -51,7 +49,7 @@ static const char *TAG = "CONTROL";
 
 constexpr int CAN_RX_TASK_STACK = 4096;
 constexpr int CONTROL_TASK_STACK = 4096;
-constexpr int HEARTBEAT_TASK_STACK = 2048;
+constexpr int HEARTBEAT_TASK_STACK = 4096;
 constexpr UBaseType_t CAN_RX_TASK_PRIO = 7;
 constexpr UBaseType_t CONTROL_TASK_PRIO = 6;
 constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
@@ -284,10 +282,18 @@ static void track_can_tx(esp_err_t err) {
     can_tx_track_result_t r = control_track_can_tx(&t);
     g_recovery.can_tx_fail_count = r.new_fail_count;
     if (r.trigger_recovery) {
-        ESP_LOGE(TAG, "CAN TX failed %d consecutive times, initiating recovery",
-                 r.new_fail_count);
-        taskEXIT_CRITICAL(&g_can_tx_lock);
-        attempt_can_recovery();
+        bool bus_ok = can_twai_bus_ok();
+        g_recovery.can_tx_fail_count = 0;  // reset regardless
+        if (!bus_ok) {
+            ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
+                     CAN_TX_FAIL_THRESHOLD);
+            taskEXIT_CRITICAL(&g_can_tx_lock);
+            attempt_can_recovery();
+        } else {
+            ESP_LOGW(TAG, "CAN TX failed %d times (bus OK, no partner?)",
+                     CAN_TX_FAIL_THRESHOLD);
+            taskEXIT_CRITICAL(&g_can_tx_lock);
+        }
     } else {
         taskEXIT_CRITICAL(&g_can_tx_lock);
     }
@@ -316,8 +322,16 @@ static void send_control_heartbeat(void) {
     can_encode_heartbeat(hb_data, &hb_msg);
 
     esp_err_t err = can_twai_send(CAN_ID_CONTROL_HEARTBEAT, hb_data, pdMS_TO_TICKS(10));
-    if (err != ESP_OK)
+    if (err != ESP_OK) {
         ESP_LOGW(TAG, "[CAN TX] Heartbeat failed: %s", esp_err_to_name(err));
+    }
+#ifdef CONFIG_LOG_HEARTBEAT_TX
+    else {
+        ESP_LOGI(TAG, "[CAN TX] HB: seq=%u state=%s fault=%s flags=0x%02X",
+                 seq, node_state_to_string(g_control_state),
+                 node_fault_to_string(g_fault_code), g_heartbeat_flags);
+    }
+#endif
     track_can_tx(err);
 }
 
@@ -327,27 +341,42 @@ static void send_control_heartbeat(void) {
 
 // Immediately disable all autonomous actuators.
 static void execute_trigger_override(uint8_t reason) {
+#ifdef CONFIG_LOG_OVERRIDE
     ESP_LOGW(TAG, "OVERRIDE TRIGGERED (reason: 0x%02X)", reason);
+#else
+    (void)reason;
+#endif
 
+#ifndef CONFIG_BYPASS_THROTTLE_MUX
     throttle_mux_disable();
     throttle_mux_emergency_stop();
+#endif
+#ifndef CONFIG_BYPASS_ENABLE_RELAY
     enable_relay_deenergize();
+#endif
+#ifndef CONFIG_BYPASS_STEPPER_MOTORS
     stepper_motor_uim2852_emergency_stop(&g_steering_stepper);
     stepper_motor_uim2852_emergency_stop(&g_braking_stepper);
     stepper_motor_uim2852_disable(&g_steering_stepper);
     stepper_motor_uim2852_disable(&g_braking_stepper);
+#endif
 }
 
 // Start the enable sequence (set mux to 0, energize relay)
 static void execute_start_enable() {
     ESP_LOGI(TAG, "Starting autonomous enable sequence");
+#ifndef CONFIG_BYPASS_THROTTLE_MUX
     throttle_mux_set_level(0);
+#endif
+#ifndef CONFIG_BYPASS_ENABLE_RELAY
     enable_relay_energize();
+#endif
 }
 
 // Complete the enable sequence (enable steppers, switch mux to autonomous)
 static void execute_complete_enable() {
     ESP_LOGI(TAG, "Completing autonomous enable sequence");
+#ifndef CONFIG_BYPASS_STEPPER_MOTORS
     esp_err_t steer_err = stepper_motor_uim2852_enable(&g_steering_stepper);
     if (steer_err != ESP_OK) ESP_LOGW(TAG, "Steering enable failed: %s", esp_err_to_name(steer_err));
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -362,16 +391,23 @@ static void execute_complete_enable() {
         throttle_mux_disable();
         return;
     }
-    
+#endif
+
+#ifndef CONFIG_BYPASS_THROTTLE_MUX
     throttle_mux_enable_autonomous();
+#endif
     ESP_LOGI(TAG, "AUTONOMOUS MODE ACTIVE");
 }
 
 // Abort the enable sequence (de-energize relay, disable mux)
 static void execute_abort_enable() {
     ESP_LOGW(TAG, "Enable sequence aborted");
+#ifndef CONFIG_BYPASS_ENABLE_RELAY
     enable_relay_deenergize();
+#endif
+#ifndef CONFIG_BYPASS_THROTTLE_MUX
     throttle_mux_disable();
+#endif
 }
 
 // Map FR sensor state to control_logic FR constants
@@ -484,6 +520,7 @@ void can_rx_task(void *param) {
 
         TickType_t now = xTaskGetTickCount();
 
+#ifndef CONFIG_BYPASS_STEPPER_MOTORS
         // Handle extended frames from UIM2852CA stepper motors
         if (msg.extd) {
             bool steering_match = stepper_motor_uim2852_process_frame(&g_steering_stepper, &msg);
@@ -509,6 +546,9 @@ void can_rx_task(void *param) {
             }
             continue;
         }
+#else
+        if (msg.extd) continue;
+#endif
 
         // Process Planner command (0x111)
         if (msg.identifier == CAN_ID_PLANNER_COMMAND && msg.data_length_code >= 6) {
@@ -537,8 +577,10 @@ void can_rx_task(void *param) {
             
             heartbeat_mark_activity(now);
 
-            ESP_LOGD(TAG, "[CAN RX] CMD: thr=%d steer=%d brake=%d seq=%u",
+#ifdef CONFIG_LOG_PLANNER_COMMANDS
+            ESP_LOGI(TAG, "[CAN RX] CMD: thr=%d steer=%d brake=%d seq=%u",
                 throttle_level, cmd.steering_position, cmd.braking_position, cmd.sequence);
+#endif
         }
 
         // Process Safety heartbeat (0x100)
@@ -548,21 +590,19 @@ void can_rx_task(void *param) {
 
             uint8_t new_target = hb.state;          // Safety's state = system target
             uint8_t fault_code = hb.fault_code;     // Safety's fault = estop reason
-            uint8_t prev_target;
 
             taskENTER_CRITICAL(&g_cmd_lock);
-            prev_target = g_cmd.target_state;
             g_cmd.target_state = new_target;
             g_cmd.estop_fault_code = fault_code;
             taskEXIT_CRITICAL(&g_cmd_lock);
             
             heartbeat_mark_activity(now);
             
-            if (new_target != prev_target) {
-                ESP_LOGW(TAG, "[CAN RX] Safety HB: target=%s fault:%s",
-                         node_state_to_string(new_target),
-                         node_fault_to_string(fault_code));
-            }
+#ifdef CONFIG_LOG_HEARTBEAT_RX
+            ESP_LOGI(TAG, "[CAN RX] Safety HB: seq=%u target=%s fault=%s",
+                     hb.sequence, node_state_to_string(new_target),
+                     node_fault_to_string(fault_code));
+#endif
         }
     }
 }
@@ -582,9 +622,11 @@ void control_task(void *param) {
     int8_t prev_thr_target = -1;
     int8_t prev_thr_current = -1;
     uint8_t prev_target_state = 0xFF;
+    uint8_t prev_estop_fault = 0xFF;
     int16_t last_steering_sent = INT16_MIN;
     int16_t last_braking_sent = INT16_MIN;
 
+#ifndef CONFIG_BYPASS_STEPPER_MOTORS
     // Initialize UIM2852CA stepper motors
     stepper_motor_uim2852_config_t steer_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
     steer_cfg.node_id = UIM2852_NODE_STEERING;
@@ -629,6 +671,9 @@ void control_task(void *param) {
 
     stepper_motor_uim2852_disable(&g_steering_stepper);
     stepper_motor_uim2852_disable(&g_braking_stepper);
+#else
+    ESP_LOGI(TAG, "Stepper motors BYPASSED (CONFIG_BYPASS_STEPPER_MOTORS)");
+#endif
 
     g_throttle_current = 0;
 
@@ -637,7 +682,9 @@ void control_task(void *param) {
 
     vTaskDelay(pdMS_TO_TICKS(2000));
 
+#ifndef CONFIG_BYPASS_STEPPER_MOTORS
 control_loop:
+#endif
     while (true) {
         uint32_t now_ms = get_time_ms();
 
@@ -652,23 +699,21 @@ control_loop:
         override_sensors_update(now_ms);
         fr_state_t fr_state = override_sensors_get_fr_state();
 
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-        // Debug overrides: replace sensor/CAN values with simulated ones
-        if (g_dbg_control.sim_fr_active)
-            fr_state = (fr_state_t)g_dbg_control.sim_fr_value;
-        if (g_dbg_control.sim_auto_active) {
-            // sim_auto_value: true = ENABLING, false = READY
-            cmd_local.target_state = g_dbg_control.sim_auto_value ?
-                NODE_STATE_ENABLING : NODE_STATE_READY;
-        }
-        if (g_dbg_control.sim_planner_active) {
-            cmd_local.throttle_target = g_dbg_control.sim_planner_throttle;
-            cmd_local.steering_cmd    = g_dbg_control.sim_planner_steering;
-            cmd_local.braking_cmd     = g_dbg_control.sim_planner_braking;
-        }
+        // Apply test bypasses
+#ifdef CONFIG_BYPASS_FR_SENSOR
+        fr_state = FR_STATE_FORWARD;
+#endif
+#ifdef CONFIG_BYPASS_SAFETY_HEARTBEAT
+        cmd_local.target_state = NODE_STATE_ENABLING;
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_COMMANDS
+        cmd_local.throttle_target = 0;
+        cmd_local.steering_cmd = 0;
+        cmd_local.braking_cmd = 0;
 #endif
 
         // Check Planner command freshness - zero throttle if stale
+#ifndef CONFIG_BYPASS_PLANNER_COMMANDS
         TickType_t planner_age = xTaskGetTickCount() - g_last_planner_cmd_tick;
         bool planner_cmd_stale = false;
 
@@ -691,8 +736,16 @@ control_loop:
             cmd_local.throttle_target = 0;
             // Keep last steering/braking (don't jerk)
         }
+#endif
 
         // Build inputs for pure state machine step
+        bool pedal_pressed = override_sensors_pedal_pressed();
+        bool pedal_rearmed = override_sensors_pedal_rearmed();
+#ifdef CONFIG_BYPASS_PEDAL_OVERRIDE
+        pedal_pressed = false;
+        pedal_rearmed = true;
+#endif
+
         control_inputs_t step_in = {
             .target_state = cmd_local.target_state,
             .throttle_target = cmd_local.throttle_target,
@@ -700,8 +753,8 @@ control_loop:
             .braking_cmd = cmd_local.braking_cmd,
             .motor_fault_code = cmd_local.motor_fault_code,
             .fr_state = map_fr_state(fr_state),
-            .pedal_pressed = override_sensors_pedal_pressed(),
-            .pedal_rearmed = override_sensors_pedal_rearmed(),
+            .pedal_pressed = pedal_pressed,
+            .pedal_rearmed = pedal_rearmed,
             .fr_is_invalid = (fr_state == FR_STATE_INVALID),
             .now_ms = now_ms,
             .enable_start_ms = g_enable_start_ms,
@@ -716,6 +769,15 @@ control_loop:
         // Compute next state (pure function — no side effects)
         control_step_result_t step = control_compute_step(g_control_state, g_fault_code, &step_in);
 
+#ifdef CONFIG_LOG_STATE_MACHINE
+        ESP_LOGI(TAG, "[SM] state=%s target=%s fr=%d pedal=%d/%d thr=%d/%d actions=0x%02X -> %s",
+                 node_state_to_string(g_control_state),
+                 node_state_to_string(cmd_local.target_state),
+                 fr_state, pedal_pressed, pedal_rearmed,
+                 g_throttle_current, cmd_local.throttle_target,
+                 step.actions, node_state_to_string(step.new_state));
+#endif
+
         // Execute hardware actions indicated by the step result
         if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) {
             execute_trigger_override(step.override_reason);
@@ -725,17 +787,30 @@ control_loop:
         }
         if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE) {
             execute_complete_enable();
+#if !defined(CONFIG_BYPASS_STEPPER_MOTORS) && !defined(CONFIG_BYPASS_THROTTLE_MUX)
             // If stepper enable failed, execute_complete_enable leaves mux disabled
             if (!throttle_mux_is_autonomous()) {
                 step.new_state = NODE_STATE_FAULT;
                 step.new_fault_code = NODE_FAULT_MOTOR_COMM;
             }
+#endif
         }
         if (step.actions & CONTROL_ACTION_ABORT_ENABLE) {
             execute_abort_enable();
         }
         if (step.actions & CONTROL_ACTION_APPLY_THROTTLE) {
+#ifndef CONFIG_BYPASS_THROTTLE_MUX
             throttle_mux_set_level(step.throttle_level);
+#endif
+#ifdef CONFIG_LOG_THROTTLE
+            {
+                static int8_t prev_level = -1;
+                if (step.throttle_level != prev_level) {
+                    ESP_LOGI(TAG, "Throttle level: %d -> %d", prev_level, step.throttle_level);
+                    prev_level = step.throttle_level;
+                }
+            }
+#endif
         }
         if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY) {
             if (attempt_fault_recovery()) {
@@ -747,12 +822,18 @@ control_loop:
         }
 
         // Send stepper commands when position changed
+#ifndef CONFIG_BYPASS_STEPPER_MOTORS
         if (step.send_steering) {
             esp_err_t err = stepper_motor_uim2852_go_absolute(&g_steering_stepper, step.steering_position);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "[CAN TX] Steering cmd failed: %s", esp_err_to_name(err));
                 step.new_last_steering = last_steering_sent;  // keep old value on failure
             }
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
+            else {
+                ESP_LOGI(TAG, "[CAN TX] Steering -> %d", step.steering_position);
+            }
+#endif
             track_can_tx(err);
         }
         if (step.send_braking) {
@@ -761,8 +842,14 @@ control_loop:
                 ESP_LOGW(TAG, "[CAN TX] Braking cmd failed: %s", esp_err_to_name(err));
                 step.new_last_braking = last_braking_sent;  // keep old value on failure
             }
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
+            else {
+                ESP_LOGI(TAG, "[CAN TX] Braking -> %d", step.braking_position);
+            }
+#endif
             track_can_tx(err);
         }
+#endif
 
         // Detect fault entry (before overwriting g_fault_code)
         if (step.new_fault_code != NODE_FAULT_NONE && step.new_fault_code != g_fault_code) {
@@ -792,7 +879,8 @@ control_loop:
         // Log on state change
         if (g_control_state != prev_state || fr_state != prev_fr ||
             cmd_local.throttle_target != prev_thr_target || g_throttle_current != prev_thr_current ||
-            cmd_local.target_state != prev_target_state) {
+            cmd_local.target_state != prev_target_state ||
+            cmd_local.estop_fault_code != prev_estop_fault) {
             ESP_LOGI(TAG, "State: %s | FR=%d Pedal=%umV Thr=%d/%d Target:%s (fault:%s)",
                 node_state_to_string(g_control_state), 
                 fr_state, override_sensors_get_pedal_mv(),
@@ -804,16 +892,8 @@ control_loop:
             prev_thr_target = cmd_local.throttle_target;
             prev_thr_current = g_throttle_current;
             prev_target_state = cmd_local.target_state;
+            prev_estop_fault = cmd_local.estop_fault_code;
         }
-
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-        // Update debug status for console 'status' command
-        g_dbg_control.control_state = g_control_state;
-        g_dbg_control.fault_code    = g_fault_code;
-        g_dbg_control.target_enabling = (cmd_local.target_state >= NODE_STATE_ENABLING);
-        g_dbg_control.fr_sensor     = (uint8_t)fr_state;
-        g_dbg_control.pedal_pressed = override_sensors_pedal_pressed();
-#endif
 
         vTaskDelay(CONTROL_LOOP_INTERVAL);
     }
@@ -935,14 +1015,33 @@ void main_task(void *param) {
     if (err != ESP_OK)
         ESP_LOGW(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
 
+    // Log active bypasses
+#ifdef CONFIG_BYPASS_SAFETY_HEARTBEAT
+    ESP_LOGW(TAG, "BYPASS: Safety heartbeat DISABLED (forcing ENABLING)");
+#endif
+#ifdef CONFIG_BYPASS_FR_SENSOR
+    ESP_LOGW(TAG, "BYPASS: F/R sensor DISABLED (forcing Forward)");
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_COMMANDS
+    ESP_LOGW(TAG, "BYPASS: Planner commands DISABLED (zero throttle)");
+#endif
+#ifdef CONFIG_BYPASS_STEPPER_MOTORS
+    ESP_LOGW(TAG, "BYPASS: Stepper motors DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_PEDAL_OVERRIDE
+    ESP_LOGW(TAG, "BYPASS: Pedal override detection DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_ENABLE_RELAY
+    ESP_LOGW(TAG, "BYPASS: Enable relay DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_THROTTLE_MUX
+    ESP_LOGW(TAG, "BYPASS: Throttle mux DISABLED");
+#endif
+
     ESP_LOGI(TAG, "Initial F/R state: %d", override_sensors_get_fr_state());
     ESP_LOGI(TAG, "Initial pedal: %u mV (%s)", 
         override_sensors_get_pedal_mv(),
         override_sensors_pedal_pressed() ? "PRESSED" : "released");
-
-#ifdef CONFIG_ENABLE_DEBUG_CONSOLE
-    debug_console_init_control();
-#endif
 
     ESP_LOGI(TAG, "Starting control tasks");
 

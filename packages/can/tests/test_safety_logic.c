@@ -86,8 +86,8 @@ static void test_all_clear(void) {
     assert(d.relay_enable == true);
 }
 
-// 6. All faults active + push_button -> MUSHROOM (highest priority wins)
-static void test_push_button_highest_priority(void) {
+// 6. All faults active -> all bits set in fault_code (bitmask, not priority)
+static void test_all_faults_bitmask(void) {
     safety_inputs_t in = {
         .push_button_active = true,
         .rf_remote_active = true,
@@ -100,40 +100,47 @@ static void test_push_button_highest_priority(void) {
     };
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
+    // All 7 bits should be set
+    assert(d.fault_code & NODE_FAULT_ESTOP_BUTTON);
+    assert(d.fault_code & NODE_FAULT_ESTOP_REMOTE);
+    assert(d.fault_code & NODE_FAULT_ESTOP_ULTRASONIC);
+    assert(d.fault_code & NODE_FAULT_ESTOP_PLANNER);
+    assert(d.fault_code & NODE_FAULT_ESTOP_PLANNER_TIMEOUT);
+    assert(d.fault_code & NODE_FAULT_ESTOP_CONTROL);
+    assert(d.fault_code & NODE_FAULT_ESTOP_CONTROL_TIMEOUT);
 }
 
-// 7. rf_remote + ultrasonic + planner_error -> REMOTE
-static void test_rf_remote_priority(void) {
+// 7. rf_remote + ultrasonic + planner_error -> all three bits set
+static void test_multiple_faults_combined(void) {
     safety_inputs_t in = safe_inputs();
     in.rf_remote_active = true;
     in.ultrasonic_too_close = true;
     in.planner_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.fault_code == NODE_FAULT_ESTOP_REMOTE);
+    assert(d.fault_code == (NODE_FAULT_ESTOP_REMOTE | NODE_FAULT_ESTOP_ULTRASONIC | NODE_FAULT_ESTOP_PLANNER));
 }
 
-// 8. ultrasonic triggered (too_close + healthy) + planner_error -> ULTRASONIC
-static void test_ultrasonic_priority(void) {
+// 8. ultrasonic triggered (too_close + healthy) + planner_error -> both bits set
+static void test_ultrasonic_and_planner(void) {
     safety_inputs_t in = safe_inputs();
     in.ultrasonic_too_close = true;
     in.ultrasonic_healthy = true;
     in.planner_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.fault_code == NODE_FAULT_ESTOP_ULTRASONIC);
+    assert(d.fault_code == (NODE_FAULT_ESTOP_ULTRASONIC | NODE_FAULT_ESTOP_PLANNER));
 }
 
-// 9. planner_error + planner_timeout + control_timeout -> ESTOP_PLANNER
-static void test_planner_error_priority(void) {
+// 9. planner_error + planner_timeout + control_timeout -> three bits set
+static void test_planner_and_control_faults(void) {
     safety_inputs_t in = safe_inputs();
     in.planner_error = true;
     in.planner_alive = false;     // planner_timeout
     in.control_alive = false;     // control_timeout
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.fault_code == NODE_FAULT_ESTOP_PLANNER);
+    assert(d.fault_code == (NODE_FAULT_ESTOP_PLANNER | NODE_FAULT_ESTOP_PLANNER_TIMEOUT | NODE_FAULT_ESTOP_CONTROL_TIMEOUT));
 }
 
 // 10. planner_alive=false only -> ESTOP_PLANNER_TIMEOUT
@@ -230,8 +237,8 @@ static void test_evaluate_null_input(void) {
 // Combined scenario tests (3)
 // ============================================================================
 
-// 19. push_button + rf + ultrasonic + planner_error -> MUSHROOM (highest wins)
-static void test_multiple_faults_highest_wins(void) {
+// 19. push_button + rf + ultrasonic + planner_error -> all four bits set
+static void test_multiple_faults_all_bits(void) {
     safety_inputs_t in = safe_inputs();
     in.push_button_active = true;
     in.rf_remote_active = true;
@@ -239,7 +246,8 @@ static void test_multiple_faults_highest_wins(void) {
     in.planner_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
+    assert(d.fault_code == (NODE_FAULT_ESTOP_BUTTON | NODE_FAULT_ESTOP_REMOTE |
+                            NODE_FAULT_ESTOP_ULTRASONIC | NODE_FAULT_ESTOP_PLANNER));
     assert(d.relay_enable == false);
 }
 
@@ -250,7 +258,7 @@ static void test_transition_estop_on_then_off(void) {
     in1.push_button_active = true;
     safety_decision_t d1 = safety_evaluate(&in1);
     assert(d1.estop_active == true);
-    assert(d1.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
+    assert(d1.fault_code == NODE_FAULT_ESTOP_BUTTON);
     assert(d1.relay_enable == false);
 
     // Second: all clear
@@ -285,13 +293,13 @@ int main(void) {
     TEST(test_ultrasonic_unhealthy);
     TEST(test_ultrasonic_both_bad);
 
-    // E-stop priority chain (8)
-    printf("\n--- E-stop priority chain ---\n");
+    // E-stop bitmask (8)
+    printf("\n--- E-stop bitmask ---\n");
     TEST(test_all_clear);
-    TEST(test_push_button_highest_priority);
-    TEST(test_rf_remote_priority);
-    TEST(test_ultrasonic_priority);
-    TEST(test_planner_error_priority);
+    TEST(test_all_faults_bitmask);
+    TEST(test_multiple_faults_combined);
+    TEST(test_ultrasonic_and_planner);
+    TEST(test_planner_and_control_faults);
     TEST(test_planner_timeout);
     TEST(test_control_error);
     TEST(test_control_timeout_lowest);
@@ -313,7 +321,7 @@ int main(void) {
 
     // Combined scenarios (3)
     printf("\n--- Combined scenarios ---\n");
-    TEST(test_multiple_faults_highest_wins);
+    TEST(test_multiple_faults_all_bits);
     TEST(test_transition_estop_on_then_off);
     TEST(test_ultrasonic_fault_alone_blocks);
 

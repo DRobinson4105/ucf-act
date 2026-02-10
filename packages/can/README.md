@@ -17,7 +17,6 @@ Three nodes share a unified heartbeat format, state enum, and fault code namespa
 | Frame layouts, state codes, fault codes, flags | [common/can_protocol/README.md](common/can_protocol/README.md) |
 | Control ESP32 messages, pins, components | [control-esp32/README.md](control-esp32/README.md) |
 | Safety ESP32 system state authority, e-stop logic, pins | [safety-esp32/README.md](safety-esp32/README.md) |
-| Debug console for bench testing | [common/debug_console/README.md](common/debug_console/README.md) |
 | Host-native unit tests | [tests/README.md](tests/README.md) |
 
 ## Testing

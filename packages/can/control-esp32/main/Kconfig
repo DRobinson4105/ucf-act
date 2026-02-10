@@ -1,0 +1,129 @@
+menu "Test Bypasses"
+
+    config BYPASS_SAFETY_HEARTBEAT
+        bool "Bypass Safety heartbeat (simulate ENABLING)"
+        default n
+        help
+            Ignore the Safety ESP32 heartbeat and force the system
+            target state to ENABLING. Use when testing Control
+            without a Safety ESP32 on the CAN bus.
+
+    config BYPASS_FR_SENSOR
+        bool "Bypass F/R sensor (force Forward)"
+        default n
+        help
+            Force the F/R gear selector reading to FORWARD regardless
+            of the actual hardware state. Use when the F/R switch is
+            not connected during bench testing.
+
+    config BYPASS_PLANNER_COMMANDS
+        bool "Bypass Planner commands (zero throttle)"
+        default n
+        help
+            Suppress Planner command timeout and staleness detection.
+            Uses zero throttle, steering, and braking. Prevents stale
+            command errors when testing without a Planner on the bus.
+
+    config BYPASS_STEPPER_MOTORS
+        bool "Bypass stepper motors (skip init/commands)"
+        default n
+        help
+            Skip UIM2852CA stepper motor initialization, configuration,
+            and all motor CAN commands. Prevents FAULT state and CAN TX
+            timeouts when motors are not connected during bench testing.
+
+    config BYPASS_PEDAL_OVERRIDE
+        bool "Bypass pedal override detection"
+        default n
+        help
+            Ignore the accelerator pedal ADC reading for override
+            detection. Pedal will always read as not pressed and
+            always re-armed. Use when the pedal voltage divider is
+            not connected or floating during bench testing.
+
+    config BYPASS_ENABLE_RELAY
+        bool "Bypass enable relay (skip energize/de-energize)"
+        default n
+        help
+            Skip enable relay (IRLZ44N MOSFET for JD-2912) control.
+            The relay will not be energized during enable sequence or
+            de-energized during override. Use when the relay circuit
+            is not connected during bench testing.
+
+    config BYPASS_THROTTLE_MUX
+        bool "Bypass throttle mux (skip DG408 control)"
+        default n
+        help
+            Skip DG408 analog multiplexer and throttle relay control.
+            No throttle level changes will be applied. Use when the
+            throttle mux circuit is not connected during bench testing.
+
+endmenu
+
+menu "Debug Logging"
+
+    config LOG_HEARTBEAT_TX
+        bool "Log periodic heartbeat TX"
+        default n
+        help
+            Log every periodic heartbeat transmission (100ms interval).
+            Very verbose. Useful for confirming CAN TX is working.
+            State-change heartbeats are always logged regardless.
+
+    config LOG_HEARTBEAT_RX
+        bool "Log every Safety heartbeat RX"
+        default n
+        help
+            Log every received Safety heartbeat, not just state/fault
+            changes. Very verbose. Useful for confirming CAN RX is
+            working and checking sequence numbers.
+
+    config LOG_PLANNER_COMMANDS
+        bool "Log every Planner command RX"
+        default n
+        help
+            Log every received Planner command with throttle, steering,
+            and braking values. Very verbose. Useful for confirming
+            Planner communication is working.
+
+    config LOG_STATE_MACHINE
+        bool "Log state machine evaluation each cycle"
+        default n
+        help
+            Log the control state machine inputs and result every
+            control loop iteration (20ms). Extremely verbose. Useful
+            for debugging state transition issues.
+
+    config LOG_THROTTLE
+        bool "Log throttle level changes"
+        default y
+        help
+            Log when the throttle level changes (slew rate limited).
+            Enabled by default since throttle changes are infrequent
+            and useful for diagnostics.
+
+    config LOG_STEPPER_COMMANDS
+        bool "Log stepper motor position commands"
+        default n
+        help
+            Log every steering and braking stepper motor position
+            command sent over CAN. Verbose when active. Useful for
+            confirming motor communication.
+
+    config LOG_OVERRIDE
+        bool "Log override trigger and clear events"
+        default y
+        help
+            Log when driver override is triggered (pedal press, F/R
+            change) and when it clears. Enabled by default since
+            override events are safety-critical.
+
+    config LOG_CAN_RECOVERY
+        bool "Log CAN recovery attempts"
+        default y
+        help
+            Log CAN bus health checks and recovery attempts.
+            Enabled by default since recovery events are rare
+            and important for diagnostics.
+
+endmenu

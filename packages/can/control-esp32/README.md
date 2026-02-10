@@ -112,7 +112,6 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | `heartbeat_monitor` | CAN node liveness tracking (shared) |
 | `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared) |
 | `control_logic` | Extracted state machine decision logic (shared, tested) |
-| `debug_console` | Interactive UART REPL for bench testing (Kconfig-gated, off by default) |
 
 ## Throttle Control
 
@@ -128,13 +127,34 @@ Enable sequence (READY -> ACTIVE):
 4. Energize throttle relay (GPIO9) - switches to mux output
 5. Enable steering and braking motors
 
-## Debug Console
+## Test Bypasses
 
-An optional interactive UART console for bench testing without the full system connected. Disabled by default. See [common/debug_console/README.md](../common/debug_console/README.md) for details.
+Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under "Test Bypasses", or add to `sdkconfig.defaults`:
 
-Commands: `sim fr forward|neutral|reverse|off`, `sim auto 0|1|off`, `sim planner <thr> <steer> <brake>`, `sim planner stop`, `sim off`, `status`
+| Flag | Effect |
+|------|--------|
+| `CONFIG_BYPASS_SAFETY_HEARTBEAT` | Force target_state to ENABLING (skip Safety heartbeat) |
+| `CONFIG_BYPASS_FR_SENSOR` | Force F/R state to Forward (skip optocoupler reading) |
+| `CONFIG_BYPASS_PLANNER_COMMANDS` | Zero throttle/steering/braking, suppress stale detection |
+| `CONFIG_BYPASS_STEPPER_MOTORS` | Skip stepper motor init/configure/commands (no UIM2852CA needed) |
+| `CONFIG_BYPASS_PEDAL_OVERRIDE` | Ignore pedal ADC (always not pressed, always re-armed) |
+| `CONFIG_BYPASS_ENABLE_RELAY` | Skip enable relay energize/de-energize |
+| `CONFIG_BYPASS_THROTTLE_MUX` | Skip DG408 mux and throttle relay control |
 
-Enable with `CONFIG_ENABLE_DEBUG_CONSOLE=y` in sdkconfig.defaults.
+## Debug Logging
+
+Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under "Debug Logging":
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
+| `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received Safety heartbeat, not just changes |
+| `CONFIG_LOG_PLANNER_COMMANDS` | off | Log every Planner command RX (very verbose) |
+| `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every 20ms cycle |
+| `CONFIG_LOG_THROTTLE` | on | Log throttle level changes |
+| `CONFIG_LOG_STEPPER_COMMANDS` | off | Log stepper motor position commands |
+| `CONFIG_LOG_OVERRIDE` | on | Log override trigger and clear events |
+| `CONFIG_LOG_CAN_RECOVERY` | on | Log CAN bus recovery attempts |
 
 ## Build
 
