@@ -90,6 +90,20 @@ static uint16_t read_pedal_adc_mv() {
 esp_err_t override_sensors_init(const override_sensors_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
+    // Clean up prior handles if re-initializing (e.g., during fault recovery)
+    if (s_initialized) {
+        if (s_cali_handle) {
+            adc_cali_delete_scheme_curve_fitting(s_cali_handle);
+            s_cali_handle = nullptr;
+            s_cali_enabled = false;
+        }
+        if (s_adc_handle) {
+            adc_oneshot_del_unit(s_adc_handle);
+            s_adc_handle = nullptr;
+        }
+        s_initialized = false;
+    }
+
     s_config = *config;
 
     // Initialize ADC for pedal voltage sensing
@@ -228,7 +242,7 @@ void override_sensors_update(uint32_t now_ms) {
         s_pedal_was_above = true;
         s_pedal_below_threshold_since = 0;
     } else {
-        if (s_pedal_was_above)
+        if (s_pedal_was_above && s_pedal_below_threshold_since == 0)
             // Just transitioned from pressed to released - start timer
             s_pedal_below_threshold_since = now_ms;
 
@@ -274,17 +288,4 @@ void override_sensors_update(uint32_t now_ms) {
 
 // ============================================================================
 // Status Flags
-// ============================================================================
 
-// Get raw sensor flags for CAN status message
-uint8_t override_sensors_get_flags(void) {
-    if (!s_initialized) return 0;
-
-    uint8_t flags = 0;
-
-    if (override_sensors_pedal_pressed()) flags |= SENSOR_FLAG_PEDAL_PRESSED;
-    if (gpio_get_level(s_config.fr_dir_gpio) == 0) flags |= SENSOR_FLAG_FR_FORWARD;
-    if (gpio_get_level(s_config.fr_rev_gpio) == 0) flags |= SENSOR_FLAG_FR_REVERSE;
-
-    return flags;
-}

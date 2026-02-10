@@ -28,6 +28,6 @@ esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
 
 // Returns true when remote e-stop button is pressed
 bool rf_remote_ev1527_is_active(const rf_remote_ev1527_config_t *config) {
-    if (!config) return false;
+    if (!config) return true;  // fail-safe: treat as active (e-stop triggered)
     return gpio_get_level(config->gpio) == config->active_level;
 }

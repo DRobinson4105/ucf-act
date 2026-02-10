@@ -273,13 +273,14 @@ static void test_go_absolute_bg_failure(void) {
     stepper_motor_uim2852_t motor;
     init_default_motor(&motor);
 
-    // Both sends succeed — verify full success path
+    // Fail on the 2nd call to can_twai_send_extended (the BG send)
+    g_mock_send_ext_fail_after = 2;
     esp_err_t err = stepper_motor_uim2852_go_absolute(&motor, 6400);
-    assert(err == ESP_OK);
-    assert(mock_sent_count == 2);
+    assert(err == ESP_FAIL);
+    assert(mock_sent_count == 1);  // only PA succeeded
     assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PA);
-    assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_BG);
-    assert(motor.motion_in_progress == true);
+    assert(motor.motion_in_progress == false);
+    g_mock_send_ext_fail_after = 0;
 }
 
 // ============================================================================
@@ -1030,6 +1031,32 @@ static void test_configure_uninitialized(void) {
     assert(err == ESP_ERR_INVALID_STATE);
 }
 
+// Helper: simulate process_frame setting query_result during the blocking semaphore wait
+static stepper_motor_uim2852_t *s_configure_motor_ptr = NULL;
+static void configure_sem_callback(int take_count) {
+    // take_count 1 = drain call, take_count 2 = blocking wait for query response
+    if (take_count == 2 && s_configure_motor_ptr) {
+        s_configure_motor_ptr->query_result = 32;
+    }
+}
+
+static void test_configure_success_updates_microstep(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    mock_sem_take_result = pdTRUE;
+    // Use callback to simulate process_frame setting query_result during sem wait
+    s_configure_motor_ptr = &motor;
+    g_mock_sem_take_callback = configure_sem_callback;
+    
+    esp_err_t err = stepper_motor_uim2852_configure(&motor);
+    assert(err == ESP_OK);
+    assert(motor.microstep_resolution == 32);
+    assert(motor.pulses_per_rev == 6400);  // 32 * 200
+    
+    g_mock_sem_take_callback = NULL;
+    s_configure_motor_ptr = NULL;
+}
+
 // ============================================================================
 // notify callback tests
 // ============================================================================
@@ -1174,6 +1201,7 @@ int main(void) {
     printf("\n  --- configure ---\n");
     TEST(test_configure_timeout_uses_defaults);
     TEST(test_configure_uninitialized);
+    TEST(test_configure_success_updates_microstep);
 
     // notify callback
     printf("\n  --- notify callback ---\n");

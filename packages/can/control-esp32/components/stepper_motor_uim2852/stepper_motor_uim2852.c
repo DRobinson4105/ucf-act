@@ -71,6 +71,7 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
         return ESP_ERR_NO_MEM;
     }
     motor->query_pending_cw = 0;
+    portMUX_INITIALIZE(&motor->lock);
     
     ESP_LOGI(TAG, "Motor initialized: node_id=%u, producer_id=%u", 
         motor->config.node_id, motor->config.producer_id);
@@ -155,13 +156,17 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor) {
 }
 
 esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
-    // First set high stop deceleration, then stop
+    // First set very high SD rate for emergency (10x configured stop rate)
     uint8_t data[8];
     uint8_t dl;
     
-    // Set very high SD rate for emergency
-    dl = stepper_uim2852_build_sd(data, motor->config.stop_decel);
-    send_instruction(motor, STEPPER_UIM2852_CW_SD, data, dl);
+    uint32_t emergency_decel = motor->config.stop_decel * 10;
+    if (emergency_decel < motor->config.stop_decel) emergency_decel = UINT32_MAX; // overflow guard
+    dl = stepper_uim2852_build_sd(data, emergency_decel);
+    esp_err_t sd_err = send_instruction(motor, STEPPER_UIM2852_CW_SD, data, dl);
+    if (sd_err != ESP_OK) {
+        ESP_LOGW(TAG, "Node %u: Emergency SD failed: %s", motor->config.node_id, esp_err_to_name(sd_err));
+    }
     
     // Issue stop command
     dl = stepper_uim2852_build_st(data);
@@ -310,12 +315,14 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
             if (dl >= 1) {
                 uint8_t index = data[0];
                 if (index == STEPPER_UIM2852_MS_FLAGS_RELPOS) {
+                    taskENTER_CRITICAL(&motor->lock);
                     stepper_uim2852_parse_ms0(data, dl, &motor->status);
                     
                     // Update motion state from flags
                     motor->driver_enabled = motor->status.driver_on;
                     if (motor->status.in_position || motor->status.stopped)
                         motor->motion_in_progress = false;
+                    taskEXIT_CRITICAL(&motor->lock);
                     
                     ESP_LOGD(TAG, "Node %u: MS[0] drv=%d stop=%d inpos=%d stall=%d",
                         motor->config.node_id,
@@ -324,8 +331,10 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                         motor->status.in_position,
                         motor->status.stall_detected);
                 } else if (index == STEPPER_UIM2852_MS_SPEED_ABSPOS) {
+                    taskENTER_CRITICAL(&motor->lock);
                     stepper_uim2852_parse_ms1(data, dl, &motor->current_speed, 
                         &motor->absolute_position);
+                    taskEXIT_CRITICAL(&motor->lock);
                     
                     ESP_LOGD(TAG, "Node %u: MS[1] speed=%ld pos=%ld",
                         motor->config.node_id,
@@ -344,14 +353,18 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                 if (stepper_uim2852_parse_notification(data, dl, &notif)) {
                     // Handle specific notifications
                     if (notif.type == STEPPER_UIM2852_STATUS_PTP_COMPLETE) {
+                        taskENTER_CRITICAL(&motor->lock);
                         motor->motion_in_progress = false;
                         motor->status.in_position = true;
                         motor->absolute_position = notif.position;
+                        taskEXIT_CRITICAL(&motor->lock);
                         ESP_LOGI(TAG, "Node %u: PTP complete at pos=%ld",
                             motor->config.node_id, (long)notif.position);
                     } else if (notif.type == STEPPER_UIM2852_ALARM_STALL) {
+                        taskENTER_CRITICAL(&motor->lock);
                         motor->status.stall_detected = true;
                         motor->motion_in_progress = false;
+                        taskEXIT_CRITICAL(&motor->lock);
                         ESP_LOGW(TAG, "Node %u: STALL DETECTED!", motor->config.node_id);
                     } else if (notif.is_alarm)
                         ESP_LOGW(TAG, "Node %u: Alarm 0x%02X", 
@@ -368,7 +381,9 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
             {
                 stepper_uim2852_error_t error = {0};
                 if (stepper_uim2852_parse_error(data, dl, &error)) {
+                    taskENTER_CRITICAL(&motor->lock);
                     motor->status.error_detected = true;
+                    taskEXIT_CRITICAL(&motor->lock);
                     ESP_LOGE(TAG, "Node %u: Error 0x%02X on CW=0x%02X[%u]",
                         motor->config.node_id,
                         error.error_code,
@@ -388,16 +403,23 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
         case STEPPER_UIM2852_CW_LM:
         case STEPPER_UIM2852_CW_QE:
             // Parameter response — unblock query_param if this matches the pending query
-            if (motor->query_pending_cw == cw_base && dl >= 2 && data[0] == motor->query_pending_idx) {
-                // Parse little-endian value from data[1..dl-1] (up to 4 bytes)
-                int32_t val = 0;
-                for (uint8_t i = 1; i < dl && i <= 4; i++)
-                    val |= ((int32_t)data[i]) << (8 * (i - 1));
-                motor->query_result = val;
-                motor->query_pending_cw = 0;
-                xSemaphoreGive(motor->query_sem);
-                ESP_LOGD(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
-                    motor->config.node_id, cw_base, data[0], (long)val);
+            {
+                taskENTER_CRITICAL(&motor->lock);
+                bool match = (motor->query_pending_cw == cw_base && dl >= 2 && data[0] == motor->query_pending_idx);
+                taskEXIT_CRITICAL(&motor->lock);
+                if (match) {
+                    // Delegate to protocol layer for correct sign-extended parsing
+                    uint8_t parsed_idx;
+                    int32_t val = 0;
+                    stepper_uim2852_parse_param_response(data, dl, &parsed_idx, &val);
+                    motor->query_result = val;
+                    taskENTER_CRITICAL(&motor->lock);
+                    motor->query_pending_cw = 0;
+                    taskEXIT_CRITICAL(&motor->lock);
+                    xSemaphoreGive(motor->query_sem);
+                    ESP_LOGD(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
+                        motor->config.node_id, cw_base, data[0], (long)val);
+                }
             }
             break;
             
@@ -417,7 +439,7 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor, 
                                                 stepper_motor_uim2852_notify_cb_t callback) {
     if (!motor) return;
-    motor->notify_callback = (void (*)(void *, const stepper_uim2852_notification_t *))callback;
+    motor->notify_callback = callback;
 }
 
 // ============================================================================
@@ -438,21 +460,27 @@ esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint
     
     // Record what we are waiting for so process_frame can match the response
     motor->query_result = 0;
+    taskENTER_CRITICAL(&motor->lock);
     motor->query_pending_idx = index;
     motor->query_pending_cw  = stepper_uim2852_cw_base(cw); // store base CW for matching
+    taskEXIT_CRITICAL(&motor->lock);
     
     uint8_t data[8] = {0};
     data[0] = index;
     
     esp_err_t err = send_instruction(motor, cw, data, 1);
     if (err != ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->query_pending_cw = 0;
+        taskEXIT_CRITICAL(&motor->lock);
         return err;
     }
     
     // Block until process_frame signals the semaphore or we time out (500 ms)
     if (xSemaphoreTake(motor->query_sem, pdMS_TO_TICKS(500)) != pdTRUE) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->query_pending_cw = 0;
+        taskEXIT_CRITICAL(&motor->lock);
         ESP_LOGW(TAG, "Node %u: query_param CW=0x%02X[%u] timed out",
             motor->config.node_id, cw, index);
         return ESP_ERR_TIMEOUT;

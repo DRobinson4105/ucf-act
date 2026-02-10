@@ -19,9 +19,9 @@ static const char *TAG = "HB_LED";
 static bool s_initialized = false;
 static bool s_led_on = false;
 static TickType_t s_last_toggle = 0;
-static TickType_t s_last_activity = 0;
+static volatile TickType_t s_last_activity = 0;
 static TickType_t s_activity_window = 0;
-static bool s_error = false;
+static volatile bool s_error = false;
 
 // Color configuration
 static uint8_t s_idle_red = 0, s_idle_green = 0, s_idle_blue = 0;
@@ -66,9 +66,21 @@ static esp_err_t ws2812_init(gpio_num_t gpio) {
 
     rmt_copy_encoder_config_t encoder_cfg = {};
     err = rmt_new_copy_encoder(&encoder_cfg, &s_rmt_encoder);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        rmt_del_channel(s_rmt_channel);
+        s_rmt_channel = nullptr;
+        return err;
+    }
 
-    return rmt_enable(s_rmt_channel);
+    err = rmt_enable(s_rmt_channel);
+    if (err != ESP_OK) {
+        rmt_del_encoder(s_rmt_encoder);
+        s_rmt_encoder = nullptr;
+        rmt_del_channel(s_rmt_channel);
+        s_rmt_channel = nullptr;
+        return err;
+    }
+    return ESP_OK;
 }
 
 // Transmit 24-bit color to WS2812 LED (GRB byte order)
@@ -104,6 +116,11 @@ static esp_err_t ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue) {
 
 esp_err_t heartbeat_init(const heartbeat_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
+
+    if (s_initialized) {
+        ESP_LOGW(TAG, "Already initialized, skipping re-init");
+        return ESP_OK;
+    }
 
     // Store color configuration
     s_idle_red = config->idle_red;
@@ -150,10 +167,11 @@ void heartbeat_tick(const heartbeat_config_t *config, TickType_t now_ticks) {
     if (s_led_on) {
         // Color priority: error (red) > activity (blue) > idle (green)
         if (s_error) ws2812_set_rgb(s_error_red, s_error_green, s_error_blue);
-         else if (activity) ws2812_set_rgb(s_activity_red, s_activity_green, s_activity_blue);
-    	else  ws2812_set_rgb(s_idle_red, s_idle_green, s_idle_blue);
-    } else  ws2812_set_rgb(0, 0, 0);
-    
+        else if (activity) ws2812_set_rgb(s_activity_red, s_activity_green, s_activity_blue);
+        else ws2812_set_rgb(s_idle_red, s_idle_green, s_idle_blue);
+    } else {
+        ws2812_set_rgb(0, 0, 0);
+    }
 
     s_last_toggle = now_ticks;
 }

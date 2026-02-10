@@ -1,14 +1,23 @@
 # CAN Bus
 
-CAN bus communication system for the autonomous golf cart, consisting of two ESP32-C6 microcontrollers and a Jetson AGX Orin.
+CAN bus communication system for the autonomous golf cart, consisting of two ESP32-C6 microcontrollers and a Jetson AGX Orin (Planner).
+
+Three nodes share a unified heartbeat format, state enum, and fault code namespace over 1 Mbps CAN:
+
+| Node | Role | Heartbeat ID |
+|------|------|-------------|
+| **Safety ESP32** | System state authority, e-stop monitoring, power relay | 0x100 |
+| **Planner** (Jetson AGX Orin) | Path planning, sends throttle/steering/braking commands | 0x110 |
+| **Control ESP32** | Executes actuator commands (throttle mux, stepper motors) | 0x120 |
 
 ## Documentation
 
 | Topic | Location |
 |-------|----------|
-| Frame layouts, state codes, flags | [common/can_protocol/README.md](common/can_protocol/README.md) |
+| Frame layouts, state codes, fault codes, flags | [common/can_protocol/README.md](common/can_protocol/README.md) |
 | Control ESP32 messages, pins, components | [control-esp32/README.md](control-esp32/README.md) |
-| Safety ESP32 messages, autonomy allowed reasons, pins, components | [safety-esp32/README.md](safety-esp32/README.md) |
+| Safety ESP32 system state authority, e-stop logic, pins | [safety-esp32/README.md](safety-esp32/README.md) |
+| Debug console for bench testing | [common/debug_console/README.md](common/debug_console/README.md) |
 | Host-native unit tests | [tests/README.md](tests/README.md) |
 
 ## Testing
@@ -23,7 +32,7 @@ See [tests/README.md](tests/README.md) for details.
 
 ## Building
 
-Requires ESP-IDF v5.5. Use the devcontainer for a pre-configured environment. First, choose what device to build:
+Requires ESP-IDF v5.5.2. Use the devcontainer for a pre-configured environment. First, choose what device to build:
 
 ```bash
 cd control-esp32
@@ -47,7 +56,7 @@ The serial port varies by OS and connection order. Find your ports first:
 |----|---------|--------------|
 | **Linux** | `ls /dev/ttyACM*` or `ls /dev/ttyUSB*` | `/dev/ttyACM0`, `/dev/ttyACM1` |
 | **macOS** | `ls /dev/cu.usb*` | `/dev/cu.usbmodem*`, `/dev/cu.usbserial*` |
-| **Windows** | Device Manager → Ports | `COM3`, `COM4`, etc. |
+| **Windows** | Device Manager -> Ports | `COM3`, `COM4`, etc. |
 | **WSL** | `ls /dev/ttyACM*` (with usbipd) | `/dev/ttyACM0`, `/dev/ttyACM1` |
 
 ### Flash Commands

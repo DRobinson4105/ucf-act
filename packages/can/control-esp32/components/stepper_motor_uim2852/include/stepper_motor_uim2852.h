@@ -27,7 +27,7 @@ extern "C" {
 
 typedef struct {
     uint8_t node_id;            // Motor's CAN node ID (default 5)
-    uint8_t producer_id;        // Host controller ID (default 4)
+    uint8_t producer_id;        // Host controller ID (for logging only, not used in CAN ID)
     int32_t default_speed;      // Default PTP speed in pulses/sec
     uint32_t default_accel;     // Default acceleration in pulses/sec^2
     uint32_t default_decel;     // Default deceleration in pulses/sec^2
@@ -50,7 +50,7 @@ typedef struct {
 // Motor State
 // ============================================================================
 
-typedef struct {
+typedef struct stepper_motor_uim2852 {
     stepper_motor_uim2852_config_t config;
     
     // Status from last MS[0] query
@@ -76,13 +76,19 @@ typedef struct {
     uint8_t last_cw_sent;       // Last control word sent
 
     // Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
-    void (*notify_callback)(void *motor, const stepper_uim2852_notification_t *notif);
+    // Forward-declared as void* to avoid circular typedef; actual type matches
+    // stepper_motor_uim2852_notify_cb_t which takes (stepper_motor_uim2852_t *, notif *).
+    void (*notify_callback)(struct stepper_motor_uim2852 *motor, const stepper_uim2852_notification_t *notif);
 
     // Synchronous query support (used by query_param to block until response)
     SemaphoreHandle_t query_sem;        // Binary semaphore signaled when param response arrives
     uint8_t           query_pending_cw; // CW of the pending query (0 = none)
     uint8_t           query_pending_idx;// Subindex of the pending query
     int32_t           query_result;     // Value parsed from param response
+
+    // Thread-safety: protects status/motion_in_progress/absolute_position
+    // which are written by process_frame (CAN RX task) and read by control task.
+    portMUX_TYPE      lock;
 } stepper_motor_uim2852_t;
 
 // ============================================================================

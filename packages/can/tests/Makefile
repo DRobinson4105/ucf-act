@@ -10,6 +10,7 @@ MOTOR_SRC   = ../control-esp32/components/stepper_motor_uim2852/stepper_motor_ui
 MOCK_SRC    = mocks/esp_idf_mock.c
 SAFETY_SRC  = ../common/safety_logic/safety_logic.c
 CONTROL_SRC = ../common/control_logic/control_logic.c
+SYSTEM_STATE_SRC = ../common/system_state/system_state.c
 
 # Mock include path must come FIRST so esp_log.h, can_twai.hh, etc. resolve to mocks
 MOCK_INCLUDES = -Imocks \
@@ -18,7 +19,7 @@ MOCK_INCLUDES = -Imocks \
 # Motor component has an unused TAG variable when logging is mocked out
 MOTOR_CFLAGS = $(CFLAGS) -Wno-unused-variable
 
-all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic
+all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state
 	@echo "--- Running stepper protocol tests ---"
 	./test_stepper_protocol
 	@echo ""
@@ -33,6 +34,9 @@ all: test_stepper_protocol test_can_protocol test_motor_component test_safety_lo
 	@echo ""
 	@echo "--- Running control logic tests ---"
 	./test_control_logic
+	@echo ""
+	@echo "--- Running system state tests ---"
+	./test_system_state
 	@echo ""
 	@echo "All tests passed."
 
@@ -51,7 +55,10 @@ test_safety_logic: test_safety_logic.c $(SAFETY_SRC)
 test_control_logic: test_control_logic.c $(CONTROL_SRC)
 	$(CC) $(CFLAGS) -I../common/control_logic/include $(INCLUDES) -o $@ $^
 
+test_system_state: test_system_state.c $(SYSTEM_STATE_SRC)
+	$(CC) $(CFLAGS) -I../common/system_state/include $(INCLUDES) -o $@ $^
+
 clean:
-	rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic
+	rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state
 
 .PHONY: all clean

@@ -50,6 +50,7 @@ static ultrasonic_a02yyuw_config_t s_config = {};
 static bool ultrasonic_a02yyuw_parse_stream(const uint8_t *data, int len, uint16_t *distance_mm) {
     static uint8_t frame[4];
     static int idx = 0;
+    bool found = false;
 
     for (int i = 0; i < len; ++i) {
         uint8_t b = data[i];
@@ -68,13 +69,14 @@ static bool ultrasonic_a02yyuw_parse_stream(const uint8_t *data, int len, uint16
             uint8_t sum = (uint8_t)(frame[0] + frame[1] + frame[2]);
             if (sum == frame[3]) {
                 *distance_mm = (uint16_t)((frame[1] << 8) | frame[2]);
-                return true;
+                found = true;
+                // Continue processing — use the freshest valid frame
             }
             // Bad checksum - frame discarded, continue searching
         }
     }
 
-    return false;
+    return found;
 }
 
 static void ultrasonic_a02yyuw_update_distance(uint16_t distance_mm) {
@@ -175,14 +177,20 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     if (err != ESP_OK) return err;
 
     err = uart_param_config(config->uart_num, &uart_config);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        uart_driver_delete(config->uart_num);
+        return err;
+    }
 
     err = uart_set_pin(config->uart_num,
                        config->tx_gpio,
                        config->rx_gpio,
                        UART_PIN_NO_CHANGE,
                        UART_PIN_NO_CHANGE);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        uart_driver_delete(config->uart_num);
+        return err;
+    }
 
     // Copy config internally so background task has a stable pointer
     s_config = *config;
@@ -214,7 +222,11 @@ bool ultrasonic_a02yyuw_get_distance_mm(uint16_t *out_distance_mm) {
     return true;
 }
 
-// Check if object detected within threshold distance
+// Check if object detected within threshold distance.
+// NOTE: Returns false (not too close) when sensor has no valid data. This is
+// intentional — the fail-safe is handled by the caller's safety_compute_ultrasonic_trigger()
+// which combines this function with is_healthy() to trigger e-stop when the sensor
+// is unhealthy, regardless of the distance reading.
 bool ultrasonic_a02yyuw_is_too_close(uint16_t threshold_mm, uint16_t *out_distance_mm) {
     uint16_t distance_mm = 0;
     if (!ultrasonic_a02yyuw_get_distance_mm(&distance_mm)) return false;

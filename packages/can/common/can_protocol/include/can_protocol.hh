@@ -1,6 +1,15 @@
 /**
  * @file can_protocol.hh
- * @brief Shared CAN bus protocol definitions for Safety ESP32, Control ESP32, and Jetson Orin.
+ * @brief Shared CAN bus protocol definitions for Safety, Control, and Planner nodes.
+ *
+ * All nodes share a unified state and fault code enum. Safety ESP32 acts as the
+ * system state authority — it is the only node that can advance state forward
+ * (READY -> ENABLING -> ACTIVE). Any node can enter OVERRIDE or FAULT locally
+ * for immediate safety.
+ *
+ * Every node sends an identical heartbeat format (node_heartbeat_t) at 100ms.
+ * Safety's "state" field carries the system target state; its "fault_code" field
+ * carries the e-stop reason using the NODE_FAULT_ESTOP_* range.
  */
 
 #pragma once
@@ -17,15 +26,14 @@ extern "C" {
 // ============================================================================
 
 // Safety ESP32 (0x100-0x10F)
-#define CAN_ID_SAFETY_AUTO_ALLOWED   0x101   // Autonomy allowed broadcast
+#define CAN_ID_SAFETY_HEARTBEAT      0x100   // Safety heartbeat (target_state, estop fault_code)
 
-// Orin (0x110-0x11F)
-#define CAN_ID_ORIN_HEARTBEAT        0x110   // Orin alive signal (seq, state)
-#define CAN_ID_ORIN_COMMAND          0x111   // Throttle/steering/braking commands
+// Planner (0x110-0x11F)
+#define CAN_ID_PLANNER_HEARTBEAT     0x110   // Planner heartbeat (seq, state, fault_code, flags)
+#define CAN_ID_PLANNER_COMMAND       0x111   // Throttle/steering/braking commands
 
 // Control ESP32 (0x120-0x12F)
-#define CAN_ID_CONTROL_HEARTBEAT     0x120   // Control alive (seq, state, fault_code)
-#define CAN_ID_CONTROL_STATUS        0x121   // Throttle, F/R, sensors, positions
+#define CAN_ID_CONTROL_HEARTBEAT     0x120   // Control heartbeat (seq, state, fault_code, flags)
 
 // UIM2852CA Motors - use CAN 2.0B extended 29-bit frames with SimpleCAN protocol
 // See stepper_protocol_uim2852.h for CAN ID calculation and protocol details
@@ -42,132 +50,124 @@ extern "C" {
 #define HEARTBEAT_TIMEOUT_MS         500
 
 // ============================================================================
-// Safety ESP32 Messages
+// Unified Node States (NODE_STATE_*)
 // ============================================================================
+// All nodes share the same state enum. Safety commands forward transitions.
+// Nodes can enter OVERRIDE or FAULT locally for immediate safety.
+// For Safety's heartbeat, 'state' carries the system target state.
 
-// Safety auto allowed frame layout:
-// byte 0: allowed (1=autonomy allowed, 0=blocked)
-// byte 1: block reason (AUTO_BLOCKED_REASON_*)
-// byte 2: estop reason (ESTOP_REASON_*, if blocked by estop)
-// byte 3-7: reserved
-typedef struct {
-    uint8_t allowed;
-    uint8_t block_reason;
-    uint8_t estop_reason;
-} safety_auto_allowed_t;
-
-#define AUTO_BLOCKED_REASON_NONE     0x00   // Autonomy allowed
-#define AUTO_BLOCKED_REASON_ESTOP    0x01   // Blocked due to e-stop
-
-// E-stop reasons (why e-stop is active)
-#define ESTOP_REASON_NONE            0x00
-#define ESTOP_REASON_MUSHROOM        0x01   // push_button_hb2es544 pressed
-#define ESTOP_REASON_REMOTE          0x02   // rf_remote_ev1527 kill active
-#define ESTOP_REASON_ULTRASONIC      0x03   // ultrasonic_a02yyuw obstacle or fault
-#define ESTOP_REASON_ORIN_ERROR      0x04
-#define ESTOP_REASON_ORIN_TIMEOUT    0x05
-#define ESTOP_REASON_CONTROL_TIMEOUT 0x06
-#define ESTOP_REASON_CONTROL_ERROR   0x07
+#define NODE_STATE_INIT              0   // Booting, not ready
+#define NODE_STATE_READY             1   // Running, idle — waiting for Safety to advance
+#define NODE_STATE_ENABLING          2   // Preparing for autonomous (hardware settle / planning init)
+#define NODE_STATE_ACTIVE            3   // Autonomous mode — processing/sending commands
+#define NODE_STATE_OVERRIDE          4   // Driver took over (local, immediate)
+#define NODE_STATE_FAULT             5   // Fault condition (local, immediate)
 
 // ============================================================================
-// Orin Messages
+// Unified Fault Codes (NODE_FAULT_*)
+// ============================================================================
+// Single namespace with ranged values. Every heartbeat uses the same byte.
+//   0x00:       No fault
+//   0x01-0x0F:  System / Safety (e-stop causes)
+//   0x10-0x1F:  Planner faults
+//   0x20-0x3F:  Control faults
+//   0xFF:       General / unspecified
+
+// Common
+#define NODE_FAULT_NONE              0x00
+#define NODE_FAULT_GENERAL           0xFF   // Unspecified fault
+
+// System / Safety e-stop causes (0x01-0x0F)
+#define NODE_FAULT_ESTOP_MUSHROOM        0x01   // push_button_hb2es544 pressed
+#define NODE_FAULT_ESTOP_REMOTE          0x02   // rf_remote_ev1527 kill active
+#define NODE_FAULT_ESTOP_ULTRASONIC      0x03   // ultrasonic_a02yyuw obstacle or fault
+#define NODE_FAULT_ESTOP_PLANNER         0x04   // Planner reported FAULT state
+#define NODE_FAULT_ESTOP_PLANNER_TIMEOUT 0x05   // Planner heartbeat timeout
+#define NODE_FAULT_ESTOP_CONTROL         0x06   // Control ESP32 reported FAULT state
+#define NODE_FAULT_ESTOP_CONTROL_TIMEOUT 0x07   // Control ESP32 heartbeat timeout
+
+// Planner faults (0x10-0x1F)
+#define NODE_FAULT_PERCEPTION        0x10   // Camera/LiDAR failure
+#define NODE_FAULT_LOCALIZATION      0x11   // Localization lost
+#define NODE_FAULT_PLANNING          0x12   // Path planner failure
+#define NODE_FAULT_PLANNER_HARDWARE  0x13   // Planner hardware issue (thermal, etc.)
+
+// Control faults (0x20-0x3F)
+#define NODE_FAULT_THROTTLE_INIT     0x20   // Throttle mux init failed
+#define NODE_FAULT_CAN_TX            0x21   // CAN transmit failures
+#define NODE_FAULT_MOTOR_COMM        0x22   // Stepper communication lost
+#define NODE_FAULT_SENSOR_INVALID    0x23   // F/R sensor invalid reading
+#define NODE_FAULT_RELAY_INIT        0x24   // Relay initialization failed
+
+// ============================================================================
+// Heartbeat Flags
 // ============================================================================
 
-// Orin heartbeat frame layout:
+#define HEARTBEAT_FLAG_ENABLE_COMPLETE  0x01  // Node finished ENABLING, ready for ACTIVE
+
+// ============================================================================
+// Node Heartbeat (0x100, 0x110, 0x120)
+// ============================================================================
+// Sent by ALL nodes periodically (100ms) and immediately on state change.
 // byte 0: sequence counter (0-255, wraps)
-// byte 1: state (ORIN_STATE_*)
-// byte 2-7: reserved
-typedef struct {
-    uint8_t sequence;
-    uint8_t state;
-} orin_heartbeat_t;
+// byte 1: state (NODE_STATE_* — for Safety: system target state)
+// byte 2: fault_code (NODE_FAULT_* — for Safety: e-stop reason, 0 when advancing)
+// byte 3: flags (HEARTBEAT_FLAG_*)
+// byte 4-7: reserved
 
-#define ORIN_STATE_INIT              0
-#define ORIN_STATE_READY             1
-#define ORIN_STATE_AUTONOMOUS        2
-#define ORIN_STATE_MANUAL            3
-#define ORIN_STATE_FAULT             4
-
-// Orin command frame layout:
-// byte 0: throttle level (0-7)
-// byte 1: reserved
-// byte 2-3: steering position (int16, encoder counts, little-endian)
-// byte 4-5: braking position (int16, encoder counts, little-endian)
-// byte 6: reserved
-// byte 7: sequence counter
-typedef struct {
-    uint8_t throttle;
-    int16_t steering_position;
-    int16_t braking_position;
-    uint8_t sequence;
-} orin_command_t;
-
-// ============================================================================
-// Control ESP32 Messages
-// ============================================================================
-
-// Control heartbeat frame layout:
-// byte 0: sequence counter
-// byte 1: state (CONTROL_STATE_*)
-// byte 2: fault code (CONTROL_FAULT_*)
-// byte 3-7: reserved
 typedef struct {
     uint8_t sequence;
     uint8_t state;
     uint8_t fault_code;
-} control_heartbeat_t;
+    uint8_t flags;
+} node_heartbeat_t;
 
-#define CONTROL_STATE_INIT           0
-#define CONTROL_STATE_READY          1
-#define CONTROL_STATE_ENABLING       2
-#define CONTROL_STATE_ACTIVE         3
-#define CONTROL_STATE_OVERRIDE       4
-#define CONTROL_STATE_FAULT          5
+// ============================================================================
+// Planner Command (0x111)
+// ============================================================================
+// Sent by Planner when in ACTIVE state.
+// byte 0: sequence counter (0-255, wraps)
+// byte 1: throttle level (0-7)
+// byte 2-3: steering position (int16, encoder counts, little-endian)
+// byte 4-5: braking position (int16, encoder counts, little-endian)
+// byte 6-7: reserved
+// NOTE: This struct is for logical representation only — not packed to CAN frame layout.
+// Encoding/decoding uses explicit byte-level access via can_encode/decode_planner_command().
 
-#define CONTROL_FAULT_NONE           0x00
-#define CONTROL_FAULT_THROTTLE_INIT  0x01
-#define CONTROL_FAULT_CAN_TX         0x02
-#define CONTROL_FAULT_MOTOR_COMM     0x03
-#define CONTROL_FAULT_SENSOR_INVALID 0x04
-#define CONTROL_FAULT_RELAY_INIT     0x05
-
-// Control status frame layout:
-// byte 0: throttle level (0-7, or 0xFF if disabled)
-// byte 1: F/R (forward reverse switch) state (FR_STATE_*)
-// byte 2: sensor flags bitmask
-// byte 3: override reason
-// byte 4-5: steering position (little-endian)
-// byte 6-7: braking position (little-endian)
 typedef struct {
-    uint8_t throttle_level;
-    uint8_t fr_state;
-    uint8_t sensor_flags;
-    uint8_t override_reason;
+    uint8_t sequence;
+    uint8_t throttle;
     int16_t steering_position;
     int16_t braking_position;
-} control_status_t;
+} planner_command_t;
 
-#define OVERRIDE_REASON_NONE         0x00
-#define OVERRIDE_REASON_PEDAL        0x01
-#define OVERRIDE_REASON_FR_CHANGED   0x02
+// ============================================================================
+// F/R Switch States (used internally by Control, shared for protocol reference)
+// ============================================================================
 
 #define FR_STATE_NEUTRAL             0x00
 #define FR_STATE_FORWARD             0x01
 #define FR_STATE_REVERSE             0x02
 #define FR_STATE_INVALID             0x03
 
-// Sensor flag bits
-#define SENSOR_FLAG_PEDAL_PRESSED    0x01
-#define SENSOR_FLAG_FR_FORWARD       0x02
-#define SENSOR_FLAG_FR_REVERSE       0x04
-#define SENSOR_FLAG_ENABLE_RELAY     0x08
-#define SENSOR_FLAG_THROTTLE_RELAY   0x10
-
 // ============================================================================
-// Helper Functions
+// Override Reasons (internal to Control — NOT transmitted over CAN)
 // ============================================================================
 
-// Pack/unpack unsigned little-endian (least significant units first) values
+#define OVERRIDE_REASON_NONE         0x00
+#define OVERRIDE_REASON_PEDAL        0x01
+#define OVERRIDE_REASON_FR_CHANGED   0x02
+
+// ============================================================================
+// Stale Command Detection
+// ============================================================================
+
+#define PLANNER_CMD_STALE_COUNT      10  // same sequence N times = stale
+
+// ============================================================================
+// Helper Functions — Pack/Unpack
+// ============================================================================
+
 static inline void can_pack_le16(uint8_t *buf, uint16_t value) {
     buf[0] = (uint8_t)(value & 0xFF);
     buf[1] = (uint8_t)((value >> 8) & 0xFF);
@@ -177,7 +177,6 @@ static inline uint16_t can_unpack_le16(const uint8_t *buf) {
     return (uint16_t)(buf[0] | (buf[1] << 8));
 }
 
-// Pack/unpack signed little-endian (least significant units first) values
 static inline void can_pack_le16s(uint8_t *buf, int16_t value) {
     can_pack_le16(buf, (uint16_t)value);
 }
@@ -186,89 +185,89 @@ static inline int16_t can_unpack_le16s(const uint8_t *buf) {
     return (int16_t)can_unpack_le16(buf);
 }
 
-// Encode/decode orin command
-static inline void can_encode_orin_command(uint8_t *data, const orin_command_t *cmd) {
-    data[0] = cmd->throttle;
-    data[1] = 0;  // reserved
-    can_pack_le16s(&data[2], cmd->steering_position);
-    can_pack_le16s(&data[4], cmd->braking_position);
-    data[6] = 0;  // reserved
-    data[7] = cmd->sequence;
-}
+// ============================================================================
+// Encode/Decode — Node Heartbeat (shared by ALL nodes: Safety, Planner, Control)
+// ============================================================================
 
-static inline void can_decode_orin_command(const uint8_t *data, orin_command_t *cmd) {
-    cmd->throttle = data[0];
-    cmd->steering_position = can_unpack_le16s(&data[2]);
-    cmd->braking_position = can_unpack_le16s(&data[4]);
-    cmd->sequence = data[7];
-}
-
-// Encode/decode safety auto allowed
-static inline void can_encode_safety_auto_allowed(uint8_t *data, const safety_auto_allowed_t *msg) {
-    data[0] = msg->allowed;
-    data[1] = msg->block_reason;
-    data[2] = msg->estop_reason;
-    data[3] = 0;
+static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *hb) {
+    data[0] = hb->sequence;
+    data[1] = hb->state;
+    data[2] = hb->fault_code;
+    data[3] = hb->flags;
     data[4] = 0;
     data[5] = 0;
     data[6] = 0;
     data[7] = 0;
 }
 
-static inline void can_decode_safety_auto_allowed(const uint8_t *data, safety_auto_allowed_t *msg) {
-    msg->allowed = data[0];
-    msg->block_reason = data[1];
-    msg->estop_reason = data[2];
+static inline void can_decode_heartbeat(const uint8_t *data, node_heartbeat_t *hb) {
+    hb->sequence = data[0];
+    hb->state = data[1];
+    hb->fault_code = data[2];
+    hb->flags = data[3];
+}
+
+// ============================================================================
+// Encode/Decode — Planner Command
+// ============================================================================
+
+static inline void can_encode_planner_command(uint8_t *data, const planner_command_t *cmd) {
+    data[0] = cmd->sequence;
+    data[1] = cmd->throttle;
+    can_pack_le16s(&data[2], cmd->steering_position);
+    can_pack_le16s(&data[4], cmd->braking_position);
+    data[6] = 0;  // reserved
+    data[7] = 0;  // reserved
+}
+
+static inline void can_decode_planner_command(const uint8_t *data, planner_command_t *cmd) {
+    cmd->sequence = data[0];
+    cmd->throttle = data[1];
+    cmd->steering_position = can_unpack_le16s(&data[2]);
+    cmd->braking_position = can_unpack_le16s(&data[4]);
 }
 
 // ============================================================================
 // Debug String Helpers
 // ============================================================================
 
-static inline const char* estop_reason_to_string(uint8_t reason) {
-    switch (reason) {
-        case ESTOP_REASON_NONE:            return "none";
-        case ESTOP_REASON_MUSHROOM:        return "push_button";
-        case ESTOP_REASON_REMOTE:          return "rf_remote";
-        case ESTOP_REASON_ULTRASONIC:      return "ultrasonic";
-        case ESTOP_REASON_ORIN_ERROR:      return "orin_error";
-        case ESTOP_REASON_ORIN_TIMEOUT:    return "orin_timeout";
-        case ESTOP_REASON_CONTROL_TIMEOUT: return "control_timeout";
-        case ESTOP_REASON_CONTROL_ERROR:   return "control_error";
-        default:                           return "unknown";
-    }
-}
-
-static inline const char* control_state_to_string(uint8_t state) {
+static inline const char* node_state_to_string(uint8_t state) {
     switch (state) {
-        case CONTROL_STATE_INIT:     return "INIT";
-        case CONTROL_STATE_READY:    return "READY";
-        case CONTROL_STATE_ENABLING: return "ENABLING";
-        case CONTROL_STATE_ACTIVE:   return "ACTIVE";
-        case CONTROL_STATE_OVERRIDE: return "OVERRIDE";
-        case CONTROL_STATE_FAULT:    return "FAULT";
-        default:                     return "UNKNOWN";
+        case NODE_STATE_INIT:     return "INIT";
+        case NODE_STATE_READY:    return "READY";
+        case NODE_STATE_ENABLING: return "ENABLING";
+        case NODE_STATE_ACTIVE:   return "ACTIVE";
+        case NODE_STATE_OVERRIDE: return "OVERRIDE";
+        case NODE_STATE_FAULT:    return "FAULT";
+        default:                  return "UNKNOWN";
     }
 }
 
-static inline const char* override_reason_to_string(uint8_t reason) {
-    switch (reason) {
-        case OVERRIDE_REASON_NONE:       return "none";
-        case OVERRIDE_REASON_PEDAL:      return "pedal";
-        case OVERRIDE_REASON_FR_CHANGED: return "fr_changed";
-        default:                         return "unknown";
-    }
-}
-
-static inline const char* control_fault_to_string(uint8_t fault) {
+static inline const char* node_fault_to_string(uint8_t fault) {
     switch (fault) {
-        case CONTROL_FAULT_NONE:           return "none";
-        case CONTROL_FAULT_THROTTLE_INIT:  return "throttle_init";
-        case CONTROL_FAULT_CAN_TX:         return "can_tx";
-        case CONTROL_FAULT_MOTOR_COMM:     return "motor_comm";
-        case CONTROL_FAULT_SENSOR_INVALID: return "sensor_invalid";
-        case CONTROL_FAULT_RELAY_INIT:     return "relay_init";
-        default:                           return "unknown";
+        case NODE_FAULT_NONE:                return "none";
+        // System / Safety e-stop causes
+        case NODE_FAULT_ESTOP_MUSHROOM:      return "estop_mushroom";
+        case NODE_FAULT_ESTOP_REMOTE:        return "estop_remote";
+        case NODE_FAULT_ESTOP_ULTRASONIC:    return "estop_ultrasonic";
+        case NODE_FAULT_ESTOP_PLANNER:       return "estop_planner";
+        case NODE_FAULT_ESTOP_PLANNER_TIMEOUT: return "estop_planner_timeout";
+        case NODE_FAULT_ESTOP_CONTROL:       return "estop_control";
+        case NODE_FAULT_ESTOP_CONTROL_TIMEOUT: return "estop_control_timeout";
+        // Planner faults
+        case NODE_FAULT_PERCEPTION:          return "perception";
+        case NODE_FAULT_LOCALIZATION:        return "localization";
+        case NODE_FAULT_PLANNING:            return "planning";
+        case NODE_FAULT_PLANNER_HARDWARE:    return "planner_hardware";
+        // Control faults
+        case NODE_FAULT_THROTTLE_INIT:       return "throttle_init";
+        case NODE_FAULT_CAN_TX:              return "can_tx";
+        case NODE_FAULT_MOTOR_COMM:          return "motor_comm";
+        case NODE_FAULT_SENSOR_INVALID:      return "sensor_invalid";
+        case NODE_FAULT_RELAY_INIT:          return "relay_init";
+        // General
+        case NODE_FAULT_GENERAL:             return "general";
+        default:                             return "unknown";
     }
 }
 

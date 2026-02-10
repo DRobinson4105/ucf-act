@@ -34,9 +34,13 @@ void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_co
 int heartbeat_monitor_register(heartbeat_monitor_t *mon,
                                 const char *name,
                                 uint32_t timeout_ms) {
-    if (!mon || mon->node_count >= HEARTBEAT_MONITOR_MAX_NODES) return -1;
+    if (!mon) return -1;
 
     taskENTER_CRITICAL(&mon->lock);
+    if (mon->node_count >= HEARTBEAT_MONITOR_MAX_NODES) {
+        taskEXIT_CRITICAL(&mon->lock);
+        return -1;
+    }
     int node_id = mon->node_count++;
     mon->nodes[node_id].name = name ? name : "unknown";
     mon->nodes[node_id].timeout_ticks = pdMS_TO_TICKS(timeout_ms);
@@ -74,7 +78,7 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon,
 
     was_alive = mon->nodes[node_id].alive;
     ever_seen = mon->nodes[node_id].last_seen > 0;
-    mon->nodes[node_id].last_seen = now;
+    mon->nodes[node_id].last_seen = (now == 0) ? 1 : now;
     mon->nodes[node_id].last_sequence = sequence;
     mon->nodes[node_id].last_state = state;
     mon->nodes[node_id].alive = true;
@@ -94,6 +98,12 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
 
     TickType_t now = xTaskGetTickCount();
 
+    // Buffer timeout events inside the critical section, log outside.
+    // This avoids releasing/re-acquiring the lock mid-loop which could
+    // allow another task to mutate node_count or node state.
+    struct { char name[16]; unsigned long elapsed_ms; } timeouts[HEARTBEAT_MONITOR_MAX_NODES];
+    int timeout_count = 0;
+
     taskENTER_CRITICAL(&mon->lock);
     for (int i = 0; i < mon->node_count; i++) {
         if (!mon->nodes[i].active) continue;
@@ -104,19 +114,22 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
         // Only timeout if we've seen at least one heartbeat (last_seen > 0)
         if (mon->nodes[i].last_seen > 0 && elapsed > mon->nodes[i].timeout_ticks) {
             mon->nodes[i].alive = false;
-            if (was_alive) {
-                // Buffer log data inside critical section to avoid TOCTOU
-                char log_name[16];
-                strncpy(log_name, mon->nodes[i].name, sizeof(log_name) - 1);
-                log_name[sizeof(log_name) - 1] = '\0';
-                unsigned long elapsed_ms = (unsigned long)(elapsed * portTICK_PERIOD_MS);
-                taskEXIT_CRITICAL(&mon->lock);
-                ESP_LOGW(mon->tag, "%s lost (no response for %lu ms)", log_name, elapsed_ms);
-                taskENTER_CRITICAL(&mon->lock);
+            if (was_alive && timeout_count < HEARTBEAT_MONITOR_MAX_NODES) {
+                strncpy(timeouts[timeout_count].name, mon->nodes[i].name,
+                        sizeof(timeouts[timeout_count].name) - 1);
+                timeouts[timeout_count].name[sizeof(timeouts[timeout_count].name) - 1] = '\0';
+                timeouts[timeout_count].elapsed_ms = (unsigned long)(elapsed * portTICK_PERIOD_MS);
+                timeout_count++;
             }
         }
     }
     taskEXIT_CRITICAL(&mon->lock);
+
+    // Log outside critical section
+    for (int i = 0; i < timeout_count; i++) {
+        ESP_LOGW(mon->tag, "%s lost (no response for %lu ms)",
+                 timeouts[i].name, timeouts[i].elapsed_ms);
+    }
 }
 
 // ============================================================================
@@ -185,39 +198,38 @@ void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
 
     ESP_LOGI(mon->tag, "--- Node Status ---");
 
-    int alive_count = 0;
-    int dead_count = 0;
-    int never_seen_count = 0;
+    // Snapshot all node data inside a single critical section, log outside.
+    struct { char name[16]; bool alive; TickType_t last_seen; } snaps[HEARTBEAT_MONITOR_MAX_NODES];
+    int snap_count = 0;
 
     taskENTER_CRITICAL(&mon->lock);
-    for (int i = 0; i < mon->node_count; i++) {
+    for (int i = 0; i < mon->node_count && i < HEARTBEAT_MONITOR_MAX_NODES; i++) {
         if (!mon->nodes[i].active) continue;
-
-        // Buffer node data inside critical section to avoid TOCTOU
-        char log_name[16];
-        strncpy(log_name, mon->nodes[i].name, sizeof(log_name) - 1);
-        log_name[sizeof(log_name) - 1] = '\0';
-        bool alive = mon->nodes[i].alive;
-        TickType_t last_seen = mon->nodes[i].last_seen;
-
-        taskEXIT_CRITICAL(&mon->lock);
-
-        if (alive) {
-            ESP_LOGI(mon->tag, "  [OK]  %s", log_name);
-            alive_count++;
-        } else if (last_seen == 0) {
-            ESP_LOGW(mon->tag, "  [--]  %s (never seen)", log_name);
-            never_seen_count++;
-        } else {
-            TickType_t elapsed = xTaskGetTickCount() - last_seen;
-            ESP_LOGW(mon->tag, "  [!!]  %s (dead, last seen %lu ms ago)",
-                     log_name, (unsigned long)(elapsed * portTICK_PERIOD_MS));
-            dead_count++;
-        }
-
-        taskENTER_CRITICAL(&mon->lock);
+        strncpy(snaps[snap_count].name, mon->nodes[i].name, sizeof(snaps[snap_count].name) - 1);
+        snaps[snap_count].name[sizeof(snaps[snap_count].name) - 1] = '\0';
+        snaps[snap_count].alive = mon->nodes[i].alive;
+        snaps[snap_count].last_seen = mon->nodes[i].last_seen;
+        snap_count++;
     }
     taskEXIT_CRITICAL(&mon->lock);
+
+    int alive_count = 0, dead_count = 0, never_seen_count = 0;
+    TickType_t now = xTaskGetTickCount();
+
+    for (int i = 0; i < snap_count; i++) {
+        if (snaps[i].alive) {
+            ESP_LOGI(mon->tag, "  [OK]  %s", snaps[i].name);
+            alive_count++;
+        } else if (snaps[i].last_seen == 0) {
+            ESP_LOGW(mon->tag, "  [--]  %s (never seen)", snaps[i].name);
+            never_seen_count++;
+        } else {
+            TickType_t elapsed = now - snaps[i].last_seen;
+            ESP_LOGW(mon->tag, "  [!!]  %s (dead, last seen %lu ms ago)",
+                     snaps[i].name, (unsigned long)(elapsed * portTICK_PERIOD_MS));
+            dead_count++;
+        }
+    }
 
     ESP_LOGI(mon->tag, "Summary: %d alive, %d dead, %d never seen",
              alive_count, dead_count, never_seen_count);

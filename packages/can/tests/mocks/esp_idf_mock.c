@@ -12,6 +12,8 @@ int          mock_sent_count       = 0;
 int          mock_sem_give_count   = 0;
 int          mock_sem_take_count   = 0;
 int          mock_sem_create_fail  = 0;
+int          g_mock_send_ext_fail_after = 0;
+mock_sem_take_callback_t g_mock_sem_take_callback = NULL;
 
 void mock_reset_all(void) {
     mock_tick_count      = 0;
@@ -21,5 +23,7 @@ void mock_reset_all(void) {
     mock_sem_give_count  = 0;
     mock_sem_take_count  = 0;
     mock_sem_create_fail = 0;
+    g_mock_send_ext_fail_after = 0;
+    g_mock_sem_take_callback = NULL;
     memset(mock_sent_frames, 0, sizeof(mock_sent_frames));
 }

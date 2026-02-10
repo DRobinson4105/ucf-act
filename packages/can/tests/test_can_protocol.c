@@ -81,11 +81,11 @@ static void test_pack_unpack_le16s_max(void) {
 }
 
 // ============================================================================
-// Orin command encode/decode
+// Planner command encode/decode
 // ============================================================================
 
-static void test_orin_command_roundtrip(void) {
-    orin_command_t cmd_in = {
+static void test_planner_command_roundtrip(void) {
+    planner_command_t cmd_in = {
         .throttle = 5,
         .steering_position = 1500,
         .braking_position = -800,
@@ -93,10 +93,10 @@ static void test_orin_command_roundtrip(void) {
     };
     
     uint8_t data[8] = {0};
-    can_encode_orin_command(data, &cmd_in);
+    can_encode_planner_command(data, &cmd_in);
     
-    orin_command_t cmd_out = {0};
-    can_decode_orin_command(data, &cmd_out);
+    planner_command_t cmd_out = {0};
+    can_decode_planner_command(data, &cmd_out);
     
     assert(cmd_out.throttle == 5);
     assert(cmd_out.steering_position == 1500);
@@ -104,15 +104,15 @@ static void test_orin_command_roundtrip(void) {
     assert(cmd_out.sequence == 42);
 }
 
-static void test_orin_command_zero(void) {
-    orin_command_t cmd_in = {0};
+static void test_planner_command_zero(void) {
+    planner_command_t cmd_in = {0};
     
     uint8_t data[8];
     memset(data, 0xFF, 8);
-    can_encode_orin_command(data, &cmd_in);
+    can_encode_planner_command(data, &cmd_in);
     
-    orin_command_t cmd_out = {0};
-    can_decode_orin_command(data, &cmd_out);
+    planner_command_t cmd_out = {0};
+    can_decode_planner_command(data, &cmd_out);
     
     assert(cmd_out.throttle == 0);
     assert(cmd_out.steering_position == 0);
@@ -120,8 +120,8 @@ static void test_orin_command_zero(void) {
     assert(cmd_out.sequence == 0);
 }
 
-static void test_orin_command_extremes(void) {
-    orin_command_t cmd_in = {
+static void test_planner_command_extremes(void) {
+    planner_command_t cmd_in = {
         .throttle = 7,
         .steering_position = INT16_MAX,
         .braking_position = INT16_MIN,
@@ -129,10 +129,10 @@ static void test_orin_command_extremes(void) {
     };
     
     uint8_t data[8];
-    can_encode_orin_command(data, &cmd_in);
+    can_encode_planner_command(data, &cmd_in);
     
-    orin_command_t cmd_out = {0};
-    can_decode_orin_command(data, &cmd_out);
+    planner_command_t cmd_out = {0};
+    can_decode_planner_command(data, &cmd_out);
     
     assert(cmd_out.throttle == 7);
     assert(cmd_out.steering_position == INT16_MAX);
@@ -140,64 +140,162 @@ static void test_orin_command_extremes(void) {
     assert(cmd_out.sequence == 255);
 }
 
-static void test_orin_command_reserved_bytes(void) {
-    orin_command_t cmd = {.throttle = 3, .steering_position = 100, .braking_position = -100, .sequence = 10};
+static void test_planner_command_wire_format(void) {
+    planner_command_t cmd = {.sequence = 10, .throttle = 3, .steering_position = 100, .braking_position = -100};
     uint8_t data[8];
-    can_encode_orin_command(data, &cmd);
+    can_encode_planner_command(data, &cmd);
     
-    // Reserved bytes should be zero
-    assert(data[1] == 0);
+    // byte 0: sequence
+    assert(data[0] == 10);
+    // byte 1: throttle
+    assert(data[1] == 3);
+    // bytes 2-3: steering LE16 (100 = 0x0064 -> 0x64, 0x00)
+    assert(data[2] == 0x64);
+    assert(data[3] == 0x00);
+    // bytes 4-5: braking LE16 (-100 = 0xFF9C -> 0x9C, 0xFF)
+    assert(data[4] == 0x9C);
+    assert(data[5] == 0xFF);
+    // bytes 6-7: reserved, should be zero
     assert(data[6] == 0);
+    assert(data[7] == 0);
 }
 
 // ============================================================================
-// Safety auto allowed encode/decode
+// Safety heartbeat encode/decode
 // ============================================================================
 
-static void test_safety_auto_allowed_roundtrip(void) {
-    safety_auto_allowed_t msg_in = {
-        .allowed = 1,
-        .block_reason = AUTO_BLOCKED_REASON_NONE,
-        .estop_reason = ESTOP_REASON_NONE,
+static void test_safety_heartbeat_roundtrip_advancing(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 1,
+        .state = NODE_STATE_ENABLING,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = 0,
     };
     
     uint8_t data[8];
-    can_encode_safety_auto_allowed(data, &msg_in);
+    can_encode_heartbeat(data, &hb_in);
     
-    safety_auto_allowed_t msg_out = {0};
-    can_decode_safety_auto_allowed(data, &msg_out);
+    node_heartbeat_t hb_out = {0};
+    can_decode_heartbeat(data, &hb_out);
     
-    assert(msg_out.allowed == 1);
-    assert(msg_out.block_reason == AUTO_BLOCKED_REASON_NONE);
-    assert(msg_out.estop_reason == ESTOP_REASON_NONE);
+    assert(hb_out.sequence == 1);
+    assert(hb_out.state == NODE_STATE_ENABLING);
+    assert(hb_out.fault_code == NODE_FAULT_NONE);
 }
 
-static void test_safety_auto_blocked_estop(void) {
-    safety_auto_allowed_t msg_in = {
-        .allowed = 0,
-        .block_reason = AUTO_BLOCKED_REASON_ESTOP,
-        .estop_reason = ESTOP_REASON_MUSHROOM,
+static void test_safety_heartbeat_roundtrip_retreating(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 55,
+        .state = NODE_STATE_READY,
+        .fault_code = NODE_FAULT_ESTOP_MUSHROOM,
+        .flags = 0,
     };
     
     uint8_t data[8];
-    can_encode_safety_auto_allowed(data, &msg_in);
+    can_encode_heartbeat(data, &hb_in);
     
-    safety_auto_allowed_t msg_out = {0};
-    can_decode_safety_auto_allowed(data, &msg_out);
+    node_heartbeat_t hb_out = {0};
+    can_decode_heartbeat(data, &hb_out);
     
-    assert(msg_out.allowed == 0);
-    assert(msg_out.block_reason == AUTO_BLOCKED_REASON_ESTOP);
-    assert(msg_out.estop_reason == ESTOP_REASON_MUSHROOM);
+    assert(hb_out.sequence == 55);
+    assert(hb_out.state == NODE_STATE_READY);
+    assert(hb_out.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
 }
 
-static void test_safety_reserved_bytes_zero(void) {
-    safety_auto_allowed_t msg = {.allowed = 1, .block_reason = 0, .estop_reason = 0};
+static void test_safety_heartbeat_reserved_bytes_zero(void) {
+    node_heartbeat_t hb = {
+        .sequence = 1,
+        .state = NODE_STATE_ACTIVE,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = 0,
+    };
     uint8_t data[8];
     memset(data, 0xFF, 8);
-    can_encode_safety_auto_allowed(data, &msg);
+    can_encode_heartbeat(data, &hb);
     
-    // bytes 3-7 should be zeroed
-    for (int i = 3; i < 8; i++) {
+    // bytes 4-7 should be zeroed
+    for (int i = 4; i < 8; i++) {
+        assert(data[i] == 0);
+    }
+}
+
+// ============================================================================
+// Node heartbeat encode/decode
+// ============================================================================
+
+static void test_heartbeat_roundtrip_basic(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 100,
+        .state = NODE_STATE_ACTIVE,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = 0,
+    };
+    
+    uint8_t data[8];
+    can_encode_heartbeat(data, &hb_in);
+    
+    node_heartbeat_t hb_out = {0};
+    can_decode_heartbeat(data, &hb_out);
+    
+    assert(hb_out.sequence == 100);
+    assert(hb_out.state == NODE_STATE_ACTIVE);
+    assert(hb_out.fault_code == NODE_FAULT_NONE);
+    assert(hb_out.flags == 0);
+}
+
+static void test_heartbeat_roundtrip_with_fault(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 99,
+        .state = NODE_STATE_FAULT,
+        .fault_code = NODE_FAULT_PERCEPTION,
+        .flags = 0,
+    };
+    
+    uint8_t data[8];
+    can_encode_heartbeat(data, &hb_in);
+    
+    node_heartbeat_t hb_out = {0};
+    can_decode_heartbeat(data, &hb_out);
+    
+    assert(hb_out.sequence == 99);
+    assert(hb_out.state == NODE_STATE_FAULT);
+    assert(hb_out.fault_code == NODE_FAULT_PERCEPTION);
+    assert(hb_out.flags == 0);
+}
+
+static void test_heartbeat_roundtrip_enable_complete(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 50,
+        .state = NODE_STATE_ENABLING,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = HEARTBEAT_FLAG_ENABLE_COMPLETE,
+    };
+    
+    uint8_t data[8];
+    can_encode_heartbeat(data, &hb_in);
+    
+    node_heartbeat_t hb_out = {0};
+    can_decode_heartbeat(data, &hb_out);
+    
+    assert(hb_out.sequence == 50);
+    assert(hb_out.state == NODE_STATE_ENABLING);
+    assert(hb_out.fault_code == NODE_FAULT_NONE);
+    assert(hb_out.flags == HEARTBEAT_FLAG_ENABLE_COMPLETE);
+}
+
+static void test_heartbeat_reserved_bytes_zero(void) {
+    node_heartbeat_t hb = {
+        .sequence = 1,
+        .state = NODE_STATE_READY,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = 0,
+    };
+    uint8_t data[8];
+    memset(data, 0xFF, 8);
+    can_encode_heartbeat(data, &hb);
+    
+    // bytes 4-7 should be zeroed
+    for (int i = 4; i < 8; i++) {
         assert(data[i] == 0);
     }
 }
@@ -206,35 +304,41 @@ static void test_safety_reserved_bytes_zero(void) {
 // String helpers
 // ============================================================================
 
-static void test_estop_reason_strings(void) {
-    assert(strcmp(estop_reason_to_string(ESTOP_REASON_NONE), "none") == 0);
-    assert(strcmp(estop_reason_to_string(ESTOP_REASON_MUSHROOM), "push_button") == 0);
-    assert(strcmp(estop_reason_to_string(ESTOP_REASON_REMOTE), "rf_remote") == 0);
-    assert(strcmp(estop_reason_to_string(ESTOP_REASON_ULTRASONIC), "ultrasonic") == 0);
-    assert(strcmp(estop_reason_to_string(0xFF), "unknown") == 0);
+static void test_node_state_all_values(void) {
+    assert(strcmp(node_state_to_string(NODE_STATE_INIT), "INIT") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_READY), "READY") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_ENABLING), "ENABLING") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_ACTIVE), "ACTIVE") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_OVERRIDE), "OVERRIDE") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_FAULT), "FAULT") == 0);
+    assert(strcmp(node_state_to_string(0xFF), "UNKNOWN") == 0);
 }
 
-static void test_control_state_strings(void) {
-    assert(strcmp(control_state_to_string(CONTROL_STATE_INIT), "INIT") == 0);
-    assert(strcmp(control_state_to_string(CONTROL_STATE_READY), "READY") == 0);
-    assert(strcmp(control_state_to_string(CONTROL_STATE_ACTIVE), "ACTIVE") == 0);
-    assert(strcmp(control_state_to_string(CONTROL_STATE_FAULT), "FAULT") == 0);
-    assert(strcmp(control_state_to_string(0xFF), "UNKNOWN") == 0);
-}
-
-static void test_override_reason_strings(void) {
-    assert(strcmp(override_reason_to_string(OVERRIDE_REASON_NONE), "none") == 0);
-    assert(strcmp(override_reason_to_string(OVERRIDE_REASON_PEDAL), "pedal") == 0);
-    assert(strcmp(override_reason_to_string(OVERRIDE_REASON_FR_CHANGED), "fr_changed") == 0);
-    assert(strcmp(override_reason_to_string(0xFF), "unknown") == 0);
-}
-
-static void test_control_fault_strings(void) {
-    assert(strcmp(control_fault_to_string(CONTROL_FAULT_NONE), "none") == 0);
-    assert(strcmp(control_fault_to_string(CONTROL_FAULT_THROTTLE_INIT), "throttle_init") == 0);
-    assert(strcmp(control_fault_to_string(CONTROL_FAULT_CAN_TX), "can_tx") == 0);
-    assert(strcmp(control_fault_to_string(CONTROL_FAULT_RELAY_INIT), "relay_init") == 0);
-    assert(strcmp(control_fault_to_string(0xFF), "unknown") == 0);
+static void test_node_fault_all_values(void) {
+    // Common
+    assert(strcmp(node_fault_to_string(NODE_FAULT_NONE), "none") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_GENERAL), "general") == 0);
+    // System / Safety e-stop causes
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_MUSHROOM), "estop_mushroom") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_REMOTE), "estop_remote") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_ULTRASONIC), "estop_ultrasonic") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER), "estop_planner") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER_TIMEOUT), "estop_planner_timeout") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL), "estop_control") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL_TIMEOUT), "estop_control_timeout") == 0);
+    // Planner faults
+    assert(strcmp(node_fault_to_string(NODE_FAULT_PERCEPTION), "perception") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_LOCALIZATION), "localization") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNING), "planning") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_HARDWARE), "planner_hardware") == 0);
+    // Control faults
+    assert(strcmp(node_fault_to_string(NODE_FAULT_THROTTLE_INIT), "throttle_init") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_CAN_TX), "can_tx") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_MOTOR_COMM), "motor_comm") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_SENSOR_INVALID), "sensor_invalid") == 0);
+    assert(strcmp(node_fault_to_string(NODE_FAULT_RELAY_INIT), "relay_init") == 0);
+    // Unknown
+    assert(strcmp(node_fault_to_string(0xFE), "unknown") == 0);
 }
 
 // ============================================================================
@@ -243,25 +347,23 @@ static void test_control_fault_strings(void) {
 
 static void test_can_id_ranges(void) {
     // Safety IDs in 0x100-0x10F range
-    assert(CAN_ID_SAFETY_AUTO_ALLOWED >= 0x100 && CAN_ID_SAFETY_AUTO_ALLOWED <= 0x10F);
+    assert(CAN_ID_SAFETY_HEARTBEAT >= 0x100 && CAN_ID_SAFETY_HEARTBEAT <= 0x10F);
     
-    // Orin IDs in 0x110-0x11F range
-    assert(CAN_ID_ORIN_HEARTBEAT >= 0x110 && CAN_ID_ORIN_HEARTBEAT <= 0x11F);
-    assert(CAN_ID_ORIN_COMMAND >= 0x110 && CAN_ID_ORIN_COMMAND <= 0x11F);
+    // Planner IDs in 0x110-0x11F range
+    assert(CAN_ID_PLANNER_HEARTBEAT >= 0x110 && CAN_ID_PLANNER_HEARTBEAT <= 0x11F);
+    assert(CAN_ID_PLANNER_COMMAND >= 0x110 && CAN_ID_PLANNER_COMMAND <= 0x11F);
     
     // Control IDs in 0x120-0x12F range
     assert(CAN_ID_CONTROL_HEARTBEAT >= 0x120 && CAN_ID_CONTROL_HEARTBEAT <= 0x12F);
-    assert(CAN_ID_CONTROL_STATUS >= 0x120 && CAN_ID_CONTROL_STATUS <= 0x12F);
 }
 
 static void test_no_id_collisions(void) {
-    // All message IDs should be unique
+    // All 4 message IDs should be unique
     uint16_t ids[] = {
-        CAN_ID_SAFETY_AUTO_ALLOWED,
-        CAN_ID_ORIN_HEARTBEAT,
-        CAN_ID_ORIN_COMMAND,
+        CAN_ID_SAFETY_HEARTBEAT,
+        CAN_ID_PLANNER_HEARTBEAT,
+        CAN_ID_PLANNER_COMMAND,
         CAN_ID_CONTROL_HEARTBEAT,
-        CAN_ID_CONTROL_STATUS,
     };
     int n = sizeof(ids) / sizeof(ids[0]);
     for (int i = 0; i < n; i++) {
@@ -278,7 +380,8 @@ static void test_no_id_collisions(void) {
 int main(void) {
     printf("can_protocol tests:\n");
     
-    // LE16
+    // LE16 pack/unpack (7)
+    printf("\n--- LE16 pack/unpack ---\n");
     TEST(test_pack_unpack_le16_zero);
     TEST(test_pack_unpack_le16_max);
     TEST(test_pack_unpack_le16_value);
@@ -287,24 +390,33 @@ int main(void) {
     TEST(test_pack_unpack_le16s_min);
     TEST(test_pack_unpack_le16s_max);
     
-    // Orin command
-    TEST(test_orin_command_roundtrip);
-    TEST(test_orin_command_zero);
-    TEST(test_orin_command_extremes);
-    TEST(test_orin_command_reserved_bytes);
+    // Planner command encode/decode (4)
+    printf("\n--- Planner command encode/decode ---\n");
+    TEST(test_planner_command_roundtrip);
+    TEST(test_planner_command_zero);
+    TEST(test_planner_command_extremes);
+    TEST(test_planner_command_wire_format);
     
-    // Safety auto allowed
-    TEST(test_safety_auto_allowed_roundtrip);
-    TEST(test_safety_auto_blocked_estop);
-    TEST(test_safety_reserved_bytes_zero);
+    // Safety heartbeat encode/decode (3)
+    printf("\n--- Safety heartbeat encode/decode ---\n");
+    TEST(test_safety_heartbeat_roundtrip_advancing);
+    TEST(test_safety_heartbeat_roundtrip_retreating);
+    TEST(test_safety_heartbeat_reserved_bytes_zero);
     
-    // String helpers
-    TEST(test_estop_reason_strings);
-    TEST(test_control_state_strings);
-    TEST(test_override_reason_strings);
-    TEST(test_control_fault_strings);
+    // Node heartbeat encode/decode (4)
+    printf("\n--- Heartbeat encode/decode ---\n");
+    TEST(test_heartbeat_roundtrip_basic);
+    TEST(test_heartbeat_roundtrip_with_fault);
+    TEST(test_heartbeat_roundtrip_enable_complete);
+    TEST(test_heartbeat_reserved_bytes_zero);
     
-    // Constants
+    // String helpers (2)
+    printf("\n--- String helpers ---\n");
+    TEST(test_node_state_all_values);
+    TEST(test_node_fault_all_values);
+    
+    // CAN ID constants (2)
+    printf("\n--- CAN ID constants ---\n");
     TEST(test_can_id_ranges);
     TEST(test_no_id_collisions);
     

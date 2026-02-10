@@ -13,12 +13,12 @@ bool safety_compute_ultrasonic_trigger(bool too_close, bool healthy) {
 
 safety_decision_t safety_evaluate(const safety_inputs_t *inputs) {
     safety_decision_t d = {
-        .estop_active = false,
-        .estop_reason = ESTOP_REASON_NONE,
-        .auto_allowed = false,
+        .estop_active = true,
+        .fault_code = NODE_FAULT_NONE,
         .relay_enable = false,
     };
 
+    // Fail-safe: NULL input returns estop_active=true (blocks everything)
     if (!inputs) return d;
 
     // Compute ultrasonic trigger with fail-safe
@@ -26,55 +26,39 @@ safety_decision_t safety_evaluate(const safety_inputs_t *inputs) {
         inputs->ultrasonic_too_close, inputs->ultrasonic_healthy);
 
     // Heartbeat timeouts
-    bool orin_timeout = !inputs->orin_alive;
+    bool planner_timeout = !inputs->planner_alive;
     bool control_timeout = !inputs->control_alive;
 
     // E-stop priority chain (highest priority first)
     if (inputs->push_button_active) {
         d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_MUSHROOM;
+        d.fault_code = NODE_FAULT_ESTOP_MUSHROOM;
     } else if (inputs->rf_remote_active) {
         d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_REMOTE;
+        d.fault_code = NODE_FAULT_ESTOP_REMOTE;
     } else if (ultrasonic_triggered) {
         d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_ULTRASONIC;
-    } else if (inputs->orin_error) {
+        d.fault_code = NODE_FAULT_ESTOP_ULTRASONIC;
+    } else if (inputs->planner_error) {
         d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_ORIN_ERROR;
-    } else if (orin_timeout) {
+        d.fault_code = NODE_FAULT_ESTOP_PLANNER;
+    } else if (planner_timeout) {
         d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_ORIN_TIMEOUT;
-    } else if (control_timeout) {
-        d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_CONTROL_TIMEOUT;
+        d.fault_code = NODE_FAULT_ESTOP_PLANNER_TIMEOUT;
     } else if (inputs->control_error) {
         d.estop_active = true;
-        d.estop_reason = ESTOP_REASON_CONTROL_ERROR;
+        d.fault_code = NODE_FAULT_ESTOP_CONTROL;
+    } else if (control_timeout) {
+        d.estop_active = true;
+        d.fault_code = NODE_FAULT_ESTOP_CONTROL_TIMEOUT;
+    } else {
+        // No faults detected — safe
+        d.estop_active = false;
+        d.fault_code = NODE_FAULT_NONE;
     }
 
     // Relay ON only when no e-stop
     d.relay_enable = !d.estop_active;
 
-    // Autonomous allowed only when no e-stop AND all nodes alive
-    d.auto_allowed = !d.estop_active && !orin_timeout && !control_timeout;
-
     return d;
-}
-
-safety_broadcast_t safety_should_broadcast(bool current_estop, bool last_estop,
-                                            uint32_t now_ticks, uint32_t last_broadcast,
-                                            uint32_t periodic_ticks) {
-    safety_broadcast_t b = {
-        .should_broadcast = false,
-        .state_changed = (current_estop != last_estop),
-    };
-
-    if (b.state_changed) {
-        b.should_broadcast = true;
-    } else if (current_estop && (now_ticks - last_broadcast) >= periodic_ticks) {
-        b.should_broadcast = true;
-    }
-
-    return b;
 }

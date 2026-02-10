@@ -123,14 +123,6 @@ void override_sensors_update(uint32_t now_ms);
 
 // ============================================================================
 // Status Flags
-// ============================================================================
-
-// Get sensor flags bitmask (for CAN status message)
-// bit 0: pedal pressed (ADC above threshold)
-// bit 1: dir optocoupler active (LOW)
-// bit 2: rev optocoupler active (LOW)
-uint8_t override_sensors_get_flags(void);
-
 #ifdef __cplusplus
 }
 #endif

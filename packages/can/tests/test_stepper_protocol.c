@@ -521,6 +521,54 @@ static void test_og_zeroes_rest_of_buffer(void) {
 }
 
 // ============================================================================
+// Additional frame builders (AC, DC, JV, PR)
+// ============================================================================
+
+static void test_build_ac(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ac(data, 100000);
+    assert(dl == 4);
+    // 100000 = 0x000186A0 LE
+    assert(data[0] == 0xA0);
+    assert(data[1] == 0x86);
+    assert(data[2] == 0x01);
+    assert(data[3] == 0x00);
+}
+
+static void test_build_dc(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_dc(data, 50000);
+    assert(dl == 4);
+    // 50000 = 0x0000C350 LE
+    assert(data[0] == 0x50);
+    assert(data[1] == 0xC3);
+    assert(data[2] == 0x00);
+    assert(data[3] == 0x00);
+}
+
+static void test_build_jv(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_jv(data, -3200);
+    assert(dl == 4);
+    // -3200 = 0xFFFFF380 LE
+    assert(data[0] == 0x80);
+    assert(data[1] == 0xF3);
+    assert(data[2] == 0xFF);
+    assert(data[3] == 0xFF);
+}
+
+static void test_build_pr_positive(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_pr(data, 1600);
+    assert(dl == 4);
+    // 1600 = 0x00000640 LE
+    assert(data[0] == 0x40);
+    assert(data[1] == 0x06);
+    assert(data[2] == 0x00);
+    assert(data[3] == 0x00);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -552,6 +600,10 @@ int main(void) {
     TEST(test_build_pp_query);
     TEST(test_build_pp_set_roundtrip);
     TEST(test_build_brake);
+    TEST(test_build_ac);
+    TEST(test_build_dc);
+    TEST(test_build_jv);
+    TEST(test_build_pr_positive);
 
     // MS[0] parse
     TEST(test_parse_ms0_full);

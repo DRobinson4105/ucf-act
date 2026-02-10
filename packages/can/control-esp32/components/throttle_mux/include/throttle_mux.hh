@@ -81,6 +81,8 @@ void throttle_mux_enable_autonomous(void);
 
 // Disable autonomous mode: ramps down throttle, de-energizes relay, disables mux
 // Provides smooth transition back to manual control
+// NOTE: Currently unused — override uses emergency_stop for immediate cutoff.
+// Retained for future non-emergency transitions.
 void throttle_mux_disable_autonomous(void);
 
 // Emergency stop: immediate mux disable + relay de-energize

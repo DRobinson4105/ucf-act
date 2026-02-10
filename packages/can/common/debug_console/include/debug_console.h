@@ -6,7 +6,7 @@
  * declarations compile to nothing and no code is linked.
  *
  * Safety ESP32 commands:  bypass/unbypass heartbeat checks, status.
- * Control ESP32 commands: simulate FR sensor, auto-allowed, Orin commands, status.
+ * Control ESP32 commands: simulate FR sensor, target_state, Planner commands, status.
  */
 #pragma once
 
@@ -25,15 +25,15 @@ extern "C" {
 
 typedef struct {
     // Written by console commands, read by safety_task
-    volatile bool bypass_orin;
+    volatile bool bypass_planner;
     volatile bool bypass_control;
 
     // Written by safety_task, read by status command
     volatile bool estop_active;
-    volatile uint8_t estop_reason;
-    volatile bool auto_allowed;
+    volatile uint8_t fault_code;
+    volatile uint8_t target_state;      // NODE_STATE_* — current system target
     volatile bool relay_on;
-    volatile bool orin_alive;
+    volatile bool planner_alive;
     volatile bool control_alive;
 } debug_safety_state_t;
 
@@ -49,19 +49,19 @@ typedef struct {
     volatile uint8_t sim_fr_value;          // FR_STATE_* constant
 
     volatile bool sim_auto_active;
-    volatile bool sim_auto_value;
+    volatile bool sim_auto_value;           // true = ENABLING, false = READY
 
-    volatile bool sim_orin_active;
-    volatile uint8_t sim_orin_throttle;
-    volatile int16_t sim_orin_steering;
-    volatile int16_t sim_orin_braking;
+    volatile bool sim_planner_active;
+    volatile uint8_t sim_planner_throttle;
+    volatile int16_t sim_planner_steering;
+    volatile int16_t sim_planner_braking;
 
     // Written by control_task, read by status command
-    volatile uint8_t control_state;
-    volatile bool auto_allowed;
+    volatile uint8_t control_state;         // NODE_STATE_*
+    volatile bool target_enabling;           // target_state >= ENABLING
     volatile uint8_t fr_sensor;
     volatile bool pedal_pressed;
-    volatile uint8_t fault_code;
+    volatile uint8_t fault_code;            // NODE_FAULT_*
 } debug_control_state_t;
 
 extern debug_control_state_t g_dbg_control;

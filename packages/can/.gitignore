@@ -8,3 +8,4 @@ tests/test_can_protocol
 tests/test_motor_component
 tests/test_safety_logic
 tests/test_control_logic
+tests/test_system_state

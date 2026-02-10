@@ -54,6 +54,19 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
 // Check msg->extd to determine frame type: 0=standard 11-bit, 1=extended 29-bit
 esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout);
 
+// ============================================================================
+// Bus Health
+// ============================================================================
+
+// Check TWAI bus status for error states. Returns true if bus is healthy.
+// When bus-off is detected, caller should invoke can_twai_recover_bus_off().
+bool can_twai_bus_ok(void);
+
+// Attempt recovery from bus-off state.
+// Calls twai_initiate_recovery() and twai_start() with a brief delay.
+// Returns ESP_OK on successful recovery.
+esp_err_t can_twai_recover_bus_off(void);
+
 #ifdef __cplusplus
 }
 #endif

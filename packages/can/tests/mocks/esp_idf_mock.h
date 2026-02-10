@@ -78,6 +78,13 @@ extern int           mock_sem_give_count;
 extern int           mock_sem_take_count;
 extern int           mock_sem_create_fail;   // if nonzero, xSemaphoreCreateBinary returns NULL
 
+// Mock control: fail the Nth call to can_twai_send_extended (0 = don't fail)
+extern int g_mock_send_ext_fail_after;
+
+// Optional callback invoked on each xSemaphoreTake (useful for setting query_result at the right time)
+typedef void (*mock_sem_take_callback_t)(int take_count);
+extern mock_sem_take_callback_t g_mock_sem_take_callback;
+
 void mock_reset_all(void);
 
 // ============================================================================
@@ -96,6 +103,7 @@ static inline SemaphoreHandle_t xSemaphoreCreateBinary(void) {
 static inline BaseType_t xSemaphoreTake(SemaphoreHandle_t sem, TickType_t timeout) {
     (void)sem; (void)timeout;
     mock_sem_take_count++;
+    if (g_mock_sem_take_callback) g_mock_sem_take_callback(mock_sem_take_count);
     return mock_sem_take_result;
 }
 

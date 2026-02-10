@@ -17,7 +17,12 @@ esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio) {
     esp_err_t err = twai_driver_install(&g_config, &t_config, &f_config);
     if (err != ESP_OK) return err;
     
-    return twai_start();
+    err = twai_start();
+    if (err != ESP_OK) {
+        twai_driver_uninstall();
+        return err;
+    }
+    return ESP_OK;
 }
 
 // ============================================================================
@@ -63,4 +68,30 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
 // Receive next CAN frame (blocking with timeout)
 esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout) {
     return twai_receive(msg, timeout);
+}
+
+// ============================================================================
+// Bus Health
+// ============================================================================
+
+bool can_twai_bus_ok(void) {
+    twai_status_info_t status;
+    if (twai_get_status_info(&status) != ESP_OK) return false;
+    return status.state == TWAI_STATE_RUNNING;
+}
+
+esp_err_t can_twai_recover_bus_off(void) {
+    esp_err_t err = twai_initiate_recovery();
+    if (err != ESP_OK) return err;
+    
+    // Poll for recovery completion (up to 250ms)
+    for (int i = 0; i < 25; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        twai_status_info_t status;
+        if (twai_get_status_info(&status) == ESP_OK && status.state == TWAI_STATE_STOPPED) {
+            return twai_start();
+        }
+    }
+    // Timeout — try starting anyway
+    return twai_start();
 }

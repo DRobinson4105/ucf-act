@@ -8,6 +8,9 @@
  *
  * The caller (control_task in main.cpp) reads sensors, calls these functions
  * to obtain decisions, then executes the hardware side effects.
+ *
+ * Control reacts to the Safety ESP32's system command (target_state) rather
+ * than a simple permission boolean. Safety is the system state authority.
  */
 #pragma once
 
@@ -35,7 +38,7 @@ typedef struct {
     uint8_t fr_state;           // CONTROL_FR_* value
     bool pedal_pressed;         // true if pedal above threshold
     bool pedal_rearmed;         // true if pedal below threshold for 500ms
-    uint8_t fault_code;         // CONTROL_FAULT_* from can_protocol.hh
+    uint8_t fault_code;         // NODE_FAULT_* from can_protocol.hh
 } precondition_inputs_t;
 
 /**
@@ -88,24 +91,25 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 #define CONTROL_ACTION_APPLY_THROTTLE   0x0020  // Update DG408 mux to new throttle level
 
 typedef struct {
-    // CAN RX state
-    bool auto_allowed;
-    uint8_t auto_estop_reason;
+    // Safety system command
+    uint8_t target_state;               // NODE_STATE_* from Safety's heartbeat
+
+    // Planner commands (valid when ACTIVE)
     int8_t throttle_target;
     int16_t steering_cmd;
     int16_t braking_cmd;
-    uint8_t motor_fault_code;       // one-shot from CAN RX (CONTROL_FAULT_*)
+    uint8_t motor_fault_code;           // one-shot from CAN RX (NODE_FAULT_*)
 
     // Sensor state
-    uint8_t fr_state;               // CONTROL_FR_*
+    uint8_t fr_state;                   // CONTROL_FR_*
     bool pedal_pressed;
     bool pedal_rearmed;
-    bool fr_is_invalid;             // true if FR reads as INVALID
+    bool fr_is_invalid;                 // true if FR reads as INVALID
 
     // Timing
     uint32_t now_ms;
-    uint32_t enable_start_ms;       // when enable sequence began
-    uint32_t enable_sequence_ms;    // required hold time to complete enable
+    uint32_t enable_start_ms;           // when enable sequence began
+    uint32_t enable_sequence_ms;        // required hold time to complete enable
 
     // Throttle slew
     int8_t throttle_current;
@@ -119,9 +123,12 @@ typedef struct {
 
 typedef struct {
     // Updated state
-    uint8_t new_state;              // CONTROL_STATE_* from can_protocol.hh
-    uint8_t new_fault_code;         // CONTROL_FAULT_* (0 = none)
+    uint8_t new_state;              // NODE_STATE_* from can_protocol.hh
+    uint8_t new_fault_code;         // NODE_FAULT_* (0 = none)
     uint8_t override_reason;        // OVERRIDE_REASON_* (set when triggering override)
+
+    // Heartbeat flags to send
+    uint8_t heartbeat_flags;        // HEARTBEAT_FLAG_* to include in next heartbeat
 
     // Actions for the caller to execute
     uint16_t actions;               // bitmask of CONTROL_ACTION_*
@@ -148,7 +155,13 @@ typedef struct {
  * Pure function: reads current state + inputs, produces next state + action list.
  * The caller executes the hardware side effects indicated by the actions bitmask.
  *
- * @param current_state  Current CONTROL_STATE_* value
+ * Control reacts to Safety's target_state:
+ *   - target_state >= ENABLING && preconditions met -> begin ENABLING
+ *   - enable work done -> set enable_complete flag, stay ENABLING
+ *   - target_state == ACTIVE -> transition to ACTIVE
+ *   - target_state < current -> retreat (override/disable)
+ *
+ * @param current_state  Current NODE_STATE_* value
  * @param current_fault  Current fault code
  * @param inputs         All sensor/CAN/timing inputs
  * @return Step result with new state and actions to execute

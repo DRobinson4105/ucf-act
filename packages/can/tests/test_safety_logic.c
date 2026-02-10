@@ -41,9 +41,9 @@ static safety_inputs_t safe_inputs(void) {
         .rf_remote_active = false,
         .ultrasonic_too_close = false,
         .ultrasonic_healthy = true,
-        .orin_alive = true,
+        .planner_alive = true,
         .control_alive = true,
-        .orin_error = false,
+        .planner_error = false,
         .control_error = false,
     };
     return in;
@@ -77,13 +77,12 @@ static void test_ultrasonic_both_bad(void) {
 // E-stop priority chain tests (8)
 // ============================================================================
 
-// 5. All clear -> no estop, auto allowed, relay on
+// 5. All clear -> no estop, relay on
 static void test_all_clear(void) {
     safety_inputs_t in = safe_inputs();
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == false);
-    assert(d.estop_reason == ESTOP_REASON_NONE);
-    assert(d.auto_allowed == true);
+    assert(d.fault_code == NODE_FAULT_NONE);
     assert(d.relay_enable == true);
 }
 
@@ -94,74 +93,74 @@ static void test_push_button_highest_priority(void) {
         .rf_remote_active = true,
         .ultrasonic_too_close = true,
         .ultrasonic_healthy = false,
-        .orin_alive = false,
+        .planner_alive = false,
         .control_alive = false,
-        .orin_error = true,
+        .planner_error = true,
         .control_error = true,
     };
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_MUSHROOM);
+    assert(d.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
 }
 
-// 7. rf_remote + ultrasonic + orin_error -> REMOTE
+// 7. rf_remote + ultrasonic + planner_error -> REMOTE
 static void test_rf_remote_priority(void) {
     safety_inputs_t in = safe_inputs();
     in.rf_remote_active = true;
     in.ultrasonic_too_close = true;
-    in.orin_error = true;
+    in.planner_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_REMOTE);
+    assert(d.fault_code == NODE_FAULT_ESTOP_REMOTE);
 }
 
-// 8. ultrasonic triggered (too_close + healthy) + orin_error -> ULTRASONIC
+// 8. ultrasonic triggered (too_close + healthy) + planner_error -> ULTRASONIC
 static void test_ultrasonic_priority(void) {
     safety_inputs_t in = safe_inputs();
     in.ultrasonic_too_close = true;
     in.ultrasonic_healthy = true;
-    in.orin_error = true;
+    in.planner_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_ULTRASONIC);
+    assert(d.fault_code == NODE_FAULT_ESTOP_ULTRASONIC);
 }
 
-// 9. orin_error + orin_timeout + control_timeout -> ORIN_ERROR
-static void test_orin_error_priority(void) {
+// 9. planner_error + planner_timeout + control_timeout -> ESTOP_PLANNER
+static void test_planner_error_priority(void) {
     safety_inputs_t in = safe_inputs();
-    in.orin_error = true;
-    in.orin_alive = false;    // orin_timeout
-    in.control_alive = false; // control_timeout
+    in.planner_error = true;
+    in.planner_alive = false;     // planner_timeout
+    in.control_alive = false;     // control_timeout
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_ORIN_ERROR);
+    assert(d.fault_code == NODE_FAULT_ESTOP_PLANNER);
 }
 
-// 10. orin_alive=false only -> ORIN_TIMEOUT
-static void test_orin_timeout(void) {
+// 10. planner_alive=false only -> ESTOP_PLANNER_TIMEOUT
+static void test_planner_timeout(void) {
     safety_inputs_t in = safe_inputs();
-    in.orin_alive = false;
+    in.planner_alive = false;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_ORIN_TIMEOUT);
+    assert(d.fault_code == NODE_FAULT_ESTOP_PLANNER_TIMEOUT);
 }
 
-// 11. control_alive=false only -> CONTROL_TIMEOUT
-static void test_control_timeout(void) {
-    safety_inputs_t in = safe_inputs();
-    in.control_alive = false;
-    safety_decision_t d = safety_evaluate(&in);
-    assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_CONTROL_TIMEOUT);
-}
-
-// 12. control_error only -> CONTROL_ERROR (lowest priority)
-static void test_control_error_lowest(void) {
+// 11. control_error only -> ESTOP_CONTROL
+static void test_control_error(void) {
     safety_inputs_t in = safe_inputs();
     in.control_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_CONTROL_ERROR);
+    assert(d.fault_code == NODE_FAULT_ESTOP_CONTROL);
+}
+
+// 12. control_alive=false only -> ESTOP_CONTROL_TIMEOUT (lowest priority)
+static void test_control_timeout_lowest(void) {
+    safety_inputs_t in = safe_inputs();
+    in.control_alive = false;
+    safety_decision_t d = safety_evaluate(&in);
+    assert(d.estop_active == true);
+    assert(d.fault_code == NODE_FAULT_ESTOP_CONTROL_TIMEOUT);
 }
 
 // ============================================================================
@@ -175,7 +174,7 @@ static void test_ultrasonic_unhealthy_triggers_estop(void) {
     in.ultrasonic_too_close = false;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_ULTRASONIC);
+    assert(d.fault_code == NODE_FAULT_ESTOP_ULTRASONIC);
 }
 
 // 14. ultrasonic_healthy=true, !too_close -> no estop from ultrasonic
@@ -185,58 +184,21 @@ static void test_ultrasonic_healthy_clear(void) {
     in.ultrasonic_too_close = false;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == false);
-    assert(d.estop_reason == ESTOP_REASON_NONE);
-}
-
-// ============================================================================
-// Auto-allowed logic (4)
-// ============================================================================
-
-// 15. Safe inputs -> auto_allowed=true
-static void test_auto_allowed_when_all_clear(void) {
-    safety_inputs_t in = safe_inputs();
-    safety_decision_t d = safety_evaluate(&in);
-    assert(d.auto_allowed == true);
-}
-
-// 16. push_button active -> auto_allowed=false
-static void test_auto_blocked_by_estop(void) {
-    safety_inputs_t in = safe_inputs();
-    in.push_button_active = true;
-    safety_decision_t d = safety_evaluate(&in);
-    assert(d.auto_allowed == false);
-}
-
-// 17. orin_alive=false -> auto_allowed=false (also triggers estop)
-static void test_auto_blocked_by_orin_timeout(void) {
-    safety_inputs_t in = safe_inputs();
-    in.orin_alive = false;
-    safety_decision_t d = safety_evaluate(&in);
-    assert(d.auto_allowed == false);
-    assert(d.estop_active == true);
-}
-
-// 18. control_alive=false -> auto_allowed=false
-static void test_auto_blocked_by_control_timeout(void) {
-    safety_inputs_t in = safe_inputs();
-    in.control_alive = false;
-    safety_decision_t d = safety_evaluate(&in);
-    assert(d.auto_allowed == false);
-    assert(d.estop_active == true);
+    assert(d.fault_code == NODE_FAULT_NONE);
 }
 
 // ============================================================================
 // Relay output (3)
 // ============================================================================
 
-// 19. Safe -> relay_enable=true
+// 15. Safe -> relay_enable=true
 static void test_relay_enabled_when_safe(void) {
     safety_inputs_t in = safe_inputs();
     safety_decision_t d = safety_evaluate(&in);
     assert(d.relay_enable == true);
 }
 
-// 20. Any estop -> relay_enable=false
+// 16. Any estop -> relay_enable=false
 static void test_relay_disabled_on_estop(void) {
     safety_inputs_t in = safe_inputs();
     in.push_button_active = true;
@@ -244,10 +206,10 @@ static void test_relay_disabled_on_estop(void) {
     assert(d.relay_enable == false);
 }
 
-// 21. orin_alive=false -> relay_enable=false
+// 17. planner_alive=false -> relay_enable=false
 static void test_relay_disabled_on_timeout(void) {
     safety_inputs_t in = safe_inputs();
-    in.orin_alive = false;
+    in.planner_alive = false;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.relay_enable == false);
 }
@@ -256,100 +218,56 @@ static void test_relay_disabled_on_timeout(void) {
 // NULL input safety (1)
 // ============================================================================
 
-// 22. NULL pointer -> returns zeroed/default struct
+// 18. NULL pointer -> returns zeroed/default struct
 static void test_evaluate_null_input(void) {
     safety_decision_t d = safety_evaluate(NULL);
-    assert(d.estop_active == false);
-    assert(d.estop_reason == ESTOP_REASON_NONE);
-    assert(d.auto_allowed == false);
+    assert(d.estop_active == true);
+    assert(d.fault_code == NODE_FAULT_NONE);
     assert(d.relay_enable == false);
-}
-
-// ============================================================================
-// Broadcast timing tests (5)
-// ============================================================================
-
-// 23. false->true (state change activate) -> should_broadcast=true, state_changed=true
-static void test_broadcast_on_state_change_activate(void) {
-    safety_broadcast_t b = safety_should_broadcast(true, false, 1000, 0, 500);
-    assert(b.should_broadcast == true);
-    assert(b.state_changed == true);
-}
-
-// 24. true->false (state change deactivate) -> should_broadcast=true, state_changed=true
-static void test_broadcast_on_state_change_deactivate(void) {
-    safety_broadcast_t b = safety_should_broadcast(false, true, 1000, 0, 500);
-    assert(b.should_broadcast == true);
-    assert(b.state_changed == true);
-}
-
-// 25. estop=true, same state, elapsed>=periodic -> should_broadcast=true, state_changed=false
-static void test_broadcast_periodic_during_estop(void) {
-    safety_broadcast_t b = safety_should_broadcast(true, true, 1500, 1000, 500);
-    assert(b.should_broadcast == true);
-    assert(b.state_changed == false);
-}
-
-// 26. estop=false, same state -> should_broadcast=false
-static void test_no_broadcast_when_stable_safe(void) {
-    safety_broadcast_t b = safety_should_broadcast(false, false, 5000, 1000, 500);
-    assert(b.should_broadcast == false);
-    assert(b.state_changed == false);
-}
-
-// 27. estop=true, same state, elapsed<periodic -> should_broadcast=false
-static void test_no_broadcast_periodic_too_soon(void) {
-    safety_broadcast_t b = safety_should_broadcast(true, true, 1200, 1000, 500);
-    assert(b.should_broadcast == false);
-    assert(b.state_changed == false);
 }
 
 // ============================================================================
 // Combined scenario tests (3)
 // ============================================================================
 
-// 28. push_button + rf + ultrasonic + orin_error -> MUSHROOM (highest wins)
+// 19. push_button + rf + ultrasonic + planner_error -> MUSHROOM (highest wins)
 static void test_multiple_faults_highest_wins(void) {
     safety_inputs_t in = safe_inputs();
     in.push_button_active = true;
     in.rf_remote_active = true;
     in.ultrasonic_too_close = true;
-    in.orin_error = true;
+    in.planner_error = true;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_MUSHROOM);
-    assert(d.auto_allowed == false);
+    assert(d.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
     assert(d.relay_enable == false);
 }
 
-// 29. Evaluate with estop, then evaluate with all clear — verify both results
+// 20. Evaluate with estop, then evaluate with all clear — verify both results
 static void test_transition_estop_on_then_off(void) {
     // First: estop active
     safety_inputs_t in1 = safe_inputs();
     in1.push_button_active = true;
     safety_decision_t d1 = safety_evaluate(&in1);
     assert(d1.estop_active == true);
-    assert(d1.estop_reason == ESTOP_REASON_MUSHROOM);
-    assert(d1.auto_allowed == false);
+    assert(d1.fault_code == NODE_FAULT_ESTOP_MUSHROOM);
     assert(d1.relay_enable == false);
 
     // Second: all clear
     safety_inputs_t in2 = safe_inputs();
     safety_decision_t d2 = safety_evaluate(&in2);
     assert(d2.estop_active == false);
-    assert(d2.estop_reason == ESTOP_REASON_NONE);
-    assert(d2.auto_allowed == true);
+    assert(d2.fault_code == NODE_FAULT_NONE);
     assert(d2.relay_enable == true);
 }
 
-// 30. Only ultrasonic_healthy=false, everything else fine -> estop=true, reason=ULTRASONIC
+// 21. Only ultrasonic_healthy=false, everything else fine -> estop=true, reason=ULTRASONIC
 static void test_ultrasonic_fault_alone_blocks(void) {
     safety_inputs_t in = safe_inputs();
     in.ultrasonic_healthy = false;
     safety_decision_t d = safety_evaluate(&in);
     assert(d.estop_active == true);
-    assert(d.estop_reason == ESTOP_REASON_ULTRASONIC);
-    assert(d.auto_allowed == false);
+    assert(d.fault_code == NODE_FAULT_ESTOP_ULTRASONIC);
     assert(d.relay_enable == false);
 }
 
@@ -373,22 +291,15 @@ int main(void) {
     TEST(test_push_button_highest_priority);
     TEST(test_rf_remote_priority);
     TEST(test_ultrasonic_priority);
-    TEST(test_orin_error_priority);
-    TEST(test_orin_timeout);
-    TEST(test_control_timeout);
-    TEST(test_control_error_lowest);
+    TEST(test_planner_error_priority);
+    TEST(test_planner_timeout);
+    TEST(test_control_error);
+    TEST(test_control_timeout_lowest);
 
     // Ultrasonic fail-safe in evaluate (2)
     printf("\n--- Ultrasonic fail-safe in evaluate ---\n");
     TEST(test_ultrasonic_unhealthy_triggers_estop);
     TEST(test_ultrasonic_healthy_clear);
-
-    // Auto-allowed logic (4)
-    printf("\n--- Auto-allowed logic ---\n");
-    TEST(test_auto_allowed_when_all_clear);
-    TEST(test_auto_blocked_by_estop);
-    TEST(test_auto_blocked_by_orin_timeout);
-    TEST(test_auto_blocked_by_control_timeout);
 
     // Relay output (3)
     printf("\n--- Relay output ---\n");
@@ -399,14 +310,6 @@ int main(void) {
     // NULL input safety (1)
     printf("\n--- NULL input safety ---\n");
     TEST(test_evaluate_null_input);
-
-    // Broadcast timing (5)
-    printf("\n--- Broadcast timing ---\n");
-    TEST(test_broadcast_on_state_change_activate);
-    TEST(test_broadcast_on_state_change_deactivate);
-    TEST(test_broadcast_periodic_during_estop);
-    TEST(test_no_broadcast_when_stable_safe);
-    TEST(test_no_broadcast_periodic_too_soon);
 
     // Combined scenarios (3)
     printf("\n--- Combined scenarios ---\n");

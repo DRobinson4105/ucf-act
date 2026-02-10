@@ -28,6 +28,6 @@ esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config)
 
 // Returns true when e-stop is active (mushroom button pressed)
 bool push_button_hb2es544_read_active(const push_button_hb2es544_config_t *config) {
-    if (!config) return false;
+    if (!config) return true;  // fail-safe: treat as active (e-stop triggered)
     return gpio_get_level(config->gpio) == config->active_level;
 }

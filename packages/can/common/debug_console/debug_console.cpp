@@ -37,21 +37,21 @@ debug_control_state_t g_dbg_control = {};
 
 static int cmd_bypass(int argc, char **argv) {
     if (argc < 2) {
-        printf("Usage: bypass <orin|control|all>\n");
+        printf("Usage: bypass <planner|control|all>\n");
         return 1;
     }
-    if (strcmp(argv[1], "orin") == 0) {
-        g_dbg_safety.bypass_orin = true;
-        printf("OK: Orin heartbeat bypassed (always alive)\n");
+    if (strcmp(argv[1], "planner") == 0) {
+        g_dbg_safety.bypass_planner = true;
+        printf("OK: Planner heartbeat bypassed (always alive)\n");
     } else if (strcmp(argv[1], "control") == 0) {
         g_dbg_safety.bypass_control = true;
         printf("OK: Control heartbeat bypassed (always alive)\n");
     } else if (strcmp(argv[1], "all") == 0) {
-        g_dbg_safety.bypass_orin = true;
+        g_dbg_safety.bypass_planner = true;
         g_dbg_safety.bypass_control = true;
         printf("OK: All heartbeats bypassed\n");
     } else {
-        printf("Unknown target '%s'. Use: orin, control, all\n", argv[1]);
+        printf("Unknown target '%s'. Use: planner, control, all\n", argv[1]);
         return 1;
     }
     return 0;
@@ -59,21 +59,21 @@ static int cmd_bypass(int argc, char **argv) {
 
 static int cmd_unbypass(int argc, char **argv) {
     if (argc < 2) {
-        printf("Usage: unbypass <orin|control|all>\n");
+        printf("Usage: unbypass <planner|control|all>\n");
         return 1;
     }
-    if (strcmp(argv[1], "orin") == 0) {
-        g_dbg_safety.bypass_orin = false;
-        printf("OK: Orin heartbeat check re-enabled\n");
+    if (strcmp(argv[1], "planner") == 0) {
+        g_dbg_safety.bypass_planner = false;
+        printf("OK: Planner heartbeat check re-enabled\n");
     } else if (strcmp(argv[1], "control") == 0) {
         g_dbg_safety.bypass_control = false;
         printf("OK: Control heartbeat check re-enabled\n");
     } else if (strcmp(argv[1], "all") == 0) {
-        g_dbg_safety.bypass_orin = false;
+        g_dbg_safety.bypass_planner = false;
         g_dbg_safety.bypass_control = false;
         printf("OK: All heartbeat checks re-enabled\n");
     } else {
-        printf("Unknown target '%s'. Use: orin, control, all\n", argv[1]);
+        printf("Unknown target '%s'. Use: planner, control, all\n", argv[1]);
         return 1;
     }
     return 0;
@@ -83,12 +83,12 @@ static int cmd_safety_status(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("\n--- Safety ESP32 Status ---\n");
     printf("E-stop active:  %s\n", g_dbg_safety.estop_active ? "YES" : "NO");
-    printf("E-stop reason:  %s\n", estop_reason_to_string(g_dbg_safety.estop_reason));
-    printf("Auto allowed:   %s\n", g_dbg_safety.auto_allowed ? "YES" : "NO");
+    printf("Fault code:     %s\n", node_fault_to_string(g_dbg_safety.fault_code));
+    printf("Target state:   %s\n", node_state_to_string(g_dbg_safety.target_state));
     printf("Relay:          %s\n", g_dbg_safety.relay_on ? "ON" : "OFF");
-    printf("Orin alive:     %s%s\n",
-           g_dbg_safety.orin_alive ? "YES" : "NO",
-           g_dbg_safety.bypass_orin ? " (BYPASSED)" : "");
+    printf("Planner alive:  %s%s\n",
+           g_dbg_safety.planner_alive ? "YES" : "NO",
+           g_dbg_safety.bypass_planner ? " (BYPASSED)" : "");
     printf("Control alive:  %s%s\n",
            g_dbg_safety.control_alive ? "YES" : "NO",
            g_dbg_safety.bypass_control ? " (BYPASSED)" : "");
@@ -114,9 +114,9 @@ static int cmd_sim(int argc, char **argv) {
     if (argc < 2) {
         printf("Usage:\n");
         printf("  sim fr <forward|neutral|reverse|off>  Override F/R sensor\n");
-        printf("  sim auto <0|1>                        Override auto_allowed\n");
-        printf("  sim orin <throttle> <steering> <brake> Inject Orin commands\n");
-        printf("  sim orin stop                         Stop injecting\n");
+        printf("  sim auto <0|1>                        Override target_state\n");
+        printf("  sim planner <throttle> <steering> <brake> Inject Planner commands\n");
+        printf("  sim planner stop                      Stop injecting\n");
         printf("  sim off                               Clear all overrides\n");
         return 1;
     }
@@ -146,44 +146,44 @@ static int cmd_sim(int argc, char **argv) {
         if (argc < 3) { printf("Usage: sim auto <0|1|off>\n"); return 1; }
         if (strcmp(argv[2], "off") == 0) {
             g_dbg_control.sim_auto_active = false;
-            printf("OK: auto_allowed override cleared (using real CAN)\n");
+            printf("OK: target_state override cleared (using real CAN)\n");
         } else {
             g_dbg_control.sim_auto_active = true;
             g_dbg_control.sim_auto_value = (atoi(argv[2]) != 0);
-            printf("OK: auto_allowed forced to %s\n",
-                   g_dbg_control.sim_auto_value ? "ALLOWED" : "BLOCKED");
+            printf("OK: target_state forced to %s\n",
+                   g_dbg_control.sim_auto_value ? "ENABLING" : "READY");
         }
-    } else if (strcmp(argv[1], "orin") == 0) {
+    } else if (strcmp(argv[1], "planner") == 0) {
         if (argc >= 3 && strcmp(argv[2], "stop") == 0) {
-            g_dbg_control.sim_orin_active = false;
-            printf("OK: Orin command injection stopped\n");
+            g_dbg_control.sim_planner_active = false;
+            printf("OK: Planner command injection stopped\n");
         } else if (argc >= 5) {
             int thr_val = atoi(argv[2]);
             if (thr_val < 0) thr_val = 0;
             if (thr_val > 7) thr_val = 7;
-            g_dbg_control.sim_orin_throttle = (uint8_t)thr_val;
+            g_dbg_control.sim_planner_throttle = (uint8_t)thr_val;
             int steer_val = atoi(argv[3]);
             if (steer_val < INT16_MIN) steer_val = INT16_MIN;
             if (steer_val > INT16_MAX) steer_val = INT16_MAX;
-            g_dbg_control.sim_orin_steering = (int16_t)steer_val;
+            g_dbg_control.sim_planner_steering = (int16_t)steer_val;
             int brake_val = atoi(argv[4]);
             if (brake_val < INT16_MIN) brake_val = INT16_MIN;
             if (brake_val > INT16_MAX) brake_val = INT16_MAX;
-            g_dbg_control.sim_orin_braking  = (int16_t)brake_val;
-            g_dbg_control.sim_orin_active = true;
-            printf("OK: Injecting Orin commands: throttle=%u steering=%d braking=%d\n",
-                   g_dbg_control.sim_orin_throttle,
-                   g_dbg_control.sim_orin_steering,
-                   g_dbg_control.sim_orin_braking);
+            g_dbg_control.sim_planner_braking  = (int16_t)brake_val;
+            g_dbg_control.sim_planner_active = true;
+            printf("OK: Injecting Planner commands: throttle=%u steering=%d braking=%d\n",
+                   g_dbg_control.sim_planner_throttle,
+                   g_dbg_control.sim_planner_steering,
+                   g_dbg_control.sim_planner_braking);
         } else {
-            printf("Usage: sim orin <throttle> <steering> <braking>\n");
-            printf("       sim orin stop\n");
+            printf("Usage: sim planner <throttle> <steering> <braking>\n");
+            printf("       sim planner stop\n");
             return 1;
         }
     } else if (strcmp(argv[1], "off") == 0) {
         g_dbg_control.sim_fr_active = false;
         g_dbg_control.sim_auto_active = false;
-        g_dbg_control.sim_orin_active = false;
+        g_dbg_control.sim_planner_active = false;
         printf("OK: All simulation overrides cleared\n");
     } else {
         printf("Unknown sim target '%s'\n", argv[1]);
@@ -195,21 +195,21 @@ static int cmd_sim(int argc, char **argv) {
 static int cmd_control_status(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("\n--- Control ESP32 Status ---\n");
-    printf("State:          %s\n", control_state_to_string(g_dbg_control.control_state));
-    printf("Fault:          %s\n", control_fault_to_string(g_dbg_control.fault_code));
-    printf("Auto allowed:   %s%s\n",
-           g_dbg_control.auto_allowed ? "YES" : "NO",
+    printf("State:          %s\n", node_state_to_string(g_dbg_control.control_state));
+    printf("Fault:          %s\n", node_fault_to_string(g_dbg_control.fault_code));
+    printf("Target >= ENABLING: %s%s\n",
+           g_dbg_control.target_enabling ? "YES" : "NO",
            g_dbg_control.sim_auto_active ? " (SIMULATED)" : "");
     printf("F/R sensor:     %s%s\n",
            fr_state_name(g_dbg_control.fr_sensor),
            g_dbg_control.sim_fr_active ? " (SIMULATED)" : "");
     printf("Pedal pressed:  %s\n", g_dbg_control.pedal_pressed ? "YES" : "NO");
-    printf("Orin inject:    %s\n", g_dbg_control.sim_orin_active ? "ACTIVE" : "off");
-    if (g_dbg_control.sim_orin_active) {
+    printf("Planner inject: %s\n", g_dbg_control.sim_planner_active ? "ACTIVE" : "off");
+    if (g_dbg_control.sim_planner_active) {
         printf("  throttle=%u  steering=%d  braking=%d\n",
-               g_dbg_control.sim_orin_throttle,
-               g_dbg_control.sim_orin_steering,
-               g_dbg_control.sim_orin_braking);
+               g_dbg_control.sim_planner_throttle,
+               g_dbg_control.sim_planner_steering,
+               g_dbg_control.sim_planner_braking);
     }
     printf("\n");
     return 0;
@@ -251,14 +251,14 @@ void debug_console_init_safety(void) {
     const esp_console_cmd_t cmds[] = {
         {
             .command = "bypass",
-            .help = "Bypass heartbeat: bypass <orin|control|all>",
+            .help = "Bypass heartbeat: bypass <planner|control|all>",
             .hint = nullptr,
             .func = &cmd_bypass,
             .argtable = nullptr,
         },
         {
             .command = "unbypass",
-            .help = "Re-enable heartbeat: unbypass <orin|control|all>",
+            .help = "Re-enable heartbeat: unbypass <planner|control|all>",
             .hint = nullptr,
             .func = &cmd_unbypass,
             .argtable = nullptr,
@@ -288,7 +288,7 @@ void debug_console_init_control(void) {
     const esp_console_cmd_t cmds[] = {
         {
             .command = "sim",
-            .help = "Simulate: sim <fr|auto|orin|off> [args...]",
+            .help = "Simulate: sim <fr|auto|planner|off> [args...]",
             .hint = nullptr,
             .func = &cmd_sim,
             .argtable = nullptr,
