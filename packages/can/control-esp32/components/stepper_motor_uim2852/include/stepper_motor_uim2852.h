@@ -21,9 +21,9 @@
 extern "C" {
 #endif
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Configuration
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 typedef struct {
     uint8_t node_id;            // Motor's CAN node ID (default 5)
@@ -46,9 +46,9 @@ typedef struct {
     .request_ack = true, \
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Motor State
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 typedef struct {
     stepper_motor_uim2852_config_t config;
@@ -74,11 +74,20 @@ typedef struct {
     bool motion_in_progress;
     bool ack_pending;
     uint8_t last_cw_sent;       // Last control word sent
+
+    // Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
+    void (*notify_callback)(void *motor, const stepper_uim2852_notification_t *notif);
+
+    // Synchronous query support (used by query_param to block until response)
+    SemaphoreHandle_t query_sem;        // Binary semaphore signaled when param response arrives
+    uint8_t           query_pending_cw; // CW of the pending query (0 = none)
+    uint8_t           query_pending_idx;// Subindex of the pending query
+    int32_t           query_result;     // Value parsed from param response
 } stepper_motor_uim2852_t;
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Initialization
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Initialize motor structure with configuration
@@ -96,9 +105,9 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
  */
 esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Basic Control
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Enable motor driver (MO=1)
@@ -120,9 +129,9 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor);
  */
 esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Position Control (PTP Mode)
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Set speed for position moves
@@ -161,9 +170,9 @@ esp_err_t stepper_motor_uim2852_go_relative(stepper_motor_uim2852_t *motor, int3
  */
 esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Status Query
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Query motor status (MS[0] - flags and relative position)
@@ -182,9 +191,9 @@ esp_err_t stepper_motor_uim2852_query_position(stepper_motor_uim2852_t *motor);
  */
 esp_err_t stepper_motor_uim2852_clear_status(stepper_motor_uim2852_t *motor);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Status Accessors
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Check if motor is at target position (PAIF flag)
@@ -235,9 +244,9 @@ static inline int32_t stepper_motor_uim2852_get_speed(const stepper_motor_uim285
     return motor->current_speed;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // CAN Frame Processing
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Process incoming CAN frame from motor
@@ -247,9 +256,9 @@ static inline int32_t stepper_motor_uim2852_get_speed(const stepper_motor_uim285
  */
 bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const twai_message_t *msg);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Notification Callback
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Notification callback type
@@ -265,9 +274,9 @@ typedef void (*stepper_motor_uim2852_notify_cb_t)(stepper_motor_uim2852_t *motor
 void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor, 
                                                 stepper_motor_uim2852_notify_cb_t callback);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Low-Level Access
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 /**
  * @brief Send raw instruction to motor

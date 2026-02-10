@@ -15,12 +15,11 @@ static const char *TAG = "STEPPER_UIM2852";
 // Default timeout for CAN transmit
 static const TickType_t TX_TIMEOUT = pdMS_TO_TICKS(20);
 
-// Notification callback (per-motor, stored externally for now)
-static stepper_motor_uim2852_notify_cb_t s_notify_callback = NULL;
+// (Notification callback is now per-motor, stored in stepper_motor_uim2852_t)
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Internal Helpers
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, 
                                    const uint8_t *data, uint8_t dl) {
@@ -46,9 +45,9 @@ static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw,
     return err;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Initialization
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepper_motor_uim2852_config_t *config) {
     if (!motor) return ESP_ERR_INVALID_ARG;
@@ -64,6 +63,14 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
     motor->initialized = true;
     motor->microstep_resolution = 16;  // Assume 16 until queried
     motor->pulses_per_rev = 3200;      // 16 * 200
+    
+    // Create binary semaphore for synchronous query_param
+    motor->query_sem = xSemaphoreCreateBinary();
+    if (!motor->query_sem) {
+        ESP_LOGE(TAG, "Failed to create query semaphore");
+        return ESP_ERR_NO_MEM;
+    }
+    motor->query_pending_cw = 0;
     
     ESP_LOGI(TAG, "Motor initialized: node_id=%u, producer_id=%u", 
         motor->config.node_id, motor->config.producer_id);
@@ -106,9 +113,9 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor) {
     return err;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Basic Control
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 esp_err_t stepper_motor_uim2852_enable(stepper_motor_uim2852_t *motor) {
     uint8_t data[8];
@@ -167,9 +174,9 @@ esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
     return err;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Position Control
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 esp_err_t stepper_motor_uim2852_set_speed(stepper_motor_uim2852_t *motor, int32_t speed_pps) {
     uint8_t data[8];
@@ -249,9 +256,9 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor) {
     return err;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Status Query
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 esp_err_t stepper_motor_uim2852_query_status(stepper_motor_uim2852_t *motor) {
     uint8_t data[8];
@@ -271,9 +278,9 @@ esp_err_t stepper_motor_uim2852_clear_status(stepper_motor_uim2852_t *motor) {
     return send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // CAN Frame Processing
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const twai_message_t *msg) {
     if (!motor || !motor->initialized || !msg) return false;
@@ -350,8 +357,8 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                         ESP_LOGW(TAG, "Node %u: Alarm 0x%02X", 
                             motor->config.node_id, notif.type);
                     
-                    // Call user callback if set
-                    if (s_notify_callback) s_notify_callback(motor, &notif);
+                    // Call per-motor notification callback if set
+                    if (motor->notify_callback) motor->notify_callback(motor, &notif);
                 }
             }
             break;
@@ -380,7 +387,18 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
         case STEPPER_UIM2852_CW_IE:
         case STEPPER_UIM2852_CW_LM:
         case STEPPER_UIM2852_CW_QE:
-            // Parameter response - handled by query_param
+            // Parameter response — unblock query_param if this matches the pending query
+            if (motor->query_pending_cw == cw_base && dl >= 2 && data[0] == motor->query_pending_idx) {
+                // Parse little-endian value from data[1..dl-1] (up to 4 bytes)
+                int32_t val = 0;
+                for (uint8_t i = 1; i < dl && i <= 4; i++)
+                    val |= ((int32_t)data[i]) << (8 * (i - 1));
+                motor->query_result = val;
+                motor->query_pending_cw = 0;
+                xSemaphoreGive(motor->query_sem);
+                ESP_LOGD(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
+                    motor->config.node_id, cw_base, data[0], (long)val);
+            }
             break;
             
         default:
@@ -392,19 +410,19 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
     return true;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Notification Callback
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor, 
                                                 stepper_motor_uim2852_notify_cb_t callback) {
-    (void)motor;  // Currently global callback
-    s_notify_callback = callback;
+    if (!motor) return;
+    motor->notify_callback = (void (*)(void *, const stepper_uim2852_notification_t *))callback;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Low-Level Access
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 esp_err_t stepper_motor_uim2852_send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw,
                                                   const uint8_t *data, uint8_t dl) {
@@ -415,18 +433,32 @@ esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint
                                              uint8_t index, int32_t *value) {
     if (!motor || !motor->initialized) return ESP_ERR_INVALID_STATE;
     
+    // Drain any stale signal from a previous query
+    xSemaphoreTake(motor->query_sem, 0);
+    
+    // Record what we are waiting for so process_frame can match the response
+    motor->query_result = 0;
+    motor->query_pending_idx = index;
+    motor->query_pending_cw  = stepper_uim2852_cw_base(cw); // store base CW for matching
+    
     uint8_t data[8] = {0};
     data[0] = index;
     
     esp_err_t err = send_instruction(motor, cw, data, 1);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK) {
+        motor->query_pending_cw = 0;
+        return err;
+    }
     
-    // Note: Response will be processed asynchronously via process_frame
-    // For synchronous operation, caller should wait and check motor state
-    // This is a simplified implementation
+    // Block until process_frame signals the semaphore or we time out (500 ms)
+    if (xSemaphoreTake(motor->query_sem, pdMS_TO_TICKS(500)) != pdTRUE) {
+        motor->query_pending_cw = 0;
+        ESP_LOGW(TAG, "Node %u: query_param CW=0x%02X[%u] timed out",
+            motor->config.node_id, cw, index);
+        return ESP_ERR_TIMEOUT;
+    }
     
-    if (value) *value = 0;  // Caller should wait for response and re-check
-    
+    if (value) *value = motor->query_result;
     return ESP_OK;
 }
 

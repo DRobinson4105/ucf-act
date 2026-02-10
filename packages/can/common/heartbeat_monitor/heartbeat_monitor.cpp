@@ -1,3 +1,8 @@
+/**
+ * @file heartbeat_monitor.cpp
+ * @brief Heartbeat monitor implementation with thread-safe timeout tracking.
+ */
+
 #include "heartbeat_monitor.hh"
 
 #include <string.h>
@@ -6,9 +11,9 @@
 #include "esp_log.h"
 #include "freertos/portmacro.h"
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_config_t *config) {
     if (!mon || !config || !config->name) return;
@@ -21,9 +26,9 @@ void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_co
     ESP_LOGI(mon->tag, "Heartbeat monitor initialized");
 }
 
-// =============================================================================
+// ============================================================================
 // Node Registration
-// =============================================================================
+// ============================================================================
 
 // Register a CAN node to monitor - returns node_id for future reference
 int heartbeat_monitor_register(heartbeat_monitor_t *mon,
@@ -46,9 +51,9 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon,
     return node_id;
 }
 
-// =============================================================================
+// ============================================================================
 // Runtime Updates
-// =============================================================================
+// ============================================================================
 
 // Call when heartbeat CAN frame received - updates timestamp and marks node alive
 void heartbeat_monitor_update(heartbeat_monitor_t *mon,
@@ -100,10 +105,13 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
         if (mon->nodes[i].last_seen > 0 && elapsed > mon->nodes[i].timeout_ticks) {
             mon->nodes[i].alive = false;
             if (was_alive) {
-                const char *name = mon->nodes[i].name;
+                // Buffer log data inside critical section to avoid TOCTOU
+                char log_name[16];
+                strncpy(log_name, mon->nodes[i].name, sizeof(log_name) - 1);
+                log_name[sizeof(log_name) - 1] = '\0';
+                unsigned long elapsed_ms = (unsigned long)(elapsed * portTICK_PERIOD_MS);
                 taskEXIT_CRITICAL(&mon->lock);
-                ESP_LOGW(mon->tag, "%s lost (no response for %lu ms)",
-                         name, (unsigned long)(elapsed * portTICK_PERIOD_MS));
+                ESP_LOGW(mon->tag, "%s lost (no response for %lu ms)", log_name, elapsed_ms);
                 taskENTER_CRITICAL(&mon->lock);
             }
         }
@@ -111,9 +119,9 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
     taskEXIT_CRITICAL(&mon->lock);
 }
 
-// =============================================================================
+// ============================================================================
 // Status Queries
-// =============================================================================
+// ============================================================================
 
 bool heartbeat_monitor_is_alive(heartbeat_monitor_t *mon, int node_id) {
     if (!mon || node_id < 0 || node_id >= mon->node_count) return false;
@@ -168,9 +176,9 @@ uint8_t heartbeat_monitor_get_timeout_mask(heartbeat_monitor_t *mon) {
     return mask;
 }
 
-// =============================================================================
+// ============================================================================
 // Debugging
-// =============================================================================
+// ============================================================================
 
 void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
     if (!mon) return;
@@ -185,22 +193,25 @@ void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
     for (int i = 0; i < mon->node_count; i++) {
         if (!mon->nodes[i].active) continue;
 
-        const char *name = mon->nodes[i].name;
+        // Buffer node data inside critical section to avoid TOCTOU
+        char log_name[16];
+        strncpy(log_name, mon->nodes[i].name, sizeof(log_name) - 1);
+        log_name[sizeof(log_name) - 1] = '\0';
         bool alive = mon->nodes[i].alive;
         TickType_t last_seen = mon->nodes[i].last_seen;
 
         taskEXIT_CRITICAL(&mon->lock);
 
         if (alive) {
-            ESP_LOGI(mon->tag, "  [OK]  %s", name);
+            ESP_LOGI(mon->tag, "  [OK]  %s", log_name);
             alive_count++;
         } else if (last_seen == 0) {
-            ESP_LOGW(mon->tag, "  [--]  %s (never seen)", name);
+            ESP_LOGW(mon->tag, "  [--]  %s (never seen)", log_name);
             never_seen_count++;
         } else {
             TickType_t elapsed = xTaskGetTickCount() - last_seen;
             ESP_LOGW(mon->tag, "  [!!]  %s (dead, last seen %lu ms ago)",
-                     name, (unsigned long)(elapsed * portTICK_PERIOD_MS));
+                     log_name, (unsigned long)(elapsed * portTICK_PERIOD_MS));
             dead_count++;
         }
 

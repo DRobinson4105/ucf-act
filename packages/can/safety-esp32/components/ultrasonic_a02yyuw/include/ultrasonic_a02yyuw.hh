@@ -1,3 +1,7 @@
+/**
+ * @file ultrasonic_a02yyuw.hh
+ * @brief A02YYUW ultrasonic distance sensor driver interface.
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -10,9 +14,9 @@
 extern "C" {
 #endif
 
-// =============================================================================
+// ============================================================================
 // Ultrasonic Distance Sensor Driver (A02YYUW)
-// =============================================================================
+// ============================================================================
 // Reads distance measurements from the A02YYUW waterproof ultrasonic sensor.
 //
 // Hardware:
@@ -32,11 +36,11 @@ extern "C" {
 //   - Used for obstacle detection during autonomous operation
 //   - If object detected closer than threshold, e-stop triggered
 //   - Timeout/no-data condition should be treated as fault
-// =============================================================================
+// ============================================================================
 
-// =============================================================================
+// ============================================================================
 // Configuration
-// =============================================================================
+// ============================================================================
 
 // ultrasonic_a02yyuw_config_t - UART interface configuration
 //   uart_num:  UART peripheral number (UART_NUM_0, UART_NUM_1, etc.)
@@ -50,16 +54,16 @@ typedef struct {
     int baud_rate;
 } ultrasonic_a02yyuw_config_t;
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 // Initialize UART for ultrasonic sensor communication
 esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config);
 
-// =============================================================================
+// ============================================================================
 // Distance Reading
-// =============================================================================
+// ============================================================================
 
 // Get latest distance measurement in millimeters
 // Returns true if a fresh sample is available, false if no new data
@@ -71,9 +75,9 @@ bool ultrasonic_a02yyuw_get_distance_mm(uint16_t *out_distance_mm);
 // out_distance_mm: optional pointer to store actual distance (can be NULL)
 bool ultrasonic_a02yyuw_is_too_close(uint16_t threshold_mm, uint16_t *out_distance_mm);
 
-// =============================================================================
+// ============================================================================
 // Health Check
-// =============================================================================
+// ============================================================================
 
 // Check if sensor is healthy (has received valid data recently)
 // Returns true if sensor has reported data within the last 500ms

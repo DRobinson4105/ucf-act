@@ -1,3 +1,7 @@
+/**
+ * @file heartbeat.cpp
+ * @brief WS2812 LED heartbeat indicator implementation.
+ */
 #include "heartbeat.hh"
 
 #include "freertos/FreeRTOS.h"
@@ -8,9 +12,9 @@ namespace {
 
 static const char *TAG = "HB_LED";
 
-// =============================================================================
+// ============================================================================
 // Module State
-// =============================================================================
+// ============================================================================
 
 static bool s_initialized = false;
 static bool s_led_on = false;
@@ -24,9 +28,9 @@ static uint8_t s_idle_red = 0, s_idle_green = 0, s_idle_blue = 0;
 static uint8_t s_activity_red = 0, s_activity_green = 0, s_activity_blue = 0;
 static uint8_t s_error_red = 0, s_error_green = 0, s_error_blue = 0;
 
-// =============================================================================
+// ============================================================================
 // WS2812 RMT Driver
-// =============================================================================
+// ============================================================================
 
 static rmt_channel_handle_t s_rmt_channel = nullptr;
 static rmt_encoder_handle_t s_rmt_encoder = nullptr;
@@ -38,9 +42,9 @@ constexpr uint16_t WS2812_T0L = 8;   // 0.8us low for '0' bit
 constexpr uint16_t WS2812_T1H = 7;   // 0.7us high for '1' bit
 constexpr uint16_t WS2812_T1L = 6;   // 0.6us low for '1' bit
 
-// =============================================================================
+// ============================================================================
 // WS2812 Internal Functions
-// =============================================================================
+// ============================================================================
 
 // Initialize RMT peripheral for WS2812 single-wire protocol
 static esp_err_t ws2812_init(gpio_num_t gpio) {
@@ -94,9 +98,9 @@ static esp_err_t ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue) {
 
 }  // namespace
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t heartbeat_init(const heartbeat_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -132,9 +136,9 @@ esp_err_t heartbeat_init(const heartbeat_config_t *config) {
     return ESP_OK;
 }
 
-// =============================================================================
+// ============================================================================
 // Runtime Control
-// =============================================================================
+// ============================================================================
 
 void heartbeat_tick(const heartbeat_config_t *config, TickType_t now_ticks) {
     if (!config || !s_initialized) return;

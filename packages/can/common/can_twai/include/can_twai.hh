@@ -1,3 +1,7 @@
+/**
+ * @file can_twai.hh
+ * @brief CAN bus TWAI driver wrapper for ESP-IDF.
+ */
 #pragma once
 
 #include <stdint.h>
@@ -10,9 +14,9 @@
 extern "C" {
 #endif
 
-// =============================================================================
+// ============================================================================
 // CAN TWAI Driver Wrapper
-// =============================================================================
+// ============================================================================
 // Wrapper around ESP-IDF TWAI driver for CAN bus communication.
 // Supports both standard 11-bit and extended 29-bit CAN frames.
 //
@@ -20,18 +24,18 @@ extern "C" {
 //   - Bit rate: 1 Mbps
 //   - Filter: Accept all messages
 //   - Mode: Normal (TX and RX enabled)
-// =============================================================================
+// ============================================================================
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 // Initialize TWAI peripheral with 1 Mbps timing and accept-all filter
 esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio);
 
-// =============================================================================
+// ============================================================================
 // Transmit Functions
-// =============================================================================
+// ============================================================================
 
 // Transmit standard 11-bit CAN frame with 8-byte payload
 // Returns ESP_OK on success, ESP_ERR_TIMEOUT if TX queue full
@@ -41,9 +45,9 @@ esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t t
 // Used for UIM2852CA motor protocol (SimpleCAN)
 esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8_t dlc, TickType_t timeout);
 
-// =============================================================================
+// ============================================================================
 // Receive Functions
-// =============================================================================
+// ============================================================================
 
 // Receive next CAN frame with timeout
 // Returns ESP_OK if frame received, ESP_ERR_TIMEOUT if no frame available

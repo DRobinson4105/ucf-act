@@ -1,3 +1,7 @@
+/**
+ * @file throttle_mux.cpp
+ * @brief DG408 analog multiplexer throttle control implementation.
+ */
 #include "throttle_mux.hh"
 
 #include "freertos/FreeRTOS.h"
@@ -9,17 +13,17 @@ namespace {
 
 static const char *TAG = "THROTTLE_MUX";
 
-// =============================================================================
+// ============================================================================
 // Timing Constants
-// =============================================================================
+// ============================================================================
 
 constexpr uint32_t ADDRESS_SETTLE_US = 10;      // Wait for address lines before enabling mux
 constexpr uint32_t RELAY_SETTLE_MS = 50;        // Relay contact bounce/settle time
 constexpr uint32_t THROTTLE_REGISTER_MS = 100;  // Time for Curtis controller to see low throttle
 
-// =============================================================================
+// ============================================================================
 // Module State
-// =============================================================================
+// ============================================================================
 
 static throttle_mux_config_t s_config = {};
 static bool s_initialized = false;
@@ -28,9 +32,9 @@ static bool s_autonomous = false;    // true = relay energized (mux output to Cu
 
 }  // namespace
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t throttle_mux_init(const throttle_mux_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -70,9 +74,9 @@ esp_err_t throttle_mux_init(const throttle_mux_config_t *config) {
     return ESP_OK;
 }
 
-// =============================================================================
+// ============================================================================
 // Level Control
-// =============================================================================
+// ============================================================================
 
 // Set throttle level 0-7, or <0 to disable mux output
 void throttle_mux_set_level(int8_t level) {
@@ -114,9 +118,9 @@ int8_t throttle_mux_get_level(void) {
     return s_current_level;
 }
 
-// =============================================================================
+// ============================================================================
 // Autonomous Mode Control
-// =============================================================================
+// ============================================================================
 
 // Enable autonomous throttle control
 // Sequence: set level 0 -> energize relay -> wait for settle

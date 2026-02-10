@@ -1,3 +1,7 @@
+/**
+ * @file enable_relay.cpp
+ * @brief MOSFET-driven relay control implementation.
+ */
 #include "enable_relay.hh"
 
 #include "esp_log.h"
@@ -6,9 +10,9 @@ namespace {
 
 static const char *TAG = "ENABLE_RELAY";
 
-// =============================================================================
+// ============================================================================
 // Module State
-// =============================================================================
+// ============================================================================
 
 static enable_relay_config_t s_config = {};
 static bool s_initialized = false;
@@ -16,9 +20,9 @@ static bool s_energized = false;
 
 }  // namespace
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t enable_relay_init(const enable_relay_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -51,9 +55,9 @@ esp_err_t enable_relay_init(const enable_relay_config_t *config) {
     return ESP_OK;
 }
 
-// =============================================================================
+// ============================================================================
 // Relay Control
-// =============================================================================
+// ============================================================================
 
 // Energize relay to bypass pedal microswitch (for autonomous mode)
 void enable_relay_energize(void) {

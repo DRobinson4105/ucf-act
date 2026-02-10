@@ -1,8 +1,12 @@
+/**
+ * @file push_button_hb2es544.cpp
+ * @brief HB2-ES544 mushroom push-button e-stop input implementation.
+ */
 #include "push_button_hb2es544.hh"
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -18,9 +22,9 @@ esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config)
     return gpio_config(&io_conf);
 }
 
-// =============================================================================
+// ============================================================================
 // State Reading
-// =============================================================================
+// ============================================================================
 
 // Returns true when e-stop is active (mushroom button pressed)
 bool push_button_hb2es544_read_active(const push_button_hb2es544_config_t *config) {

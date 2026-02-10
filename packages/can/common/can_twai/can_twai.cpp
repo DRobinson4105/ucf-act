@@ -1,8 +1,12 @@
+/**
+ * @file can_twai.cpp
+ * @brief CAN bus TWAI driver wrapper implementation.
+ */
 #include "can_twai.hh"
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 // Configure TWAI peripheral: 1 Mbps, normal mode, accept all frames
 esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio) {
@@ -16,9 +20,9 @@ esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio) {
     return twai_start();
 }
 
-// =============================================================================
+// ============================================================================
 // Transmit
-// =============================================================================
+// ============================================================================
 
 // Send standard 11-bit CAN frame with fixed 8-byte payload
 esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t timeout) {
@@ -52,9 +56,9 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
     return twai_transmit(&msg, timeout);
 }
 
-// =============================================================================
+// ============================================================================
 // Receive
-// =============================================================================
+// ============================================================================
 
 // Receive next CAN frame (blocking with timeout)
 esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout) {

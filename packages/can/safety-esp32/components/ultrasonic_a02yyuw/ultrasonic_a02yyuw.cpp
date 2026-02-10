@@ -1,3 +1,8 @@
+/**
+ * @file ultrasonic_a02yyuw.cpp
+ * @brief A02YYUW ultrasonic distance sensor driver over UART.
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -12,9 +17,9 @@ namespace {
 
 static const char *TAG = "ULTRASONIC_A02YYUW";
 
-// =============================================================================
+// ============================================================================
 // Configuration
-// =============================================================================
+// ============================================================================
 
 constexpr int RX_TASK_STACK = 4096;
 constexpr UBaseType_t RX_TASK_PRIO = 10;
@@ -22,18 +27,22 @@ constexpr int UART_BUFFER_SIZE = 256;
 constexpr TickType_t UART_READ_TIMEOUT = pdMS_TO_TICKS(100);
 constexpr TickType_t MAX_SAMPLE_AGE = pdMS_TO_TICKS(200);  // Reject stale readings
 
-// =============================================================================
+// ============================================================================
 // Module State
-// =============================================================================
+// ============================================================================
 
 static portMUX_TYPE s_ultrasonic_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint16_t s_last_distance_mm = 0;
 static TickType_t s_last_update_tick = 0;
 static bool s_has_measurement = false;
 
-// =============================================================================
+// Internal copy of config - ensures background task always has a valid pointer
+// regardless of how the caller allocated the original config struct
+static ultrasonic_a02yyuw_config_t s_config = {};
+
+// ============================================================================
 // Stream Parser
-// =============================================================================
+// ============================================================================
 
 // Parse A02YYUW UART protocol: [0xFF] [HIGH] [LOW] [CHECKSUM]
 // Checksum = (0xFF + HIGH + LOW) & 0xFF
@@ -76,9 +85,9 @@ static void ultrasonic_a02yyuw_update_distance(uint16_t distance_mm) {
     taskEXIT_CRITICAL(&s_ultrasonic_lock);
 }
 
-// =============================================================================
+// ============================================================================
 // UART RX Task
-// =============================================================================
+// ============================================================================
 
 // Background task continuously reads UART and updates distance
 static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
@@ -139,9 +148,9 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
 
 }  // namespace
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -175,16 +184,19 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
                        UART_PIN_NO_CHANGE);
     if (err != ESP_OK) return err;
 
-    // Start background task to continuously read sensor
-    xTaskCreate(ultrasonic_a02yyuw_uart_rx_task, "ultrasonic_a02yyuw_rx", RX_TASK_STACK, (void *)config, RX_TASK_PRIO, nullptr);
+    // Copy config internally so background task has a stable pointer
+    s_config = *config;
+
+    // Start background task to continuously read sensor (uses internal config copy)
+    xTaskCreate(ultrasonic_a02yyuw_uart_rx_task, "ultrasonic_a02yyuw_rx", RX_TASK_STACK, (void *)&s_config, RX_TASK_PRIO, nullptr);
     
     ESP_LOGI(TAG, "Initialization complete - waiting for sensor data");
     return ESP_OK;
 }
 
-// =============================================================================
+// ============================================================================
 // Distance Reading
-// =============================================================================
+// ============================================================================
 
 // Get latest distance if fresh (within MAX_SAMPLE_AGE)
 bool ultrasonic_a02yyuw_get_distance_mm(uint16_t *out_distance_mm) {
@@ -211,9 +223,9 @@ bool ultrasonic_a02yyuw_is_too_close(uint16_t threshold_mm, uint16_t *out_distan
     return distance_mm <= threshold_mm;
 }
 
-// =============================================================================
+// ============================================================================
 // Health Check
-// =============================================================================
+// ============================================================================
 
 // Sensor health timeout - if no data for this long, sensor is considered unhealthy
 constexpr TickType_t SENSOR_HEALTH_TIMEOUT = pdMS_TO_TICKS(500);

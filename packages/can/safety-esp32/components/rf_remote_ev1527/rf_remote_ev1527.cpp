@@ -1,8 +1,12 @@
+/**
+ * @file rf_remote_ev1527.cpp
+ * @brief EV1527 RF remote e-stop input implementation.
+ */
 #include "rf_remote_ev1527.hh"
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -18,9 +22,9 @@ esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
     return gpio_config(&io_conf);
 }
 
-// =============================================================================
+// ============================================================================
 // State Reading
-// =============================================================================
+// ============================================================================
 
 // Returns true when remote e-stop button is pressed
 bool rf_remote_ev1527_is_active(const rf_remote_ev1527_config_t *config) {

@@ -9,6 +9,17 @@ CAN bus communication system for the autonomous golf cart, consisting of two ESP
 | Frame layouts, state codes, flags | [common/can_protocol/README.md](common/can_protocol/README.md) |
 | Control ESP32 messages, pins, components | [control-esp32/README.md](control-esp32/README.md) |
 | Safety ESP32 messages, autonomy allowed reasons, pins, components | [safety-esp32/README.md](safety-esp32/README.md) |
+| Host-native unit tests | [tests/README.md](tests/README.md) |
+
+## Testing
+
+Host-native unit tests for the protocol libraries (no ESP-IDF required):
+
+```bash
+make -C tests
+```
+
+See [tests/README.md](tests/README.md) for details.
 
 ## Building
 

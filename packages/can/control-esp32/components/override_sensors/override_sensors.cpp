@@ -1,3 +1,7 @@
+/**
+ * @file override_sensors.cpp
+ * @brief Human override sensor implementation with debouncing and re-arm logic.
+ */
 #include "override_sensors.hh"
 
 #include "esp_log.h"
@@ -8,9 +12,9 @@ namespace {
 
 static const char *TAG = "OVERRIDE_SENSORS";
 
-// =============================================================================
+// ============================================================================
 // Module State
-// =============================================================================
+// ============================================================================
 
 static override_sensors_config_t s_config = {};
 static bool s_initialized = false;
@@ -30,9 +34,9 @@ static bool s_fr_debouncing = false;
 static uint32_t s_pedal_below_threshold_since = 0;
 static bool s_pedal_was_above = false;
 
-// =============================================================================
+// ============================================================================
 // Internal Helpers - F/R Switch Reading
-// =============================================================================
+// ============================================================================
 
 // Read raw F/R state from optocouplers (no debounce)
 // Optocoupler logic: switch closed -> LED on -> phototransistor conducts -> GPIO LOW
@@ -52,9 +56,9 @@ static fr_state_t read_fr_raw() {
     else return FR_STATE_INVALID;
 }
 
-// =============================================================================
+// ============================================================================
 // Internal Helpers - Pedal ADC
-// =============================================================================
+// ============================================================================
 
 // Read pedal voltage via ADC, return millivolts
 static uint16_t read_pedal_adc_mv() {
@@ -79,9 +83,9 @@ static uint16_t read_pedal_adc_mv() {
 
 }  // namespace
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 esp_err_t override_sensors_init(const override_sensors_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
@@ -169,9 +173,9 @@ esp_err_t override_sensors_init(const override_sensors_config_t *config) {
     return ESP_OK;
 }
 
-// =============================================================================
+// ============================================================================
 // Pedal Detection
-// =============================================================================
+// ============================================================================
 
 // Immediate pedal check - true if voltage above threshold (pressed)
 bool override_sensors_pedal_pressed(void) {
@@ -195,9 +199,9 @@ uint16_t override_sensors_get_pedal_mv(void) {
     return read_pedal_adc_mv();
 }
 
-// =============================================================================
+// ============================================================================
 // F/R Switch Detection
-// =============================================================================
+// ============================================================================
 
 fr_state_t override_sensors_get_fr_state(void) {
     if (!s_initialized) return FR_STATE_NEUTRAL;
@@ -209,9 +213,9 @@ fr_state_t override_sensors_get_fr_state_raw(void) {
     return read_fr_raw();
 }
 
-// =============================================================================
+// ============================================================================
 // Runtime Update
-// =============================================================================
+// ============================================================================
 
 // Call every 10-20ms to update debounce and re-arm state
 void override_sensors_update(uint32_t now_ms) {
@@ -268,9 +272,9 @@ void override_sensors_update(uint32_t now_ms) {
     }
 }
 
-// =============================================================================
+// ============================================================================
 // Status Flags
-// =============================================================================
+// ============================================================================
 
 // Get raw sensor flags for CAN status message
 uint8_t override_sensors_get_flags(void) {

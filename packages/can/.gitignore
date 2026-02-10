@@ -1,3 +1,10 @@
 build/
 sdkconfig
 sdkconfig.old
+
+# Compiled test binaries
+tests/test_stepper_protocol
+tests/test_can_protocol
+tests/test_motor_component
+tests/test_safety_logic
+tests/test_control_logic

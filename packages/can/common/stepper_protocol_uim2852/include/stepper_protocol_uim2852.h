@@ -1,3 +1,7 @@
+/**
+ * @file stepper_protocol_uim2852.h
+ * @brief UIM2852 stepper motor SimpleCAN protocol frame encoding and parsing.
+ */
 #pragma once
 
 #include <stdint.h>
@@ -7,9 +11,9 @@
 extern "C" {
 #endif
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // CAN ID Encoding (Extended 29-bit CAN 2.0B) for UIM2852CA Stepper Motor
-// ----------------------------------------------------------------------------
+// ============================================================================
 // For instructions (Host -> Motor):
 //   SID = ((ConsumerID << 1) & 0x003F) | 0x0100
 //   EID = (((ConsumerID << 1) & 0x00C0) << 8) | CW
@@ -18,7 +22,7 @@ extern "C" {
 // For responses (Motor -> Host):
 //   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 6) & 0x001F)
 //   CW = EID & 0x00FF
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 #define STEPPER_UIM2852_PRODUCER_ID_HOST    4   // Master controller ID
 
@@ -42,9 +46,9 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
     return true;
 }
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Control Word (CW) Constants - Instruction Mnemonics
-// ----------------------------------------------------------------------------
+// ============================================================================
 // bit7 of CW: 0 = no ACK requested, 1 = ACK requested
 // For instructions, add 0x80 to request acknowledgment
 
@@ -100,9 +104,9 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 // High-speed functions
 #define STEPPER_UIM2852_CW_D1               0xD1    // High-speed reciprocating / fixed-angle pulse
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Parameter Indices
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 // PP[i] - System parameters
 #define STEPPER_UIM2852_PP_MICROSTEP        5       // Microstepping resolution
@@ -141,9 +145,9 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 // MT[i] - Brake control
 #define STEPPER_UIM2852_MT_BRAKE            5       // 0=release, 1=engage
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Notification Types (d0 values when CW=0x5A)
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 typedef enum {
     // Alarm notifications (d0=0x00, d1=alarm code)
@@ -168,9 +172,9 @@ typedef enum {
     STEPPER_UIM2852_STATUS_PTP_COMPLETE     = 0x29,
 } stepper_uim2852_notification_type_t;
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Error Codes (from ER instruction response)
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 typedef enum {
     STEPPER_UIM2852_ERR_SYNTAX              = 0x32, // Instruction syntax error
@@ -183,9 +187,9 @@ typedef enum {
     STEPPER_UIM2852_ERR_OG_WHILE_RUNNING    = 0x41, // OG not allowed while running
 } stepper_uim2852_error_code_t;
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Status Structures
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 // MS[0] response - Status flags and relative position
 typedef struct {
@@ -224,9 +228,9 @@ typedef struct {
     uint8_t subindex;       // Sub-index of the CW
 } stepper_uim2852_error_t;
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Frame Building Functions
-// ----------------------------------------------------------------------------
+// ============================================================================
 // All functions return the data length (DL) to use
 // The 'data' array should be at least 8 bytes
 
@@ -295,9 +299,9 @@ uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, int32_t value
 // Brake control: MT[5] = value (0=release, 1=engage)
 uint8_t stepper_uim2852_build_brake(uint8_t *data, bool engage);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Response Parsing Functions
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 // Parse MS[0] response (status flags + relative position)
 bool stepper_uim2852_parse_ms0(const uint8_t *data, uint8_t dl, stepper_uim2852_status_t *status);
@@ -314,9 +318,9 @@ bool stepper_uim2852_parse_error(const uint8_t *data, uint8_t dl, stepper_uim285
 // Parse parameter query response (PP, IC, IE, LM, QE)
 bool stepper_uim2852_parse_param_response(const uint8_t *data, uint8_t dl, uint8_t *index, int32_t *value);
 
-// ----------------------------------------------------------------------------
+// ============================================================================
 // Utility Functions
-// ----------------------------------------------------------------------------
+// ============================================================================
 
 // Get CW with ACK bit set
 static inline uint8_t stepper_uim2852_cw_with_ack(uint8_t cw) {

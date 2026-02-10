@@ -1,3 +1,7 @@
+/**
+ * @file enable_relay.hh
+ * @brief MOSFET-driven relay control for autonomous actuator enable circuit.
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -9,9 +13,9 @@
 extern "C" {
 #endif
 
-// =============================================================================
+// ============================================================================
 // Pedal Enable Relay Driver
-// =============================================================================
+// ============================================================================
 // Controls a relay that bypasses the accelerator pedal microswitch.
 //
 // Hardware:
@@ -25,11 +29,11 @@ extern "C" {
 //   - Default state is de-energized (manual pedal control)
 //   - Should only be energized when autonomous mode is active
 //   - Must de-energize on any fault or override condition
-// =============================================================================
+// ============================================================================
 
-// =============================================================================
+// ============================================================================
 // Configuration
-// =============================================================================
+// ============================================================================
 
 // enable_relay_config_t - relay control pin configuration
 //   gpio:        GPIO pin controlling relay coil
@@ -39,16 +43,16 @@ typedef struct {
     bool active_high;
 } enable_relay_config_t;
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 // Initialize GPIO and set relay to de-energized state (safe default)
 esp_err_t enable_relay_init(const enable_relay_config_t *config);
 
-// =============================================================================
+// ============================================================================
 // Relay Control
-// =============================================================================
+// ============================================================================
 
 // Energize relay - bypasses pedal microswitch (for autonomous mode)
 void enable_relay_energize(void);

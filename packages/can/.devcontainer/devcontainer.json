@@ -1,12 +1,8 @@
 {
     "name": "ESP32 ESP-IDF Dev",
-    "build": {
-        "dockerfile": "Dockerfile",
-        "args": {
-            "DOCKER_TAG": "v5.5"
-        }
-    },
-    "runArgs": ["--privileged"],
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "dev",
+    "workspaceFolder": "/workspaces/can",
     "customizations": {
         "vscode": {
             "settings": {
@@ -22,9 +18,5 @@
                 "ms-vscode.cmake-tools"
             ]
         }
-    },
-    "workspaceFolder": "/workspaces/esp32",
-    "mounts": [
-        "source=${localWorkspaceFolder},target=/workspaces/esp32,type=bind"
-    ]
+    }
 }

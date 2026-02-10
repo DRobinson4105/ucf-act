@@ -1,3 +1,8 @@
+/**
+ * @file can_protocol.hh
+ * @brief Shared CAN bus protocol definitions for Safety ESP32, Control ESP32, and Jetson Orin.
+ */
+
 #pragma once
 
 #include <stdint.h>
@@ -7,9 +12,9 @@
 extern "C" {
 #endif
 
-// =============================================================================
+// ============================================================================
 // CAN Message ID Allocation
-// =============================================================================
+// ============================================================================
 
 // Safety ESP32 (0x100-0x10F)
 #define CAN_ID_SAFETY_AUTO_ALLOWED   0x101   // Autonomy allowed broadcast
@@ -29,16 +34,16 @@ extern "C" {
 #define UIM2852_NODE_BRAKING         6   // Braking motor node ID
 #define UIM2852_GLOBAL_ID            0   // Broadcast to all motors
 
-// =============================================================================
+// ============================================================================
 // Timing Constants
-// =============================================================================
+// ============================================================================
 
 #define HEARTBEAT_INTERVAL_MS        100
 #define HEARTBEAT_TIMEOUT_MS         500
 
-// =============================================================================
+// ============================================================================
 // Safety ESP32 Messages
-// =============================================================================
+// ============================================================================
 
 // Safety auto allowed frame layout:
 // byte 0: allowed (1=autonomy allowed, 0=blocked)
@@ -64,9 +69,9 @@ typedef struct {
 #define ESTOP_REASON_CONTROL_TIMEOUT 0x06
 #define ESTOP_REASON_CONTROL_ERROR   0x07
 
-// =============================================================================
+// ============================================================================
 // Orin Messages
-// =============================================================================
+// ============================================================================
 
 // Orin heartbeat frame layout:
 // byte 0: sequence counter (0-255, wraps)
@@ -97,9 +102,9 @@ typedef struct {
     uint8_t sequence;
 } orin_command_t;
 
-// =============================================================================
+// ============================================================================
 // Control ESP32 Messages
-// =============================================================================
+// ============================================================================
 
 // Control heartbeat frame layout:
 // byte 0: sequence counter
@@ -124,6 +129,7 @@ typedef struct {
 #define CONTROL_FAULT_CAN_TX         0x02
 #define CONTROL_FAULT_MOTOR_COMM     0x03
 #define CONTROL_FAULT_SENSOR_INVALID 0x04
+#define CONTROL_FAULT_RELAY_INIT     0x05
 
 // Control status frame layout:
 // byte 0: throttle level (0-7, or 0xFF if disabled)
@@ -157,9 +163,9 @@ typedef struct {
 #define SENSOR_FLAG_ENABLE_RELAY     0x08
 #define SENSOR_FLAG_THROTTLE_RELAY   0x10
 
-// =============================================================================
+// ============================================================================
 // Helper Functions
-// =============================================================================
+// ============================================================================
 
 // Pack/unpack unsigned little-endian (least significant units first) values
 static inline void can_pack_le16(uint8_t *buf, uint16_t value) {
@@ -213,6 +219,57 @@ static inline void can_decode_safety_auto_allowed(const uint8_t *data, safety_au
     msg->allowed = data[0];
     msg->block_reason = data[1];
     msg->estop_reason = data[2];
+}
+
+// ============================================================================
+// Debug String Helpers
+// ============================================================================
+
+static inline const char* estop_reason_to_string(uint8_t reason) {
+    switch (reason) {
+        case ESTOP_REASON_NONE:            return "none";
+        case ESTOP_REASON_MUSHROOM:        return "push_button";
+        case ESTOP_REASON_REMOTE:          return "rf_remote";
+        case ESTOP_REASON_ULTRASONIC:      return "ultrasonic";
+        case ESTOP_REASON_ORIN_ERROR:      return "orin_error";
+        case ESTOP_REASON_ORIN_TIMEOUT:    return "orin_timeout";
+        case ESTOP_REASON_CONTROL_TIMEOUT: return "control_timeout";
+        case ESTOP_REASON_CONTROL_ERROR:   return "control_error";
+        default:                           return "unknown";
+    }
+}
+
+static inline const char* control_state_to_string(uint8_t state) {
+    switch (state) {
+        case CONTROL_STATE_INIT:     return "INIT";
+        case CONTROL_STATE_READY:    return "READY";
+        case CONTROL_STATE_ENABLING: return "ENABLING";
+        case CONTROL_STATE_ACTIVE:   return "ACTIVE";
+        case CONTROL_STATE_OVERRIDE: return "OVERRIDE";
+        case CONTROL_STATE_FAULT:    return "FAULT";
+        default:                     return "UNKNOWN";
+    }
+}
+
+static inline const char* override_reason_to_string(uint8_t reason) {
+    switch (reason) {
+        case OVERRIDE_REASON_NONE:       return "none";
+        case OVERRIDE_REASON_PEDAL:      return "pedal";
+        case OVERRIDE_REASON_FR_CHANGED: return "fr_changed";
+        default:                         return "unknown";
+    }
+}
+
+static inline const char* control_fault_to_string(uint8_t fault) {
+    switch (fault) {
+        case CONTROL_FAULT_NONE:           return "none";
+        case CONTROL_FAULT_THROTTLE_INIT:  return "throttle_init";
+        case CONTROL_FAULT_CAN_TX:         return "can_tx";
+        case CONTROL_FAULT_MOTOR_COMM:     return "motor_comm";
+        case CONTROL_FAULT_SENSOR_INVALID: return "sensor_invalid";
+        case CONTROL_FAULT_RELAY_INIT:     return "relay_init";
+        default:                           return "unknown";
+    }
 }
 
 #ifdef __cplusplus

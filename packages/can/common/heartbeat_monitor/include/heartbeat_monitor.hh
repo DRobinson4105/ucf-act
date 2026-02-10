@@ -1,3 +1,7 @@
+/**
+ * @file heartbeat_monitor.hh
+ * @brief Multi-node heartbeat timeout monitor with thread-safe access.
+ */
 #pragma once
 
 #include <stdbool.h>
@@ -10,9 +14,9 @@
 extern "C" {
 #endif
 
-// =============================================================================
+// ============================================================================
 // Heartbeat Monitor
-// =============================================================================
+// ============================================================================
 // Allows Safety ESP32 to track liveness of CAN nodes by monitoring their heartbeat
 // messages. Each node sends periodic heartbeats with sequence number and state.
 // If a node's heartbeat is not received within its timeout, it's marked dead.
@@ -23,18 +27,18 @@ extern "C" {
 //   3. Call heartbeat_monitor_update() when heartbeat CAN frame received
 //   4. Call heartbeat_monitor_check_timeouts() periodically
 //   5. Query status with heartbeat_monitor_is_alive() or _all_alive()
-// =============================================================================
+// ============================================================================
 
-// =============================================================================
+// ============================================================================
 // Constants
-// =============================================================================
+// ============================================================================
 
 #define HEARTBEAT_MONITOR_MAX_NODES   8    // Maximum nodes per monitor
 #define HEARTBEAT_MONITOR_TAG_MAX_LEN 32   // Maximum length of monitor tag
 
-// =============================================================================
+// ============================================================================
 // Data Structures
-// =============================================================================
+// ============================================================================
 
 // heartbeat_monitor_node_t - per-node tracking state
 //   name:          Human-readable node identifier
@@ -72,16 +76,16 @@ typedef struct {
     const char *name;
 } heartbeat_monitor_config_t;
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 // Initialize a heartbeat monitor instance
 void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_config_t *config);
 
-// =============================================================================
+// ============================================================================
 // Node Registration
-// =============================================================================
+// ============================================================================
 
 // Register a node to monitor
 // Returns node index (0 to MAX_NODES-1), or -1 if registration failed
@@ -89,9 +93,9 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon,
                                 const char *name,
                                 uint32_t timeout_ms);
 
-// =============================================================================
+// ============================================================================
 // Runtime Updates
-// =============================================================================
+// ============================================================================
 
 // Call when heartbeat CAN frame received from a node
 // Updates last_seen timestamp, sequence, and state
@@ -104,9 +108,9 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon,
 // Marks nodes as dead if last_seen exceeds their timeout
 void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon);
 
-// =============================================================================
+// ============================================================================
 // Status Queries
-// =============================================================================
+// ============================================================================
 
 // Check if a specific node is alive (responding within timeout)
 bool heartbeat_monitor_is_alive(heartbeat_monitor_t *mon, int node_id);
@@ -123,9 +127,9 @@ bool heartbeat_monitor_get_status(heartbeat_monitor_t *mon,
 // Get bitmask of timed-out nodes (bit N set = node N timed out)
 uint8_t heartbeat_monitor_get_timeout_mask(heartbeat_monitor_t *mon);
 
-// =============================================================================
+// ============================================================================
 // Debugging
-// =============================================================================
+// ============================================================================
 
 // Log status of all monitored nodes (for debugging)
 void heartbeat_monitor_log_status(heartbeat_monitor_t *mon);
