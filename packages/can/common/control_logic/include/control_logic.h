@@ -80,6 +80,13 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 #define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008  // Emergency disable all actuators
 #define CONTROL_ACTION_ATTEMPT_RECOVERY 0x0010  // Try fault recovery
 #define CONTROL_ACTION_APPLY_THROTTLE   0x0020  // Update DG408DJZ mux to new throttle level
+#define CONTROL_ACTION_DISABLE_AUTONOMY 0x0040  // Disable actuators (non-override retreat/fault)
+
+// Reasons for CONTROL_ACTION_DISABLE_AUTONOMY.
+#define CONTROL_DISABLE_REASON_NONE           0x00
+#define CONTROL_DISABLE_REASON_SAFETY_RETREAT 0x01
+#define CONTROL_DISABLE_REASON_MOTOR_FAULT    0x02
+#define CONTROL_DISABLE_REASON_SENSOR_INVALID 0x03
 
 typedef struct {
     // Safety system command
@@ -118,6 +125,7 @@ typedef struct {
     uint8_t new_state;              // NODE_STATE_* from can_protocol.hh
     uint8_t new_fault_code;         // NODE_FAULT_* (0 = none)
     uint8_t override_reason;        // OVERRIDE_REASON_* (set when triggering override)
+    uint8_t disable_reason;         // CONTROL_DISABLE_REASON_* (non-override disable)
 
     // Heartbeat flags to send
     uint8_t heartbeat_flags;        // HEARTBEAT_FLAG_* to include in next heartbeat

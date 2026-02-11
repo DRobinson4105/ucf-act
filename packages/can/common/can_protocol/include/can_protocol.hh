@@ -111,7 +111,8 @@ extern "C" {
 // Heartbeat Flags
 // ============================================================================
 
-#define HEARTBEAT_FLAG_ENABLE_COMPLETE  0x01  // Node finished ENABLING, ready for ACTIVE
+#define HEARTBEAT_FLAG_ENABLE_COMPLETE   0x01  // Node finished ENABLING, ready for ACTIVE
+#define HEARTBEAT_FLAG_AUTONOMY_REQUEST  0x02  // Planner requests autonomous enable (Orin gate)
 
 // ============================================================================
 // Node Heartbeat (0x100, 0x110, 0x120)
@@ -121,6 +122,8 @@ extern "C" {
 // byte 1: state (NODE_STATE_* — for Safety: system target state)
 // byte 2: fault_code (NODE_FAULT_* — for Safety: e-stop reason, 0 when advancing)
 // byte 3: flags (HEARTBEAT_FLAG_*)
+//         - HEARTBEAT_FLAG_ENABLE_COMPLETE: node finished ENABLING
+//         - HEARTBEAT_FLAG_AUTONOMY_REQUEST: Planner/Orin requests autonomous enable
 // byte 4-7: reserved
 
 typedef struct {

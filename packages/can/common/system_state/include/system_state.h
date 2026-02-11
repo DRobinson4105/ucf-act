@@ -41,6 +41,9 @@ typedef struct {
     // Enable completion flags (from heartbeat flags field)
     bool planner_enable_complete;
     bool control_enable_complete;
+
+    // Planner/Orin autonomy-enable request gate (from Planner heartbeat flags)
+    bool autonomy_request;
 } system_state_inputs_t;
 
 // ============================================================================
@@ -66,7 +69,8 @@ typedef struct {
  * what the new target state should be.
  *
  * Transitions:
- *   - READY -> ENABLING: both nodes READY, no e-stop, both alive
+ *   - READY -> ENABLING: both nodes READY, no e-stop, both alive,
+ *                        Planner autonomy request asserted
  *   - ENABLING -> ACTIVE: both nodes ENABLING, both enable_complete, no e-stop
  *   - ANY -> READY: e-stop active, node fault, node override, node timeout
  *   - INIT -> READY: always (Safety starts in INIT, advances to READY once)

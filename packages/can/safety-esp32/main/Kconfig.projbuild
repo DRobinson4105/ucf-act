@@ -1,22 +1,45 @@
 menu "Test Bypasses"
 
-    config BYPASS_PLANNER_HEARTBEAT
-        bool "Bypass Planner heartbeat (simulate cooperative Planner)"
+    config BYPASS_PLANNER_LIVENESS
+        bool "Bypass Planner liveness/fault checks"
         default n
         help
-            Simulate a cooperative Planner node that is always alive,
-            mirrors the system target state, and signals enable_complete.
-            Prevents estop timeout and allows state advancement
-            (READY -> ENABLING -> ACTIVE) without a Planner on the bus.
+            Ignore Planner heartbeat timeout and Planner FAULT state when
+            evaluating e-stop conditions. This only affects liveness/fault
+            checks and does not simulate Planner node state transitions.
 
-    config BYPASS_CONTROL_HEARTBEAT
-        bool "Bypass Control heartbeat (simulate cooperative Control)"
+    config BYPASS_PLANNER_STATE
+        bool "Bypass Planner state (mirror Safety target + complete)"
         default n
         help
-            Simulate a cooperative Control node that is always alive,
-            mirrors the system target state, and signals enable_complete.
-            Prevents estop timeout and allows state advancement
-            (READY -> ENABLING -> ACTIVE) without a Control ESP32 on the bus.
+            Simulate a cooperative Planner state machine by mirroring
+            Safety target state and forcing Planner enable_complete.
+            This bypass does not affect Planner liveness checks.
+
+    config BYPASS_CONTROL_LIVENESS
+        bool "Bypass Control liveness/fault checks"
+        default n
+        help
+            Ignore Control heartbeat timeout and Control FAULT state when
+            evaluating e-stop conditions. This only affects liveness/fault
+            checks and does not simulate Control node state transitions.
+
+    config BYPASS_CONTROL_STATE
+        bool "Bypass Control state (mirror Safety target + complete)"
+        default n
+        help
+            Simulate a cooperative Control state machine by mirroring
+            Safety target state and forcing Control enable_complete.
+            This bypass does not affect Control liveness checks.
+
+    config BYPASS_AUTONOMY_REQUEST
+        bool "Bypass autonomy request gate (simulate Orin enable request)"
+        default n
+        help
+            Force Planner autonomy request to true so Safety can advance
+            from READY -> ENABLING without an Orin request message.
+            Intended for bench testing when Orin is not connected.
+            This bypass disables one-shot request re-arm behavior.
 
     config BYPASS_PUSH_BUTTON
         bool "Bypass push button e-stop (HB2-ES544)"
@@ -86,13 +109,19 @@ menu "Debug Logging"
                 planner, control) every safety loop iteration (50ms).
                 Extremely verbose. Useful for debugging sensor wiring.
 
-        config LOG_STATE_MACHINE
+        config LOG_STATE_CHANGES
+            bool "Log system target state changes and transition reasons"
+            default n
+            help
+                Log only target state transitions and autonomy-request gate
+                events (waiting, latched, consumed, re-armed).
+
+        config LOG_STATE_TICK
             bool "Log state machine evaluation each cycle"
             default n
             help
-                Log the system state machine inputs and result every
-                safety loop iteration. Verbose. Useful for debugging
-                state advancement issues.
+                Log state machine inputs/result every safety loop iteration
+                (50ms). Very verbose. Use for deep state-machine debugging.
 
     endmenu
 
@@ -124,7 +153,7 @@ menu "Debug Logging"
 
         config LOG_RELAY_STATE
             bool "Log power relay state changes"
-            default y
+            default n
             help
                 Log when the power relay is enabled or disabled.
                 Enabled by default since relay transitions are

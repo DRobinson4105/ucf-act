@@ -134,9 +134,11 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 | Flag | Effect |
 |------|--------|
-| `CONFIG_BYPASS_SAFETY_HEARTBEAT` | Force target_state to ACTIVE (ignore Safety heartbeat) |
+| `CONFIG_BYPASS_SAFETY_TARGET_STATE` | Force target_state to ACTIVE (ignore Safety target state) |
+| `CONFIG_BYPASS_SAFETY_ESTOP_FAULT` | Force Safety estop_fault_code to NONE in Control inputs/logging |
 | `CONFIG_BYPASS_FR_SENSOR` | Force F/R state to Forward (skip optocoupler reading) |
-| `CONFIG_BYPASS_PLANNER_COMMANDS` | Zero throttle/steering/braking, suppress stale detection |
+| `CONFIG_BYPASS_PLANNER_CMD_INPUTS` | Force Planner command inputs to zero throttle/steering/braking |
+| `CONFIG_BYPASS_PLANNER_CMD_STALE_CHECK` | Disable Planner command timeout/stale checks |
 | `CONFIG_BYPASS_STEPPER_MOTORS` | Skip stepper motor init/configure/commands (no UIM2852CA needed) |
 | `CONFIG_BYPASS_PEDAL_OVERRIDE` | Ignore pedal ADC (always not pressed, always re-armed) |
 | `CONFIG_BYPASS_ENABLE_RELAY` | Skip JD-2912 pedal bypass relay energize/de-energize |
@@ -159,12 +161,14 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every 20ms cycle + state summary on change |
+| `CONFIG_LOG_STATE_CHANGES` | off | Log Control/Safety state changes and transition reasons |
+| `CONFIG_LOG_STATE_TICK` | off | Log state-machine evaluation every 20ms cycle (very verbose) |
 | `CONFIG_LOG_ENABLE_SEQUENCE` | off | Log enable/disable sequence steps (start, complete, abort) |
 | `CONFIG_LOG_RECOVERY` | off | Log fault recovery attempts (re-init, success/failure) |
-| `CONFIG_LOG_THROTTLE` | **on** | Log throttle level changes |
+| `CONFIG_LOG_THROTTLE` | off | Log throttle level changes |
+| `CONFIG_LOG_THROTTLE_TICK` | off | Log throttle current/target every 20ms cycle (very verbose) |
 | `CONFIG_LOG_STEPPER_COMMANDS` | off | Log stepper motor position commands |
-| `CONFIG_LOG_OVERRIDE` | **on** | Log override trigger and clear events |
+| `CONFIG_LOG_OVERRIDE` | off | Log driver override trigger events (pedal/FR) |
 
 ### Multiplexer (DG408DJZ)
 

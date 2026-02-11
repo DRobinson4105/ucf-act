@@ -45,6 +45,7 @@ static system_state_inputs_t default_inputs(void) {
         .control_alive = true,
         .planner_enable_complete = false,
         .control_enable_complete = false,
+        .autonomy_request = false,
     };
     return in;
 }
@@ -62,7 +63,7 @@ static void test_init_to_ready(void) {
 }
 
 // ============================================================================
-// 2. READY -> ENABLING (both nodes READY, no estop, both alive)
+// 2. READY -> ENABLING (both nodes READY, no estop, both alive, request=true)
 // ============================================================================
 
 static void test_ready_to_enabling(void) {
@@ -70,9 +71,25 @@ static void test_ready_to_enabling(void) {
     in.current_target = NODE_STATE_READY;
     in.planner_state = NODE_STATE_READY;
     in.control_state = NODE_STATE_READY;
+    in.autonomy_request = true;
     system_state_result_t r = system_state_step(&in);
     assert(r.new_target == NODE_STATE_ENABLING);
     assert(r.target_changed == true);
+}
+
+// ============================================================================
+// 3. READY stays READY when autonomy request is not asserted
+// ============================================================================
+
+static void test_ready_stays_without_autonomy_request(void) {
+    system_state_inputs_t in = default_inputs();
+    in.current_target = NODE_STATE_READY;
+    in.planner_state = NODE_STATE_READY;
+    in.control_state = NODE_STATE_READY;
+    in.autonomy_request = false;
+    system_state_result_t r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_READY);
+    assert(r.target_changed == false);
 }
 
 // ============================================================================
@@ -355,6 +372,7 @@ int main(void) {
     // Forward transitions
     TEST(test_init_to_ready);
     TEST(test_ready_to_enabling);
+    TEST(test_ready_stays_without_autonomy_request);
     TEST(test_ready_stays_control_not_ready);
     TEST(test_ready_stays_planner_not_ready);
     TEST(test_enabling_to_active);

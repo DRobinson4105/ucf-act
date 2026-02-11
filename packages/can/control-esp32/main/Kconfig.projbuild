@@ -1,12 +1,19 @@
 menu "Test Bypasses"
 
-    config BYPASS_SAFETY_HEARTBEAT
-        bool "Bypass Safety heartbeat (simulate ACTIVE)"
+    config BYPASS_SAFETY_TARGET_STATE
+        bool "Bypass Safety target state (force ACTIVE)"
         default n
         help
-            Ignore the Safety ESP32 heartbeat and force the system
-            target state to ACTIVE. Use when testing Control
-            without a Safety ESP32 on the CAN bus.
+            Ignore Safety target state and force target_state=ACTIVE.
+            Use when testing Control state progression without a
+            Safety ESP32 heartbeat.
+
+    config BYPASS_SAFETY_ESTOP_FAULT
+        bool "Bypass Safety e-stop fault code (force clear)"
+        default n
+        help
+            Ignore Safety e-stop fault code and force estop_fault_code=NONE
+            in Control task inputs/logging.
 
     config BYPASS_FR_SENSOR
         bool "Bypass F/R sensor (force Forward)"
@@ -16,13 +23,19 @@ menu "Test Bypasses"
             of the actual hardware state. Use when the F/R switch is
             not connected during bench testing.
 
-    config BYPASS_PLANNER_COMMANDS
-        bool "Bypass Planner commands (zero throttle)"
+    config BYPASS_PLANNER_CMD_INPUTS
+        bool "Bypass Planner command inputs (force zero cmds)"
         default n
         help
-            Suppress Planner command timeout and staleness detection.
-            Uses zero throttle, steering, and braking. Prevents stale
-            command errors when testing without a Planner on the bus.
+            Force Planner command inputs to zero throttle/steering/braking.
+            Does not disable timeout/staleness detection.
+
+    config BYPASS_PLANNER_CMD_STALE_CHECK
+        bool "Bypass Planner command stale/timeout checks"
+        default n
+        help
+            Disable Planner command timeout and stale-sequence checks.
+            Useful when Planner command cadence is irregular in bench tests.
 
     config BYPASS_STEPPER_MOTORS
         bool "Bypass stepper motors (skip init/commands)"
@@ -101,14 +114,20 @@ menu "Debug Logging"
 
     menu "Control Logic"
 
-        config LOG_STATE_MACHINE
-            bool "Log state machine evaluation each cycle"
+        config LOG_STATE_CHANGES
+            bool "Log control state changes and transition reasons"
             default n
             help
-                Log the control state machine inputs and result every
-                control loop iteration (20ms). Also logs the state
-                summary line on state/throttle/target changes. Extremely
-                verbose. Useful for debugging state transition issues.
+                Log only important transition events: Control state changes,
+                fault changes, Safety target changes, and Safety estop fault
+                changes. Includes concise transition reason strings.
+
+        config LOG_STATE_TICK
+            bool "Log control state evaluation each cycle"
+            default n
+            help
+                Log control state inputs/result every control loop iteration
+                (20ms). Very verbose. Use when debugging state machine logic.
 
         config LOG_ENABLE_SEQUENCE
             bool "Log enable/disable sequence steps"
@@ -128,11 +147,18 @@ menu "Debug Logging"
 
         config LOG_THROTTLE
             bool "Log throttle level changes"
-            default y
+            default n
             help
                 Log when the throttle level changes (slew rate limited).
-                Enabled by default since throttle changes are infrequent
-                and useful for diagnostics.
+                Useful for normal diagnostics.
+
+        config LOG_THROTTLE_TICK
+            bool "Log throttle current/target each cycle"
+            default n
+            help
+                Log throttle current and target values every control loop
+                iteration (20ms). Very verbose. Useful for tuning or
+                diagnosing throttle behavior.
 
         config LOG_STEPPER_COMMANDS
             bool "Log stepper motor position commands"
@@ -143,12 +169,11 @@ menu "Debug Logging"
                 confirming motor communication.
 
         config LOG_OVERRIDE
-            bool "Log override trigger and clear events"
-            default y
+            bool "Log driver override trigger events"
+            default n
             help
-                Log when driver override is triggered (pedal press, F/R
-                change) and when it clears. Enabled by default since
-                override events are safety-critical.
+                Log when driver override is triggered by pedal press or
+                F/R change.
 
     endmenu
 
@@ -168,7 +193,7 @@ menu "Debug Logging"
 
         config LOG_PEDAL_RELAY
             bool "Log pedal bypass relay state changes"
-            default y
+            default n
             help
                 Log when the JD-2912 pedal bypass relay is energized
                 or de-energized. Enabled by default since relay
@@ -198,7 +223,7 @@ menu "Debug Logging"
 
         config LOG_FR_STATE
             bool "Log F/R state changes"
-            default y
+            default n
             help
                 Log when the F/R gear selector state changes
                 (Forward, Reverse, Neutral, Invalid). Enabled

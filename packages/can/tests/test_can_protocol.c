@@ -283,6 +283,26 @@ static void test_heartbeat_roundtrip_enable_complete(void) {
     assert(hb_out.flags == HEARTBEAT_FLAG_ENABLE_COMPLETE);
 }
 
+static void test_heartbeat_roundtrip_autonomy_request(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 51,
+        .state = NODE_STATE_READY,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = HEARTBEAT_FLAG_AUTONOMY_REQUEST,
+    };
+
+    uint8_t data[8];
+    can_encode_heartbeat(data, &hb_in);
+
+    node_heartbeat_t hb_out = {0};
+    can_decode_heartbeat(data, &hb_out);
+
+    assert(hb_out.sequence == 51);
+    assert(hb_out.state == NODE_STATE_READY);
+    assert(hb_out.fault_code == NODE_FAULT_NONE);
+    assert(hb_out.flags == HEARTBEAT_FLAG_AUTONOMY_REQUEST);
+}
+
 static void test_heartbeat_reserved_bytes_zero(void) {
     node_heartbeat_t hb = {
         .sequence = 1,
@@ -407,11 +427,12 @@ int main(void) {
     TEST(test_safety_heartbeat_roundtrip_retreating);
     TEST(test_safety_heartbeat_reserved_bytes_zero);
     
-    // Node heartbeat encode/decode (4)
+    // Node heartbeat encode/decode (5)
     printf("\n--- Heartbeat encode/decode ---\n");
     TEST(test_heartbeat_roundtrip_basic);
     TEST(test_heartbeat_roundtrip_with_fault);
     TEST(test_heartbeat_roundtrip_enable_complete);
+    TEST(test_heartbeat_roundtrip_autonomy_request);
     TEST(test_heartbeat_reserved_bytes_zero);
     
     // String helpers (2)

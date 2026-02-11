@@ -35,7 +35,8 @@
 // fault_code. All three nodes use the same heartbeat format (node_heartbeat_t).
 //
 // State advancement:
-//   READY -> ENABLING:  both Planner and Control report READY, no e-stop
+//   READY -> ENABLING:  both Planner and Control report READY, no e-stop,
+//                       Planner/Orin autonomy request edge latched
 //   ENABLING -> ACTIVE: both report ENABLING + enable_complete flag set
 //   ANY -> READY:       e-stop, fault, override, timeout
 //
@@ -402,6 +403,13 @@ void safety_task(void *param) {
     (void)param;
     ESP_LOGI(TAG, "Safety task started");
 
+    // One-shot autonomy request gate:
+    // - latch on Planner request rising edge
+    // - consume when transitioning READY -> ENABLING
+    // - re-arm only after request drops
+    bool request_level_prev = false;
+    bool request_latched = false;
+
     while (true) {
         // Read hardware inputs into the pure-function input struct
         safety_inputs_t inputs = {
@@ -429,11 +437,11 @@ void safety_task(void *param) {
         inputs.control_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_control);
 
         // Apply test bypasses
-#ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
+#ifdef CONFIG_BYPASS_PLANNER_LIVENESS
         inputs.planner_alive = true;
         inputs.planner_error = false;
 #endif
-#ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
+#ifdef CONFIG_BYPASS_CONTROL_LIVENESS
         inputs.control_alive = true;
         inputs.control_error = false;
 #endif
@@ -474,38 +482,113 @@ void safety_task(void *param) {
             .control_alive = inputs.control_alive,
             .planner_enable_complete = (g_planner_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE) != 0,
             .control_enable_complete = (g_control_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE) != 0,
+            .autonomy_request = false,
         };
 
         // Planner bypass: simulate a cooperative Planner that mirrors the
         // current target state and always signals enable_complete.
-#ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
+#ifdef CONFIG_BYPASS_PLANNER_STATE
         ss_in.planner_state = (g_target_state >= NODE_STATE_ENABLING)
                               ? NODE_STATE_ENABLING : NODE_STATE_READY;
         ss_in.planner_enable_complete = true;
 #endif
         // Control bypass: same pattern for Control.
-#ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
+#ifdef CONFIG_BYPASS_CONTROL_STATE
         ss_in.control_state = (g_target_state >= NODE_STATE_ENABLING)
                               ? NODE_STATE_ENABLING : NODE_STATE_READY;
         ss_in.control_enable_complete = true;
 #endif
+
+        bool planner_request_level =
+            (g_planner_flags & HEARTBEAT_FLAG_AUTONOMY_REQUEST) != 0;
+        bool request_accept_window = (ss_in.current_target == NODE_STATE_READY &&
+                                      !ss_in.estop_active &&
+                                      ss_in.planner_alive &&
+                                      ss_in.control_alive &&
+                                      ss_in.planner_state == NODE_STATE_READY &&
+                                      ss_in.control_state == NODE_STATE_READY);
+#ifdef CONFIG_BYPASS_AUTONOMY_REQUEST
+        planner_request_level = true;
+#endif
+
+        if (!planner_request_level) {
+#ifdef CONFIG_LOG_STATE_CHANGES
+            if (request_level_prev)
+                ESP_LOGI(TAG, "Autonomy request re-armed (request dropped)");
+#endif
+            request_level_prev = false;
+        } else if (!request_level_prev) {
+            request_level_prev = true;
+            if (request_accept_window) {
+                request_latched = true;
+#ifdef CONFIG_LOG_STATE_CHANGES
+                ESP_LOGI(TAG, "Autonomy request latched");
+#endif
+            }
+        }
+
+        ss_in.autonomy_request = request_latched;
+#ifdef CONFIG_BYPASS_AUTONOMY_REQUEST
+        ss_in.autonomy_request = true;
+#endif
+
+#ifdef CONFIG_LOG_STATE_CHANGES
+        static bool prev_waiting_for_request = false;
+        bool waiting_for_request = (ss_in.current_target == NODE_STATE_READY &&
+                                    !ss_in.estop_active &&
+                                    ss_in.planner_alive &&
+                                    ss_in.control_alive &&
+                                    ss_in.planner_state == NODE_STATE_READY &&
+                                    ss_in.control_state == NODE_STATE_READY &&
+                                    !ss_in.autonomy_request);
+        if (waiting_for_request && !prev_waiting_for_request) {
+            ESP_LOGI(TAG, "Waiting for autonomy request from Planner/Orin");
+        } else if (!waiting_for_request && prev_waiting_for_request) {
+            ESP_LOGI(TAG, "Autonomy request wait cleared");
+        }
+        prev_waiting_for_request = waiting_for_request;
+#endif
+
         system_state_result_t ss_out = system_state_step(&ss_in);
 
-#ifdef CONFIG_LOG_STATE_MACHINE
-        ESP_LOGI(TAG, "estop=%d planner=%s control=%s p_complete=%d c_complete=%d target=%s -> %s",
+#ifndef CONFIG_BYPASS_AUTONOMY_REQUEST
+        if (ss_out.target_changed &&
+            g_target_state == NODE_STATE_READY &&
+            ss_out.new_target == NODE_STATE_ENABLING &&
+            request_latched) {
+            request_latched = false;
+#ifdef CONFIG_LOG_STATE_CHANGES
+            ESP_LOGI(TAG, "Autonomy request consumed");
+#endif
+        }
+#endif
+
+#ifdef CONFIG_LOG_STATE_TICK
+        ESP_LOGI(TAG, "tick estop=%d planner=%s control=%s req=%d target=%s -> %s",
                  decision.estop_active,
-                 node_state_to_string(g_planner_state),
-                 node_state_to_string(g_control_node_state),
-                 ss_in.planner_enable_complete, ss_in.control_enable_complete,
+                 node_state_to_string(ss_in.planner_state),
+                 node_state_to_string(ss_in.control_state),
+                 ss_in.autonomy_request,
                  node_state_to_string(g_target_state),
                  node_state_to_string(ss_out.new_target));
 #endif
 
-#ifdef CONFIG_LOG_STATE_MACHINE
+#ifdef CONFIG_LOG_STATE_CHANGES
         if (ss_out.target_changed) {
-            ESP_LOGI(TAG, "System target: %s -> %s",
+            const char *reason = "none";
+            if (g_target_state == NODE_STATE_READY &&
+                ss_out.new_target == NODE_STATE_ENABLING)
+                reason = "autonomy_request";
+            else if (g_target_state == NODE_STATE_ENABLING &&
+                     ss_out.new_target == NODE_STATE_ACTIVE)
+                reason = "enable_complete";
+            else if (ss_out.new_target == NODE_STATE_READY)
+                reason = node_fault_to_string(decision.fault_code);
+
+            ESP_LOGI(TAG, "System target: %s -> %s (reason: %s)",
                      node_state_to_string(g_target_state),
-                     node_state_to_string(ss_out.new_target));
+                     node_state_to_string(ss_out.new_target),
+                     reason);
         }
 #endif
 
@@ -700,11 +783,20 @@ void main_task(void *param) {
         ESP_LOGI(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
 
     // Log active bypasses
-#ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
-    ESP_LOGW(TAG, "BYPASS: Planner DISABLED (simulating cooperative Planner)");
+#ifdef CONFIG_BYPASS_PLANNER_LIVENESS
+    ESP_LOGW(TAG, "BYPASS: Planner liveness checks DISABLED");
 #endif
-#ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
-    ESP_LOGW(TAG, "BYPASS: Control DISABLED (simulating cooperative Control)");
+#ifdef CONFIG_BYPASS_PLANNER_STATE
+    ESP_LOGW(TAG, "BYPASS: Planner state mirroring ENABLED");
+#endif
+#ifdef CONFIG_BYPASS_CONTROL_LIVENESS
+    ESP_LOGW(TAG, "BYPASS: Control liveness checks DISABLED");
+#endif
+#ifdef CONFIG_BYPASS_CONTROL_STATE
+    ESP_LOGW(TAG, "BYPASS: Control state mirroring ENABLED");
+#endif
+#ifdef CONFIG_BYPASS_AUTONOMY_REQUEST
+    ESP_LOGW(TAG, "BYPASS: Autonomy request gate DISABLED (forcing request=true)");
 #endif
 #ifdef CONFIG_BYPASS_PUSH_BUTTON
     ESP_LOGW(TAG, "BYPASS: Push button e-stop DISABLED");

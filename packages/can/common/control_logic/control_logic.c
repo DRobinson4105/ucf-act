@@ -56,6 +56,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         .new_state = current_state,
         .new_fault_code = current_fault,
         .override_reason = OVERRIDE_REASON_NONE,
+        .disable_reason = CONTROL_DISABLE_REASON_NONE,
         .heartbeat_flags = 0,
         .actions = CONTROL_ACTION_NONE,
         .throttle_level = 0,
@@ -83,8 +84,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
     if (inputs->motor_fault_code != NODE_FAULT_NONE &&
         current_fault == NODE_FAULT_NONE) {
         if (current_state == NODE_STATE_ACTIVE) {
-            r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
-            r.override_reason = OVERRIDE_REASON_NONE;
+            r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+            r.disable_reason = CONTROL_DISABLE_REASON_MOTOR_FAULT;
         } else if (current_state == NODE_STATE_ENABLING) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
         }
@@ -99,8 +100,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
     // Check for F/R INVALID sensor reading
     if (inputs->fr_is_invalid && current_fault != NODE_FAULT_SENSOR_INVALID) {
         if (current_state == NODE_STATE_ACTIVE) {
-            r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
-            r.override_reason = OVERRIDE_REASON_FR_CHANGED;
+            r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+            r.disable_reason = CONTROL_DISABLE_REASON_SENSOR_INVALID;
         } else if (current_state == NODE_STATE_ENABLING) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
         }
@@ -189,8 +190,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             // This is NOT an override (human intervention) — Safety commanded
             // the retreat, so we go directly to READY rather than OVERRIDE.
             if (inputs->target_state < NODE_STATE_ACTIVE) {
-                r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
-                r.override_reason = OVERRIDE_REASON_NONE;
+                r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+                r.disable_reason = CONTROL_DISABLE_REASON_SAFETY_RETREAT;
                 r.new_state = NODE_STATE_READY;
                 r.throttle_level = 0;
                 r.new_last_steering = INT16_MIN;

@@ -27,7 +27,7 @@ make
 
 | Command | Description |
 |---------|-------------|
-| `make` | Compile and run all 256 tests |
+| `make` | Compile and run all 258 tests |
 | `make test_stepper_protocol` | Compile only the stepper protocol test binary |
 | `make test_can_protocol` | Compile only the CAN protocol test binary |
 | `make test_motor_component` | Compile only the motor component test binary |
@@ -64,7 +64,7 @@ Tests the `stepper_protocol_uim2852` library (CAN frame building and parsing for
 | Set param round-trips | 3 | IC, LM, QE build-then-parse verifying values survive encoding |
 | Edge cases | 4 | Zero, INT32_MIN, INT32_MAX for position commands; OG zeroes entire buffer |
 
-### `test_can_protocol.c` — 22 tests
+### `test_can_protocol.c` — 23 tests
 
 Tests the `can_protocol` header (shared protocol definitions used by all nodes).
 
@@ -73,7 +73,7 @@ Tests the `can_protocol` header (shared protocol definitions used by all nodes).
 | LE16 pack/unpack | 7 | Unsigned and signed 16-bit little-endian: zero, max, arbitrary value, INT16_MIN, INT16_MAX |
 | Planner command encode/decode | 4 | Round-trip with typical values, zeroes, INT16 extremes, wire format byte order verification |
 | Safety heartbeat encode/decode | 3 | Round-trip advancing/retreating states, reserved byte zeroing |
-| Heartbeat encode/decode | 4 | Round-trip basic, with fault, with enable_complete flag, reserved byte zeroing |
+| Heartbeat encode/decode | 5 | Round-trip basic, with fault, with enable_complete flag, with autonomy_request flag, reserved byte zeroing |
 | String helpers | 2 | `node_state_to_string()` all values + unknown, `node_fault_to_string()` all ranges + unknown |
 | CAN ID constants | 2 | IDs fall within assigned ranges (0x100-0x10F, 0x110-0x11F, 0x120-0x12F), no collisions |
 
@@ -139,7 +139,7 @@ Tests the pure `control_logic` module (state machine, throttle slew, preconditio
 | Timer overflow | 2 | Slew timer and enable timer handle uint32 wrap correctly |
 | Full lifecycle | 1 | Walks READY -> ENABLING -> ACTIVE -> OVERRIDE -> READY |
 
-### `test_system_state.c` — 23 tests
+### `test_system_state.c` — 24 tests
 
 ### `test_heartbeat_monitor.cpp` — 6 tests
 
@@ -167,8 +167,8 @@ Tests the pure `system_state` module (Safety's target state advancement logic).
 | Category | Tests | What it covers |
 |----------|-------|----------------|
 | INIT -> READY | 1 | Always transitions after boot |
-| READY -> ENABLING | 1 | Both nodes READY, both alive, no e-stop |
-| READY stays | 2 | Control not ready, Planner not ready |
+| READY -> ENABLING | 1 | Both nodes READY, both alive, no e-stop, autonomy_request asserted |
+| READY stays | 3 | No autonomy request, Control not ready, Planner not ready |
 | ENABLING -> ACTIVE | 1 | Both nodes ENABLING with enable_complete flag |
 | ENABLING stays | 2 | One node complete, no nodes complete |
 | ACTIVE stays | 1 | Normal operation |

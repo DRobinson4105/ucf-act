@@ -365,14 +365,27 @@ static void send_control_heartbeat(void) {
 // State Machine Action Helpers
 // ============================================================================
 
-// Immediately disable all autonomous actuators.
-static void execute_trigger_override(uint8_t reason) {
-#ifdef CONFIG_LOG_OVERRIDE
-    ESP_LOGI(TAG, "OVERRIDE TRIGGERED (reason: 0x%02X)", reason);
-#else
-    (void)reason;
-#endif
+static const char *override_reason_to_string(uint8_t reason) {
+    switch (reason) {
+        case OVERRIDE_REASON_PEDAL: return "pedal";
+        case OVERRIDE_REASON_FR_CHANGED: return "fr_changed";
+        case OVERRIDE_REASON_NONE:
+        default: return "none";
+    }
+}
 
+static const char *disable_reason_to_string(uint8_t reason) {
+    switch (reason) {
+        case CONTROL_DISABLE_REASON_SAFETY_RETREAT: return "safety_retreat";
+        case CONTROL_DISABLE_REASON_MOTOR_FAULT: return "motor_fault";
+        case CONTROL_DISABLE_REASON_SENSOR_INVALID: return "sensor_invalid";
+        case CONTROL_DISABLE_REASON_NONE:
+        default: return "none";
+    }
+}
+
+// Immediately disable all autonomous actuators.
+static void disable_autonomous_actuators(void) {
 #ifndef CONFIG_BYPASS_MULTIPLEXER
     multiplexer_dg408djz_disable();
     multiplexer_dg408djz_emergency_stop();
@@ -386,6 +399,40 @@ static void execute_trigger_override(uint8_t reason) {
     stepper_motor_uim2852_disable(&g_steering_stepper);
     stepper_motor_uim2852_disable(&g_braking_stepper);
 #endif
+}
+
+// Immediately disable all autonomous actuators.
+static void execute_trigger_override(uint8_t reason) {
+#ifdef CONFIG_LOG_OVERRIDE
+    ESP_LOGI(TAG, "OVERRIDE TRIGGERED (reason: %s)", override_reason_to_string(reason));
+#else
+    (void)reason;
+#endif
+
+    disable_autonomous_actuators();
+}
+
+// Disable autonomy without classifying event as driver override.
+static void execute_disable_autonomy(uint8_t reason,
+                                     uint8_t estop_fault_code,
+                                     uint8_t control_fault_code) {
+#if defined(CONFIG_LOG_STATE_CHANGES) || defined(CONFIG_LOG_ENABLE_SEQUENCE)
+    if (reason == CONTROL_DISABLE_REASON_SAFETY_RETREAT) {
+        ESP_LOGI(TAG, "AUTONOMY DISABLED (reason: %s, safety_fault: %s)",
+                 disable_reason_to_string(reason),
+                 node_fault_to_string(estop_fault_code));
+    } else {
+        ESP_LOGI(TAG, "AUTONOMY DISABLED (reason: %s, control_fault: %s)",
+                 disable_reason_to_string(reason),
+                 node_fault_to_string(control_fault_code));
+    }
+#else
+    (void)reason;
+    (void)estop_fault_code;
+    (void)control_fault_code;
+#endif
+
+    disable_autonomous_actuators();
 }
 
 // Start the enable sequence (set mux to 0, energize relay)
@@ -675,11 +722,9 @@ void control_task(void *param) {
     ESP_LOGI(TAG, "Control task started");
 
     // Declare loop-state variables before any goto to satisfy C++ scoping rules
-#ifdef CONFIG_LOG_STATE_MACHINE
+#ifdef CONFIG_LOG_STATE_CHANGES
     uint8_t prev_state = 0xFF;
-    fr_state_t prev_fr = FR_STATE_INVALID;
-    int8_t prev_thr_target = -1;
-    int8_t prev_thr_current = -1;
+    uint8_t prev_fault_code = 0xFF;
     uint8_t prev_target_state = 0xFF;
     uint8_t prev_estop_fault = 0xFF;
 #endif
@@ -740,6 +785,13 @@ void control_task(void *param) {
     g_control_state = NODE_STATE_READY;
     ESP_LOGI(TAG, "Control ready, waiting for commands");
 
+#ifdef CONFIG_LOG_STATE_CHANGES
+    prev_state = g_control_state;
+    prev_fault_code = g_fault_code;
+    prev_target_state = g_cmd.target_state;
+    prev_estop_fault = g_cmd.estop_fault_code;
+#endif
+
 #ifndef CONFIG_BYPASS_STEPPER_MOTORS
 control_loop:
 #endif
@@ -761,17 +813,20 @@ control_loop:
 #ifdef CONFIG_BYPASS_FR_SENSOR
         fr_state = FR_STATE_FORWARD;
 #endif
-#ifdef CONFIG_BYPASS_SAFETY_HEARTBEAT
+#ifdef CONFIG_BYPASS_SAFETY_TARGET_STATE
         cmd_local.target_state = NODE_STATE_ACTIVE;
 #endif
-#ifdef CONFIG_BYPASS_PLANNER_COMMANDS
+#ifdef CONFIG_BYPASS_SAFETY_ESTOP_FAULT
+        cmd_local.estop_fault_code = NODE_FAULT_NONE;
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_CMD_INPUTS
         cmd_local.throttle_target = 0;
         cmd_local.steering_cmd = 0;
         cmd_local.braking_cmd = 0;
 #endif
 
         // Check Planner command freshness - zero throttle if stale
-#ifndef CONFIG_BYPASS_PLANNER_COMMANDS
+#ifndef CONFIG_BYPASS_PLANNER_CMD_STALE_CHECK
         TickType_t planner_age = xTaskGetTickCount() - g_last_planner_cmd_tick;
         bool planner_cmd_stale = false;
 
@@ -832,10 +887,11 @@ control_loop:
         // Compute next state (pure function — no side effects)
         control_step_result_t step = control_compute_step(g_control_state, g_fault_code, &step_in);
 
-#ifdef CONFIG_LOG_STATE_MACHINE
-        ESP_LOGI(TAG, "state=%s target=%s fr=%d pedal=%d/%d thr=%d/%d actions=0x%02X -> %s",
+#ifdef CONFIG_LOG_STATE_TICK
+        ESP_LOGI(TAG, "tick state=%s target=%s estop=%s fr=%d pedal=%d/%d thr=%d/%d actions=0x%02X -> %s",
                  node_state_to_string(g_control_state),
                  node_state_to_string(cmd_local.target_state),
+                 node_fault_to_string(cmd_local.estop_fault_code),
                  fr_state, pedal_pressed, pedal_rearmed,
                  g_throttle_current, cmd_local.throttle_target,
                  step.actions, node_state_to_string(step.new_state));
@@ -844,6 +900,11 @@ control_loop:
         // Execute hardware actions indicated by the step result
         if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) {
             execute_trigger_override(step.override_reason);
+        }
+        if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY) {
+            execute_disable_autonomy(step.disable_reason,
+                                     cmd_local.estop_fault_code,
+                                     step.new_fault_code);
         }
         if (step.actions & CONTROL_ACTION_START_ENABLE) {
             execute_start_enable();
@@ -875,6 +936,12 @@ control_loop:
             }
 #endif
         }
+
+#ifdef CONFIG_LOG_THROTTLE_TICK
+        ESP_LOGI(TAG, "Throttle tick: current=%d target=%d",
+                 step.throttle_level, cmd_local.throttle_target);
+#endif
+
         if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY) {
             if (attempt_fault_recovery()) {
                 // Recovery succeeded — override step result so the state update
@@ -941,25 +1008,48 @@ control_loop:
             send_control_heartbeat();
         }
 
-        // Log on state change
-#ifdef CONFIG_LOG_STATE_MACHINE
-        if (g_control_state != prev_state || fr_state != prev_fr ||
-            cmd_local.throttle_target != prev_thr_target || g_throttle_current != prev_thr_current ||
-            cmd_local.target_state != prev_target_state ||
-            cmd_local.estop_fault_code != prev_estop_fault) {
-            ESP_LOGI(TAG, "State: %s | FR=%d Pedal=%umV Thr=%d/%d Target:%s (fault:%s)",
-                node_state_to_string(g_control_state), 
-                fr_state, override_sensors_get_pedal_mv(),
-                g_throttle_current, cmd_local.throttle_target,
-                node_state_to_string(cmd_local.target_state),
-                node_fault_to_string(cmd_local.estop_fault_code));
-            prev_state = g_control_state;
-            prev_fr = fr_state;
-            prev_thr_target = cmd_local.throttle_target;
-            prev_thr_current = g_throttle_current;
-            prev_target_state = cmd_local.target_state;
-            prev_estop_fault = cmd_local.estop_fault_code;
+        // Log state/control transitions only
+#ifdef CONFIG_LOG_STATE_CHANGES
+        if (g_control_state != prev_state) {
+            const char *reason = "none";
+            if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE)
+                reason = override_reason_to_string(step.override_reason);
+            else if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY)
+                reason = disable_reason_to_string(step.disable_reason);
+            else if (step.actions & CONTROL_ACTION_START_ENABLE)
+                reason = "start_enable";
+            else if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
+                reason = "enable_complete";
+            else if (step.actions & CONTROL_ACTION_ABORT_ENABLE)
+                reason = "abort_enable";
+            else if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY)
+                reason = "attempt_recovery";
+
+            ESP_LOGI(TAG, "State: %s -> %s (reason=%s)",
+                     node_state_to_string(prev_state),
+                     node_state_to_string(g_control_state),
+                     reason);
         }
+        if (g_fault_code != prev_fault_code) {
+            ESP_LOGI(TAG, "Fault: %s -> %s",
+                     node_fault_to_string(prev_fault_code),
+                     node_fault_to_string(g_fault_code));
+        }
+        if (cmd_local.target_state != prev_target_state) {
+            ESP_LOGI(TAG, "Safety target: %s -> %s",
+                     node_state_to_string(prev_target_state),
+                     node_state_to_string(cmd_local.target_state));
+        }
+        if (cmd_local.estop_fault_code != prev_estop_fault) {
+            ESP_LOGI(TAG, "Safety estop fault: %s -> %s",
+                     node_fault_to_string(prev_estop_fault),
+                     node_fault_to_string(cmd_local.estop_fault_code));
+        }
+
+        prev_state = g_control_state;
+        prev_fault_code = g_fault_code;
+        prev_target_state = cmd_local.target_state;
+        prev_estop_fault = cmd_local.estop_fault_code;
 #endif
 
         vTaskDelay(CONTROL_LOOP_INTERVAL);
@@ -1089,14 +1179,20 @@ void main_task(void *param) {
         ESP_LOGI(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
 
     // Log active bypasses
-#ifdef CONFIG_BYPASS_SAFETY_HEARTBEAT
-    ESP_LOGW(TAG, "BYPASS: Safety heartbeat DISABLED (forcing ACTIVE)");
+#ifdef CONFIG_BYPASS_SAFETY_TARGET_STATE
+    ESP_LOGW(TAG, "BYPASS: Safety target state DISABLED (forcing ACTIVE)");
+#endif
+#ifdef CONFIG_BYPASS_SAFETY_ESTOP_FAULT
+    ESP_LOGW(TAG, "BYPASS: Safety e-stop fault DISABLED (forcing clear)");
 #endif
 #ifdef CONFIG_BYPASS_FR_SENSOR
     ESP_LOGW(TAG, "BYPASS: F/R sensor DISABLED (forcing Forward)");
 #endif
-#ifdef CONFIG_BYPASS_PLANNER_COMMANDS
-    ESP_LOGW(TAG, "BYPASS: Planner commands DISABLED (zero throttle)");
+#ifdef CONFIG_BYPASS_PLANNER_CMD_INPUTS
+    ESP_LOGW(TAG, "BYPASS: Planner command inputs DISABLED (forcing zero cmds)");
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_CMD_STALE_CHECK
+    ESP_LOGW(TAG, "BYPASS: Planner command stale checks DISABLED");
 #endif
 #ifdef CONFIG_BYPASS_STEPPER_MOTORS
     ESP_LOGW(TAG, "BYPASS: Stepper motors DISABLED");

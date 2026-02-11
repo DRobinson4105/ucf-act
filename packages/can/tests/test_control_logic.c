@@ -379,8 +379,9 @@ static void test_active_safety_retreat_to_ready(void) {
     in.target_state = NODE_STATE_ENABLING;
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_READY);
-    assert(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE);
-    assert(r.override_reason == OVERRIDE_REASON_NONE);
+    assert(r.actions & CONTROL_ACTION_DISABLE_AUTONOMY);
+    assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
+    assert(r.disable_reason == CONTROL_DISABLE_REASON_SAFETY_RETREAT);
     assert(r.throttle_level == 0);
     assert(r.new_last_steering == INT16_MIN);
     assert(r.new_last_braking == INT16_MIN);
@@ -535,7 +536,7 @@ static void test_fault_preserves_code(void) {
 // Motor fault injection (2)
 // ============================================================================
 
-// 40. Motor fault from ACTIVE -> FAULT + TRIGGER_OVERRIDE
+// 40. Motor fault from ACTIVE -> FAULT + DISABLE_AUTONOMY
 static void test_motor_fault_from_active(void) {
     control_inputs_t in = default_inputs();
     in.target_state = NODE_STATE_ACTIVE;
@@ -543,7 +544,8 @@ static void test_motor_fault_from_active(void) {
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_FAULT);
     assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
-    assert(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE);
+    assert(r.actions & CONTROL_ACTION_DISABLE_AUTONOMY);
+    assert(r.disable_reason == CONTROL_DISABLE_REASON_MOTOR_FAULT);
 }
 
 // 41. Motor fault from READY -> FAULT (no override)
@@ -560,7 +562,7 @@ static void test_motor_fault_from_ready(void) {
 // FR INVALID sensor fault (2)
 // ============================================================================
 
-// 42. FR invalid from ACTIVE -> FAULT + TRIGGER_OVERRIDE
+// 42. FR invalid from ACTIVE -> FAULT + DISABLE_AUTONOMY
 static void test_fr_invalid_from_active(void) {
     control_inputs_t in = default_inputs();
     in.target_state = NODE_STATE_ACTIVE;
@@ -568,8 +570,8 @@ static void test_fr_invalid_from_active(void) {
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_FAULT);
     assert(r.new_fault_code == NODE_FAULT_SENSOR_INVALID);
-    assert(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE);
-    assert(r.override_reason == OVERRIDE_REASON_FR_CHANGED);
+    assert(r.actions & CONTROL_ACTION_DISABLE_AUTONOMY);
+    assert(r.disable_reason == CONTROL_DISABLE_REASON_SENSOR_INVALID);
 }
 
 // 43. FR invalid already in FAULT -> no double-fault

@@ -4,13 +4,16 @@ ESP-IDF firmware for the Safety ESP32-C6. Acts as the **system state authority**
 
 ## System State Authority
 
-Safety owns the system target state and broadcasts it as `state` in its heartbeat (0x100). All nodes observe Safety's heartbeat to know the current system target. Safety advances the target when all nodes are healthy and ready; it retreats to READY when any e-stop, fault, override, or timeout is detected.
+Safety owns the system target state and broadcasts it as `state` in its heartbeat (0x100). All nodes observe Safety's heartbeat to know the current system target. Safety advances the target only when all nodes are healthy and ready and Planner/Orin explicitly requests autonomy; it retreats to READY when any e-stop, fault, override, or timeout is detected.
 
 **State transitions (target state):**
 - **INIT -> READY**: Always, after boot
-- **READY -> ENABLING**: Both Planner and Control report READY, both alive, no e-stop
+- **READY -> ENABLING**: Both Planner and Control report READY, both alive, no e-stop, Planner/Orin request edge (`HEARTBEAT_FLAG_AUTONOMY_REQUEST`) latched
 - **ENABLING -> ACTIVE**: Both nodes report ENABLING with `HEARTBEAT_FLAG_ENABLE_COMPLETE`, no e-stop
 - **ANY -> READY**: E-stop active, node FAULT, node OVERRIDE, node timeout
+
+Autonomy request is handled as a one-shot gate: Safety latches a rising request edge,
+consumes it when entering ENABLING, and requires request drop before the next re-arm.
 
 ## Safety Logic
 
@@ -122,8 +125,11 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 | Flag | Effect |
 |------|--------|
-| `CONFIG_BYPASS_PLANNER_HEARTBEAT` | Simulate cooperative Planner (alive, mirrors target, enable_complete) |
-| `CONFIG_BYPASS_CONTROL_HEARTBEAT` | Simulate cooperative Control (alive, mirrors target, enable_complete) |
+| `CONFIG_BYPASS_PLANNER_LIVENESS` | Ignore Planner heartbeat timeout + Planner FAULT checks |
+| `CONFIG_BYPASS_PLANNER_STATE` | Simulate Planner state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_CONTROL_LIVENESS` | Ignore Control heartbeat timeout + Control FAULT checks |
+| `CONFIG_BYPASS_CONTROL_STATE` | Simulate Control state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_AUTONOMY_REQUEST` | Force autonomy request true (bench mode without Orin; bypasses one-shot re-arm) |
 | `CONFIG_BYPASS_PUSH_BUTTON` | Force push button e-stop to inactive (not pressed) |
 | `CONFIG_BYPASS_RF_REMOTE` | Force RF remote e-stop to inactive (not engaged) |
 | `CONFIG_BYPASS_ULTRASONIC` | Force ultrasonic clear and healthy (skip sensor) |
@@ -145,7 +151,8 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | Flag | Default | Effect |
 |------|---------|--------|
 | `CONFIG_LOG_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
-| `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every cycle |
+| `CONFIG_LOG_STATE_CHANGES` | off | Log target-state transitions and autonomy-request gate events |
+| `CONFIG_LOG_STATE_TICK` | off | Log state-machine evaluation every 50ms cycle (very verbose) |
 
 ### Push Button (HB2-ES544)
 

@@ -43,9 +43,11 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs) {
             break;
 
         case NODE_STATE_READY:
-            // Advance to ENABLING when both nodes are READY
+            // Advance to ENABLING when both nodes are READY and
+            // Planner/Orin has requested autonomy enable
             if (inputs->planner_state == NODE_STATE_READY &&
-                inputs->control_state == NODE_STATE_READY) {
+                inputs->control_state == NODE_STATE_READY &&
+                inputs->autonomy_request) {
                 r.new_target = NODE_STATE_ENABLING;
                 r.target_changed = true;
             } else {
