@@ -62,7 +62,7 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config) {
 // Energize relay to bypass pedal microswitch (for autonomous mode)
 void relay_jd2912_energize(void) {
     if (!s_initialized) {
-        ESP_LOGW(TAG, "Not initialized");
+        ESP_LOGE(TAG, "Not initialized");
         return;
     }
 

@@ -10,7 +10,7 @@
 
 namespace {
 
-static const char *TAG = "OVERRIDE_SENSORS";
+static const char *TAG = "OVERRIDE";
 
 // ============================================================================
 // Module State
@@ -67,7 +67,9 @@ static uint16_t read_pedal_adc_mv() {
     int raw = 0;
     esp_err_t err = adc_oneshot_read(s_adc_handle, s_config.pedal_adc_channel, &raw);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "ADC read failed: %s", esp_err_to_name(err));
+#ifdef CONFIG_LOG_PEDAL_ADC
+        ESP_LOGI(TAG, "ADC read failed: %s", esp_err_to_name(err));
+#endif
         return 0;
     }
 
@@ -146,7 +148,7 @@ esp_err_t override_sensors_init(const override_sensors_config_t *config) {
         ESP_LOGI(TAG, "ADC calibration enabled (curve fitting)");
     } else {
         s_cali_enabled = false;
-        ESP_LOGW(TAG, "ADC calibration not available, using raw conversion");
+        ESP_LOGI(TAG, "ADC calibration not available, using raw conversion");
     }
 
     // Configure F/R optocoupler inputs with pull-ups
@@ -167,6 +169,8 @@ esp_err_t override_sensors_init(const override_sensors_config_t *config) {
         return err;
     }
 
+    s_initialized = true;
+
     // Initialize debounce state to current switch position
     s_fr_state_debounced = read_fr_raw();
     s_fr_state_pending = s_fr_state_debounced;
@@ -176,8 +180,6 @@ esp_err_t override_sensors_init(const override_sensors_config_t *config) {
     uint16_t initial_mv = read_pedal_adc_mv();
     s_pedal_was_above = (initial_mv >= PEDAL_ADC_THRESHOLD_MV);
     s_pedal_below_threshold_since = 0;
-
-    s_initialized = true;
 
     ESP_LOGI(TAG, "Initialized: pedal_adc=ADC%d_CH%d, fr_dir=%d, fr_rev=%d",
              config->adc_unit + 1, config->pedal_adc_channel,
@@ -282,8 +284,10 @@ void override_sensors_update(uint32_t now_ms) {
 #endif
         } else if ((now_ms - s_fr_change_time) >= FR_DEBOUNCE_MS) {
             // Held stable for debounce period - accept new state
+#ifdef CONFIG_LOG_FR_STATE
             ESP_LOGI(TAG, "F/R state changed: %d -> %d",
                      s_fr_state_debounced, s_fr_state_pending);
+#endif
             s_fr_state_debounced = s_fr_state_pending;
             s_fr_debouncing = false;
         }
@@ -296,5 +300,4 @@ void override_sensors_update(uint32_t now_ms) {
         s_fr_debouncing = false;
     }
 }
-
 

@@ -101,6 +101,7 @@ typedef struct {
     uint32_t now_ms;
     uint32_t enable_start_ms;           // when enable sequence began
     uint32_t enable_sequence_ms;        // required hold time to complete enable
+    bool enable_work_done;              // true after COMPLETE_ENABLE has fired once
 
     // Throttle slew
     int8_t throttle_current;
@@ -138,6 +139,7 @@ typedef struct {
 
     // Recovery tracking
     uint32_t enable_start_ms;       // updated enable start time
+    bool enable_work_done;          // true after COMPLETE_ENABLE has fired once
 } control_step_result_t;
 
 /**

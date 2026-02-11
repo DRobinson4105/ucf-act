@@ -35,7 +35,9 @@ Control follows the system target state from Safety's heartbeat (0x100). It tran
 **ACTIVE -> OVERRIDE** triggered immediately by ANY:
 - Pedal pressed (no debounce - immediate response)
 - F/R switch moved from Forward (debounced)
-- Safety target state retreated (e-stop or node timeout)
+
+**ACTIVE -> READY** when Safety target state retreats (e-stop or node timeout).
+This is a commanded retreat from Safety, not a human override event.
 
 **OVERRIDE -> READY** auto-clears when ALL conditions met:
 - Safety target state is ENABLING or higher
@@ -128,11 +130,11 @@ Enable sequence (READY -> ACTIVE):
 
 ## Test Bypasses
 
-Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under "Test Bypasses", or add to `sdkconfig.defaults`:
+Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under **Test Bypasses** (top-level), or add to `sdkconfig.defaults`:
 
 | Flag | Effect |
 |------|--------|
-| `CONFIG_BYPASS_SAFETY_HEARTBEAT` | Force target_state to ENABLING (skip Safety heartbeat) |
+| `CONFIG_BYPASS_SAFETY_HEARTBEAT` | Force target_state to ACTIVE (ignore Safety heartbeat) |
 | `CONFIG_BYPASS_FR_SENSOR` | Force F/R state to Forward (skip optocoupler reading) |
 | `CONFIG_BYPASS_PLANNER_COMMANDS` | Zero throttle/steering/braking, suppress stale detection |
 | `CONFIG_BYPASS_STEPPER_MOTORS` | Skip stepper motor init/configure/commands (no UIM2852CA needed) |
@@ -142,25 +144,52 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 ## Debug Logging
 
-Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under "Debug Logging":
+Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level):
+
+### CAN Bus
 
 | Flag | Default | Effect |
 |------|---------|--------|
 | `CONFIG_LOG_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
 | `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received Safety heartbeat, not just changes |
-| `CONFIG_LOG_PLANNER_COMMANDS` | off | Log every Planner command RX (very verbose) |
-| `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every 20ms cycle |
-| `CONFIG_LOG_THROTTLE` | on | Log throttle level changes |
+| `CONFIG_LOG_PLANNER_COMMANDS` | off | Log every Planner command RX + timeout/stale warnings |
+| `CONFIG_LOG_CAN_RECOVERY` | off | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
+
+### Control Logic
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every 20ms cycle + state summary on change |
+| `CONFIG_LOG_ENABLE_SEQUENCE` | off | Log enable/disable sequence steps (start, complete, abort) |
+| `CONFIG_LOG_RECOVERY` | off | Log fault recovery attempts (re-init, success/failure) |
+| `CONFIG_LOG_THROTTLE` | **on** | Log throttle level changes |
 | `CONFIG_LOG_STEPPER_COMMANDS` | off | Log stepper motor position commands |
-| `CONFIG_LOG_OVERRIDE` | on | Log override trigger and clear events |
-| **Multiplexer (DG408DJZ)** | | |
+| `CONFIG_LOG_OVERRIDE` | **on** | Log override trigger and clear events |
+
+### Multiplexer (DG408DJZ)
+
+| Flag | Default | Effect |
+|------|---------|--------|
 | `CONFIG_LOG_MUX_LEVEL` | off | Log mux level changes with A2/A1/A0 values |
-| **Pedal Bypass Relay (JD-2912)** | | |
+
+### Pedal Bypass Relay (JD-2912)
+
+| Flag | Default | Effect |
+|------|---------|--------|
 | `CONFIG_LOG_PEDAL_RELAY` | **on** | Log pedal bypass relay energize/de-energize |
-| **Override Sensors** | | |
+
+### Override Sensors
+
+| Flag | Default | Effect |
+|------|---------|--------|
 | `CONFIG_LOG_PEDAL_ADC` | off | Log pedal ADC millivolt readings (extremely verbose) |
 | `CONFIG_LOG_FR_DEBOUNCE` | off | Log F/R switch debounce transitions |
-| **Stepper Motor (UIM2852)** | | |
+| `CONFIG_LOG_FR_STATE` | **on** | Log F/R gear selector state changes |
+
+### Stepper Motor (UIM2852)
+
+| Flag | Default | Effect |
+|------|---------|--------|
 | `CONFIG_LOG_STEPPER_MOTION` | off | Log stepper motion commands (PA/PR/ST) |
 | `CONFIG_LOG_STEPPER_RX` | off | Log stepper CAN RX frame details (MS, params, ACKs) |
 

@@ -1,11 +1,11 @@
 menu "Test Bypasses"
 
     config BYPASS_SAFETY_HEARTBEAT
-        bool "Bypass Safety heartbeat (simulate ENABLING)"
+        bool "Bypass Safety heartbeat (simulate ACTIVE)"
         default n
         help
             Ignore the Safety ESP32 heartbeat and force the system
-            target state to ENABLING. Use when testing Control
+            target state to ACTIVE. Use when testing Control
             without a Safety ESP32 on the CAN bus.
 
     config BYPASS_FR_SENSOR
@@ -62,61 +62,95 @@ endmenu
 
 menu "Debug Logging"
 
-    config LOG_HEARTBEAT_TX
-        bool "Log periodic heartbeat TX"
-        default n
-        help
-            Log every periodic heartbeat transmission (100ms interval).
-            Very verbose. Useful for confirming CAN TX is working.
-            State-change heartbeats are always logged regardless.
+    menu "CAN Bus"
 
-    config LOG_HEARTBEAT_RX
-        bool "Log every Safety heartbeat RX"
-        default n
-        help
-            Log every received Safety heartbeat, not just state/fault
-            changes. Very verbose. Useful for confirming CAN RX is
-            working and checking sequence numbers.
+        config LOG_HEARTBEAT_TX
+            bool "Log periodic heartbeat TX"
+            default n
+            help
+                Log every periodic heartbeat transmission (100ms interval).
+                Very verbose. Useful for confirming CAN TX is working.
+                Heartbeat TX failures are always logged as errors.
 
-    config LOG_PLANNER_COMMANDS
-        bool "Log every Planner command RX"
-        default n
-        help
-            Log every received Planner command with throttle, steering,
-            and braking values. Very verbose. Useful for confirming
-            Planner communication is working.
+        config LOG_HEARTBEAT_RX
+            bool "Log every Safety heartbeat RX"
+            default n
+            help
+                Log every received Safety heartbeat, not just state/fault
+                changes. Very verbose. Useful for confirming CAN RX is
+                working and checking sequence numbers.
 
-    config LOG_STATE_MACHINE
-        bool "Log state machine evaluation each cycle"
-        default n
-        help
-            Log the control state machine inputs and result every
-            control loop iteration (20ms). Extremely verbose. Useful
-            for debugging state transition issues.
+        config LOG_PLANNER_COMMANDS
+            bool "Log every Planner command RX"
+            default n
+            help
+                Log every received Planner command with throttle, steering,
+                and braking values. Also logs planner command timeout and
+                stale sequence warnings. Very verbose. Useful for confirming
+                Planner communication is working.
 
-    config LOG_THROTTLE
-        bool "Log throttle level changes"
-        default y
-        help
-            Log when the throttle level changes (slew rate limited).
-            Enabled by default since throttle changes are infrequent
-            and useful for diagnostics.
+        config LOG_CAN_RECOVERY
+            bool "Log CAN bus recovery attempts"
+            default n
+            help
+                Log CAN bus recovery events: stop/start cycles, full
+                driver reinstall, bus-off recovery, and TX failure
+                counts. Useful for diagnosing CAN bus issues.
 
-    config LOG_STEPPER_COMMANDS
-        bool "Log stepper motor position commands"
-        default n
-        help
-            Log every steering and braking stepper motor position
-            command sent over CAN. Verbose when active. Useful for
-            confirming motor communication.
+    endmenu
 
-    config LOG_OVERRIDE
-        bool "Log override trigger and clear events"
-        default y
-        help
-            Log when driver override is triggered (pedal press, F/R
-            change) and when it clears. Enabled by default since
-            override events are safety-critical.
+    menu "Control Logic"
+
+        config LOG_STATE_MACHINE
+            bool "Log state machine evaluation each cycle"
+            default n
+            help
+                Log the control state machine inputs and result every
+                control loop iteration (20ms). Also logs the state
+                summary line on state/throttle/target changes. Extremely
+                verbose. Useful for debugging state transition issues.
+
+        config LOG_ENABLE_SEQUENCE
+            bool "Log enable/disable sequence steps"
+            default n
+            help
+                Log the autonomous enable sequence steps: start enable,
+                complete enable (stepper + mux activation), abort enable,
+                and autonomous mode active confirmation.
+
+        config LOG_RECOVERY
+            bool "Log fault recovery attempts"
+            default n
+            help
+                Log fault recovery attempts: component re-init, success/
+                failure, and recovery exhaustion. Useful for diagnosing
+                intermittent hardware faults.
+
+        config LOG_THROTTLE
+            bool "Log throttle level changes"
+            default y
+            help
+                Log when the throttle level changes (slew rate limited).
+                Enabled by default since throttle changes are infrequent
+                and useful for diagnostics.
+
+        config LOG_STEPPER_COMMANDS
+            bool "Log stepper motor position commands"
+            default n
+            help
+                Log every steering and braking stepper motor position
+                command sent over CAN. Verbose when active. Useful for
+                confirming motor communication.
+
+        config LOG_OVERRIDE
+            bool "Log override trigger and clear events"
+            default y
+            help
+                Log when driver override is triggered (pedal press, F/R
+                change) and when it clears. Enabled by default since
+                override events are safety-critical.
+
+    endmenu
 
     menu "Multiplexer (DG408DJZ)"
 
@@ -161,6 +195,15 @@ menu "Debug Logging"
                 transitions (start, reset, complete, cancel).
                 Useful for verifying optocoupler wiring and
                 debounce timing.
+
+        config LOG_FR_STATE
+            bool "Log F/R state changes"
+            default y
+            help
+                Log when the F/R gear selector state changes
+                (Forward, Reverse, Neutral, Invalid). Enabled
+                by default since F/R transitions are infrequent
+                and operationally relevant.
 
     endmenu
 

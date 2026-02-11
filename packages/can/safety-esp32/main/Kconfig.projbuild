@@ -1,20 +1,22 @@
 menu "Test Bypasses"
 
     config BYPASS_PLANNER_HEARTBEAT
-        bool "Bypass Planner heartbeat check"
+        bool "Bypass Planner heartbeat (simulate cooperative Planner)"
         default n
         help
-            Treat the Planner (Jetson) as always alive. Prevents
-            NODE_FAULT_ESTOP_PLANNER_TIMEOUT when testing Safety
-            without a Planner on the CAN bus.
+            Simulate a cooperative Planner node that is always alive,
+            mirrors the system target state, and signals enable_complete.
+            Prevents estop timeout and allows state advancement
+            (READY -> ENABLING -> ACTIVE) without a Planner on the bus.
 
     config BYPASS_CONTROL_HEARTBEAT
-        bool "Bypass Control heartbeat check"
+        bool "Bypass Control heartbeat (simulate cooperative Control)"
         default n
         help
-            Treat the Control ESP32 as always alive. Prevents
-            NODE_FAULT_ESTOP_CONTROL_TIMEOUT when testing Safety
-            without a Control ESP32 on the CAN bus.
+            Simulate a cooperative Control node that is always alive,
+            mirrors the system target state, and signals enable_complete.
+            Prevents estop timeout and allows state advancement
+            (READY -> ENABLING -> ACTIVE) without a Control ESP32 on the bus.
 
     config BYPASS_PUSH_BUTTON
         bool "Bypass push button e-stop (HB2-ES544)"
@@ -46,37 +48,53 @@ endmenu
 
 menu "Debug Logging"
 
-    config LOG_HEARTBEAT_TX
-        bool "Log periodic heartbeat TX"
-        default n
-        help
-            Log every periodic heartbeat transmission (100ms interval).
-            Very verbose. Useful for confirming CAN TX is working.
-            State-change heartbeats are always logged regardless.
+    menu "CAN Bus"
 
-    config LOG_HEARTBEAT_RX
-        bool "Log every heartbeat RX"
-        default n
-        help
-            Log every received Planner and Control heartbeat, not just
-            state changes. Very verbose. Useful for confirming CAN RX
-            is working and checking sequence numbers.
+        config LOG_HEARTBEAT_TX
+            bool "Log periodic heartbeat TX"
+            default n
+            help
+                Log every periodic heartbeat transmission (100ms interval).
+                Very verbose. Useful for confirming CAN TX is working.
+                Heartbeat TX failures are always logged as errors.
 
-    config LOG_ESTOP_INPUTS
-        bool "Log e-stop input readings each cycle"
-        default n
-        help
-            Log all e-stop input readings (button, remote, ultrasonic,
-            planner, control) every safety loop iteration (50ms).
-            Extremely verbose. Useful for debugging sensor wiring.
+        config LOG_HEARTBEAT_RX
+            bool "Log every heartbeat RX"
+            default n
+            help
+                Log every received Planner and Control heartbeat, not just
+                state changes. Very verbose. Useful for confirming CAN RX
+                is working and checking sequence numbers.
 
-    config LOG_STATE_MACHINE
-        bool "Log state machine evaluation each cycle"
-        default n
-        help
-            Log the system state machine inputs and result every
-            safety loop iteration. Verbose. Useful for debugging
-            state advancement issues.
+        config LOG_CAN_RECOVERY
+            bool "Log CAN bus recovery attempts"
+            default n
+            help
+                Log CAN bus recovery events: stop/start cycles, full
+                driver reinstall, bus-off recovery, and TX failure
+                counts. Useful for diagnosing CAN bus issues.
+
+    endmenu
+
+    menu "Safety Logic"
+
+        config LOG_ESTOP_INPUTS
+            bool "Log e-stop input readings each cycle"
+            default n
+            help
+                Log all e-stop input readings (button, remote, ultrasonic,
+                planner, control) every safety loop iteration (50ms).
+                Extremely verbose. Useful for debugging sensor wiring.
+
+        config LOG_STATE_MACHINE
+            bool "Log state machine evaluation each cycle"
+            default n
+            help
+                Log the system state machine inputs and result every
+                safety loop iteration. Verbose. Useful for debugging
+                state advancement issues.
+
+    endmenu
 
     menu "Push Button (HB2-ES544)"
 

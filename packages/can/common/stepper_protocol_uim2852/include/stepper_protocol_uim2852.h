@@ -20,7 +20,7 @@ extern "C" {
 //   CAN_ID = (SID << 18) | EID
 //
 // For responses (Motor -> Host):
-//   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 6) & 0x001F)
+//   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 1) & 0x001F)
 //   CW = EID & 0x00FF
 // ============================================================================
 

@@ -11,7 +11,7 @@
 
 namespace {
 
-static const char *TAG = "MUX";
+static const char *TAG = "MULTIPLEXER";
 
 // ============================================================================
 // Timing Constants
@@ -81,7 +81,7 @@ esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config)
 // Set throttle level 0-7, or <0 to disable mux output
 void multiplexer_dg408djz_set_level(int8_t level) {
     if (!s_initialized) {
-        ESP_LOGW(TAG, "Not initialized");
+        ESP_LOGE(TAG, "Not initialized");
         return;
     }
 
@@ -133,11 +133,13 @@ int8_t multiplexer_dg408djz_get_level(void) {
 // After this, Curtis motor controller reads mux output instead of pedal pot
 void multiplexer_dg408djz_enable_autonomous(void) {
     if (!s_initialized) {
-        ESP_LOGW(TAG, "Not initialized");
+        ESP_LOGE(TAG, "Not initialized");
         return;
     }
 
+#ifdef CONFIG_LOG_MUX_LEVEL
     ESP_LOGI(TAG, "Enabling autonomous mode");
+#endif
 
     // Start at idle throttle to prevent surge when relay switches
     multiplexer_dg408djz_set_level(0);
@@ -150,7 +152,9 @@ void multiplexer_dg408djz_enable_autonomous(void) {
     // Wait for relay contacts to settle before allowing throttle changes
     vTaskDelay(pdMS_TO_TICKS(RELAY_SETTLE_MS));
 
+#ifdef CONFIG_LOG_MUX_LEVEL
     ESP_LOGI(TAG, "Autonomous mode ENABLED");
+#endif
 }
 
 // Gracefully disable autonomous mode
@@ -158,7 +162,9 @@ void multiplexer_dg408djz_enable_autonomous(void) {
 void multiplexer_dg408djz_disable_autonomous(void) {
     if (!s_initialized) return;
 
+#ifdef CONFIG_LOG_MUX_LEVEL
     ESP_LOGI(TAG, "Disabling autonomous mode");
+#endif
 
     // Ramp to idle before switching to prevent throttle discontinuity
     multiplexer_dg408djz_set_level(0);
@@ -171,14 +177,18 @@ void multiplexer_dg408djz_disable_autonomous(void) {
     vTaskDelay(pdMS_TO_TICKS(20));
     multiplexer_dg408djz_disable();
 
+#ifdef CONFIG_LOG_MUX_LEVEL
     ESP_LOGI(TAG, "Autonomous mode DISABLED (manual control active)");
+#endif
 }
 
 // Immediate cutoff - no ramp down, used for override/fault conditions
 void multiplexer_dg408djz_emergency_stop(void) {
     if (!s_initialized) return;
 
-    ESP_LOGW(TAG, "EMERGENCY STOP");
+#ifdef CONFIG_LOG_MUX_LEVEL
+    ESP_LOGI(TAG, "EMERGENCY STOP");
+#endif
 
     // Immediately disable mux output
     gpio_set_level(s_config.en, 0);

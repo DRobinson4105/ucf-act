@@ -195,6 +195,7 @@ static void test_ready_to_enabling(void) {
     assert(r.actions == CONTROL_ACTION_START_ENABLE);
     assert(r.enable_start_ms == 5000);
     assert(r.throttle_level == 0);
+    assert(r.enable_work_done == false);
 }
 
 // 14. READY + target_state >= ENABLING but pedal pressed -> stays READY
@@ -237,6 +238,7 @@ static void test_enabling_to_active(void) {
     assert(r.new_state == NODE_STATE_ACTIVE);
     assert(r.actions == CONTROL_ACTION_COMPLETE_ENABLE);
     assert(r.override_reason == OVERRIDE_REASON_NONE);
+    assert(r.enable_work_done == true);
 }
 
 // 18. ENABLING + timer not expired -> stays ENABLING
@@ -268,6 +270,32 @@ static void test_enabling_enable_complete_stays(void) {
     control_step_result_t r = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_ENABLING);
     assert(r.heartbeat_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE);
+    assert(r.enable_work_done == true);
+    assert(r.actions & CONTROL_ACTION_COMPLETE_ENABLE);  // first time fires action
+}
+
+// 20b. ENABLING + timer expired + enable_work_done=true -> COMPLETE_ENABLE does NOT fire again
+static void test_enabling_complete_fires_once(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_ENABLING;
+    in.enable_start_ms = 1000;
+    in.now_ms = 1220;  // timer expired
+
+    // First call: enable_work_done=false -> fires COMPLETE_ENABLE
+    in.enable_work_done = false;
+    control_step_result_t r1 = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
+    assert(r1.actions & CONTROL_ACTION_COMPLETE_ENABLE);
+    assert(r1.enable_work_done == true);
+    assert(r1.heartbeat_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE);
+
+    // Second call: enable_work_done=true -> does NOT fire COMPLETE_ENABLE
+    in.enable_work_done = true;
+    in.now_ms = 1240;
+    control_step_result_t r2 = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
+    assert(!(r2.actions & CONTROL_ACTION_COMPLETE_ENABLE));
+    assert(r2.enable_work_done == true);
+    assert(r2.heartbeat_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE);
+    assert(r2.new_state == NODE_STATE_ENABLING);
 }
 
 // ============================================================================
@@ -280,9 +308,11 @@ static void test_enabling_abort_no_auto(void) {
     in.target_state = NODE_STATE_READY;
     in.enable_start_ms = 1000;
     in.now_ms = 1050;
+    in.enable_work_done = true;  // was set before abort
     control_step_result_t r = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_READY);
     assert(r.actions == CONTROL_ACTION_ABORT_ENABLE);
+    assert(r.enable_work_done == false);  // reset on abort
 }
 
 // 22. ENABLING + pedal pressed -> READY + ABORT_ENABLE
@@ -343,14 +373,17 @@ static void test_active_override_fr(void) {
     assert(r.override_reason == OVERRIDE_REASON_FR_CHANGED);
 }
 
-// 27. ACTIVE + target_state < ACTIVE -> OVERRIDE
-static void test_active_override_no_auto(void) {
+// 27. ACTIVE + target_state < ACTIVE (Safety retreat) -> READY (not OVERRIDE)
+static void test_active_safety_retreat_to_ready(void) {
     control_inputs_t in = default_inputs();
     in.target_state = NODE_STATE_ENABLING;
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-    assert(r.new_state == NODE_STATE_OVERRIDE);
-    assert(r.actions == CONTROL_ACTION_TRIGGER_OVERRIDE);
+    assert(r.new_state == NODE_STATE_READY);
+    assert(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE);
     assert(r.override_reason == OVERRIDE_REASON_NONE);
+    assert(r.throttle_level == 0);
+    assert(r.new_last_steering == INT16_MIN);
+    assert(r.new_last_braking == INT16_MIN);
 }
 
 // 28. ACTIVE override priority: target_state first, then pedal > FR
@@ -730,13 +763,7 @@ static void test_slew_clamp_upper_boundary(void) {
     };
     throttle_slew_result_t r = control_compute_throttle_slew(&s);
     assert(r.new_level == 7);
-    // current(7) != target(8), elapsed >= interval, so step up: 7+1=8, clamped to 7
-    // Level didn't actually change from current, but changed flag is true
-    // because the slew logic attempted a change (8 clamped to 7 == current)
-    // Actually: 7+1=8, clamp to 7, new_level==current -> changed may be true
-    // Let's verify what the code does: it sets new_level=current+1=8, clamps to 7,
-    // then sets changed=true (always when slew fires). So changed=true but level unchanged.
-    assert(r.new_level == 7);
+    assert(r.changed == false);
 }
 
 // Slew at lower boundary: current=0, target=-1 -> clamps to 0
@@ -747,6 +774,7 @@ static void test_slew_clamp_lower_boundary(void) {
     };
     throttle_slew_result_t r = control_compute_throttle_slew(&s);
     assert(r.new_level == 0);
+    assert(r.changed == false);
 }
 
 // ============================================================================
@@ -844,6 +872,7 @@ int main(void) {
     TEST(test_enabling_stays_timer);
     TEST(test_enabling_exact_boundary);
     TEST(test_enabling_enable_complete_stays);
+    TEST(test_enabling_complete_fires_once);
 
     // ENABLING -> READY abort (4)
     printf("\n--- ENABLING -> READY abort ---\n");
@@ -852,11 +881,11 @@ int main(void) {
     TEST(test_enabling_abort_fr);
     TEST(test_enabling_abort_priority);
 
-    // ACTIVE override (4)
-    printf("\n--- ACTIVE override ---\n");
+    // ACTIVE override / Safety retreat (4)
+    printf("\n--- ACTIVE override / Safety retreat ---\n");
     TEST(test_active_override_pedal);
     TEST(test_active_override_fr);
-    TEST(test_active_override_no_auto);
+    TEST(test_active_safety_retreat_to_ready);
     TEST(test_active_override_priority);
 
     // ACTIVE throttle + steering (4)

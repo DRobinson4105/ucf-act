@@ -24,7 +24,7 @@ The Safety ESP32 continuously monitors:
 - ENABLED when all inputs are clear (no e-stop)
 - DISABLED immediately when any e-stop condition detected
 
-**E-stop priority** (first match wins):
+**E-stop fault sources** (OR'ed into a bitmask):
 1. Push button pressed (HB2-ES544)
 2. RF remote kill (EV1527)
 3. Ultrasonic triggered (A02YYUW obstacle detected OR sensor not responding)
@@ -118,36 +118,60 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 
 ## Test Bypasses
 
-Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under "Test Bypasses", or add to `sdkconfig.defaults`:
+Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under **Test Bypasses** (top-level), or add to `sdkconfig.defaults`:
 
 | Flag | Effect |
 |------|--------|
-| `CONFIG_BYPASS_PLANNER_HEARTBEAT` | Pretend Planner heartbeat is alive (skip timeout) |
-| `CONFIG_BYPASS_CONTROL_HEARTBEAT` | Pretend Control heartbeat is alive (skip timeout) |
+| `CONFIG_BYPASS_PLANNER_HEARTBEAT` | Simulate cooperative Planner (alive, mirrors target, enable_complete) |
+| `CONFIG_BYPASS_CONTROL_HEARTBEAT` | Simulate cooperative Control (alive, mirrors target, enable_complete) |
 | `CONFIG_BYPASS_PUSH_BUTTON` | Force push button e-stop to inactive (not pressed) |
 | `CONFIG_BYPASS_RF_REMOTE` | Force RF remote e-stop to inactive (not engaged) |
 | `CONFIG_BYPASS_ULTRASONIC` | Force ultrasonic clear and healthy (skip sensor) |
 
 ## Debug Logging
 
-Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under "Debug Logging":
+Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level):
+
+### CAN Bus
 
 | Flag | Default | Effect |
 |------|---------|--------|
 | `CONFIG_LOG_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
 | `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received heartbeat, not just state changes |
+| `CONFIG_LOG_CAN_RECOVERY` | off | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
+
+### Safety Logic
+
+| Flag | Default | Effect |
+|------|---------|--------|
 | `CONFIG_LOG_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
 | `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every cycle |
-| **Ultrasonic Sensor (A02YYUW)** | | |
+
+### Push Button (HB2-ES544)
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_PUSH_BUTTON` | off | Log push button state changes (pressed/released) |
+
+### RF Remote (EV1527)
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_RF_REMOTE` | off | Log RF remote state changes (engaged/disengaged) |
+
+### Power Relay (SRD-05VDC)
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_RELAY_STATE` | **on** | Log power relay enable/disable transitions |
+
+### Ultrasonic Sensor (A02YYUW)
+
+| Flag | Default | Effect |
+|------|---------|--------|
 | `CONFIG_LOG_ULTRASONIC_DISTANCE` | off | Log every valid distance reading (~5-10/sec) |
 | `CONFIG_LOG_ULTRASONIC_RX` | off | Log raw UART RX hex bytes (extremely verbose) |
 | `CONFIG_LOG_ULTRASONIC_PARSE_ERRORS` | off | Log UART parse failures (bad checksum, missing header) |
-| **Push Button (HB2-ES544)** | | |
-| `CONFIG_LOG_PUSH_BUTTON` | off | Log push button state changes (pressed/released) |
-| **RF Remote (EV1527)** | | |
-| `CONFIG_LOG_RF_REMOTE` | off | Log RF remote state changes (engaged/disengaged) |
-| **Power Relay (SRD-05VDC)** | | |
-| `CONFIG_LOG_RELAY_STATE` | **on** | Log power relay enable/disable transitions |
 
 ## Build
 

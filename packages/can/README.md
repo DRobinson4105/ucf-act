@@ -76,8 +76,10 @@ idf.py -p /dev/cu.usbmodem14101 flash monitor
 idf.py -p COM3 flash monitor
 
 # WSL (requires usbipd-win to forward USB, see below)
-idf.py -p /dev/ttyACM0 flash monitor
+idf.py -p /dev/ttyACM0 flash
+idf.py -p /dev/ttyACM0 monitor
 ```
+Note: usbipd-win doesn't like flash + monitor at the same time.
 
 ### WSL USB Forwarding
 

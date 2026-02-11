@@ -64,9 +64,9 @@ bool safety_compute_ultrasonic_trigger(bool too_close, bool healthy);
 /**
  * @brief Evaluate all safety inputs and produce a decision.
  *
- * Applies the e-stop priority chain:
- *   push_button > rf_remote > ultrasonic > planner_error >
- *   planner_timeout > control_error > control_timeout
+ * Builds an e-stop fault bitmask where each active condition sets its bit:
+ *   push_button | rf_remote | ultrasonic | planner_error |
+ *   planner_timeout | control_error | control_timeout
  *
  * @param inputs  All sensor and heartbeat readings
  * @return Decision: estop state, fault_code, relay command

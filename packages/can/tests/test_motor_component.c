@@ -137,6 +137,8 @@ static void test_init_semaphore_fail(void) {
     stepper_motor_uim2852_t motor;
     esp_err_t err = stepper_motor_uim2852_init(&motor, NULL);
     assert(err == ESP_ERR_NO_MEM);
+    assert(motor.initialized == false);
+    assert(motor.query_sem == NULL);
 }
 
 // ============================================================================

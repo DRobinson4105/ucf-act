@@ -45,6 +45,8 @@
 namespace {
 
 static const char *TAG = "SAFETY";
+static const char *TAG_TX = "SAFETY_TX";
+static const char *TAG_RX __attribute__((unused)) = "SAFETY_RX";
 
 // ============================================================================
 // Task Configuration
@@ -134,6 +136,11 @@ static portMUX_TYPE g_safety_hb_seq_lock = portMUX_INITIALIZER_UNLOCKED;
 // Fault code for heartbeat (NODE_FAULT_ESTOP_* or NODE_FAULT_NONE)
 static volatile uint8_t g_estop_fault_code = NODE_FAULT_NONE;
 
+// Input init health (hard fail-closed when critical safety inputs fail init)
+static bool g_push_button_init_ok = false;
+static bool g_rf_remote_init_ok = false;
+static bool g_ultrasonic_init_ok = false;
+
 // ============================================================================
 // Component Configurations
 // ============================================================================
@@ -149,6 +156,7 @@ static heartbeat_config_t g_heartbeat_led_cfg;
 // ============================================================================
 
 static uint8_t g_can_tx_fail_count = 0;
+static bool g_can_recovery_in_progress = false;
 
 // Spinlock for CAN TX tracking / recovery (used by safety_task + heartbeat_task)
 static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -159,11 +167,10 @@ static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Retry an init function up to INIT_MAX_RETRIES times with delay between attempts.
 // Returns ESP_OK on success, or last error on exhaustion.
-// Note: Callers cast component init functions to init_fn_t. This is technically
-// UB in C++ but is safe on all ESP32 ABIs (identical calling convention).
-typedef esp_err_t (*init_fn_t)(const void *config);
-
-static esp_err_t retry_init(const char *name, init_fn_t fn, const void *config) {
+template <typename ConfigT>
+static esp_err_t retry_init(const char *name,
+                            esp_err_t (*fn)(const ConfigT *),
+                            const ConfigT *config) {
     esp_err_t err = ESP_FAIL;
     for (int attempt = 1; attempt <= INIT_MAX_RETRIES; attempt++) {
         err = fn(config);
@@ -172,7 +179,7 @@ static esp_err_t retry_init(const char *name, init_fn_t fn, const void *config) 
                 ESP_LOGI(TAG, "%s init succeeded on attempt %d", name, attempt);
             return ESP_OK;
         }
-        ESP_LOGW(TAG, "%s init failed (attempt %d/%d): %s",
+        ESP_LOGI(TAG, "%s init failed (attempt %d/%d): %s",
                  name, attempt, INIT_MAX_RETRIES, esp_err_to_name(err));
         if (attempt < INIT_MAX_RETRIES)
             vTaskDelay(pdMS_TO_TICKS(INIT_RETRY_DELAY_MS));
@@ -189,7 +196,9 @@ static esp_err_t retry_init(const char *name, init_fn_t fn, const void *config) 
 // First tries stop/start cycle, then full driver reinstall.
 // Calls esp_restart() if all recovery fails.
 static void attempt_can_recovery() {
-    ESP_LOGW(TAG, "Attempting CAN recovery (stop/start cycle)");
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    ESP_LOGI(TAG, "Attempting CAN recovery (stop/start cycle)");
+#endif
     // Safe to call while CAN RX task is blocked in twai_receive() —
     // twai_stop() causes twai_receive() to return ESP_ERR_INVALID_STATE,
     // which the RX loop handles gracefully (continues to next iteration).
@@ -197,18 +206,24 @@ static void attempt_can_recovery() {
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_err_t err = twai_start();
     if (err == ESP_OK) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
         ESP_LOGI(TAG, "CAN recovery succeeded (stop/start)");
+#endif
         g_can_tx_fail_count = 0;
         return;
     }
 
     // Escalate: full driver reinstall
-    ESP_LOGW(TAG, "CAN stop/start failed, attempting full re-init");
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    ESP_LOGI(TAG, "CAN stop/start failed, attempting full re-init");
+#endif
     twai_driver_uninstall();
     vTaskDelay(pdMS_TO_TICKS(200));
     err = can_twai_init_default(TWAI_TX_GPIO, TWAI_RX_GPIO);
     if (err == ESP_OK) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
         ESP_LOGI(TAG, "CAN full re-init succeeded");
+#endif
         g_can_tx_fail_count = 0;
         return;
     }
@@ -221,6 +236,8 @@ static void attempt_can_recovery() {
 // Track CAN TX result. On consecutive failures, trigger recovery.
 // Protected by g_can_tx_lock to prevent concurrent recovery from safety_task + heartbeat_task.
 static void track_can_tx(esp_err_t err) {
+    bool trigger_recovery = false;
+
     taskENTER_CRITICAL(&g_can_tx_lock);
     if (err == ESP_OK) {
         g_can_tx_fail_count = 0;
@@ -232,16 +249,25 @@ static void track_can_tx(esp_err_t err) {
         bool bus_ok = can_twai_bus_ok();
         g_can_tx_fail_count = 0;  // reset regardless
         if (!bus_ok) {
-            ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
-                     CAN_TX_FAIL_THRESHOLD);
-            taskEXIT_CRITICAL(&g_can_tx_lock);
-            attempt_can_recovery();
+            if (!g_can_recovery_in_progress) {
+                g_can_recovery_in_progress = true;
+                trigger_recovery = true;
+            }
         } else {
-            ESP_LOGW(TAG, "CAN TX failed %d times (bus OK, no partner?)",
+#ifdef CONFIG_LOG_CAN_RECOVERY
+            ESP_LOGI(TAG, "CAN TX failed %d times (bus OK, no partner?)",
                      CAN_TX_FAIL_THRESHOLD);
-            taskEXIT_CRITICAL(&g_can_tx_lock);
+#endif
         }
-    } else {
+    }
+    taskEXIT_CRITICAL(&g_can_tx_lock);
+
+    if (trigger_recovery) {
+        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
+                 CAN_TX_FAIL_THRESHOLD);
+        attempt_can_recovery();
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        g_can_recovery_in_progress = false;
         taskEXIT_CRITICAL(&g_can_tx_lock);
     }
 }
@@ -269,20 +295,19 @@ static void send_safety_heartbeat(bool log_as_change) {
     track_can_tx(err);
 
     if (err == ESP_OK) {
+#ifdef CONFIG_LOG_HEARTBEAT_TX
         if (log_as_change) {
-            ESP_LOGW(TAG, "[CAN TX] Heartbeat: target=%s fault:%s",
+            ESP_LOGI(TAG_TX, "Heartbeat: target=%s fault:%s",
                      node_state_to_string(g_target_state),
                      node_fault_to_string(g_estop_fault_code));
-        }
-#ifdef CONFIG_LOG_HEARTBEAT_TX
-        else {
-            ESP_LOGI(TAG, "[CAN TX] Heartbeat periodic: target=%s fault:%s",
+        } else {
+            ESP_LOGI(TAG_TX, "Heartbeat periodic: target=%s fault:%s",
                      node_state_to_string(g_target_state),
                      node_fault_to_string(g_estop_fault_code));
         }
 #endif
     } else {
-        ESP_LOGE(TAG, "[CAN TX] Heartbeat failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG_TX, "Heartbeat failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -308,22 +333,23 @@ void can_rx_task(void *param) {
             can_decode_heartbeat(msg.data, &hb);
             heartbeat_monitor_update(&g_hb_monitor, g_node_planner, hb.sequence, hb.state);
 
-            uint8_t prev_state = g_planner_state;
             g_planner_state = hb.state;
             g_planner_flags = hb.flags;
 
+#ifdef CONFIG_LOG_HEARTBEAT_RX
+            static uint8_t prev_planner_state = 0xFF;
+            uint8_t prev_state = prev_planner_state;
+            prev_planner_state = hb.state;
             if (hb.state == NODE_STATE_FAULT && prev_state != NODE_STATE_FAULT) {
-                ESP_LOGW(TAG, "[CAN RX] Planner FAULT: %s", node_fault_to_string(hb.fault_code));
+                ESP_LOGI(TAG_RX, "Planner FAULT: %s", node_fault_to_string(hb.fault_code));
             } else if (hb.state != NODE_STATE_FAULT && prev_state == NODE_STATE_FAULT) {
-                ESP_LOGI(TAG, "[CAN RX] Planner fault cleared");
+                ESP_LOGI(TAG_RX, "Planner fault cleared");
             }
             if (hb.state != prev_state) {
-                ESP_LOGI(TAG, "[CAN RX] Planner state: %s -> %s",
+                ESP_LOGI(TAG_RX, "Planner state: %s -> %s",
                          node_state_to_string(prev_state), node_state_to_string(hb.state));
-            }
-#ifdef CONFIG_LOG_HEARTBEAT_RX
-            else {
-                ESP_LOGI(TAG, "[CAN RX] Planner HB: seq=%u state=%s fault=%s flags=0x%02X",
+            } else {
+                ESP_LOGI(TAG_RX, "Planner HB: seq=%u state=%s fault=%s flags=0x%02X",
                          hb.sequence, node_state_to_string(hb.state),
                          node_fault_to_string(hb.fault_code), hb.flags);
             }
@@ -336,22 +362,23 @@ void can_rx_task(void *param) {
             can_decode_heartbeat(msg.data, &hb);
             heartbeat_monitor_update(&g_hb_monitor, g_node_control, hb.sequence, hb.state);
 
-            uint8_t prev_state = g_control_node_state;
             g_control_node_state = hb.state;
             g_control_flags = hb.flags;
 
+#ifdef CONFIG_LOG_HEARTBEAT_RX
+            static uint8_t prev_control_state = 0xFF;
+            uint8_t prev_state = prev_control_state;
+            prev_control_state = hb.state;
             if (hb.state == NODE_STATE_FAULT && prev_state != NODE_STATE_FAULT) {
-                ESP_LOGW(TAG, "[CAN RX] Control FAULT: %s", node_fault_to_string(hb.fault_code));
+                ESP_LOGI(TAG_RX, "Control FAULT: %s", node_fault_to_string(hb.fault_code));
             } else if (hb.state != NODE_STATE_FAULT && prev_state == NODE_STATE_FAULT) {
-                ESP_LOGI(TAG, "[CAN RX] Control fault cleared");
+                ESP_LOGI(TAG_RX, "Control fault cleared");
             }
             if (hb.state != prev_state) {
-                ESP_LOGI(TAG, "[CAN RX] Control state: %s -> %s",
+                ESP_LOGI(TAG_RX, "Control state: %s -> %s",
                          node_state_to_string(prev_state), node_state_to_string(hb.state));
-            }
-#ifdef CONFIG_LOG_HEARTBEAT_RX
-            else {
-                ESP_LOGI(TAG, "[CAN RX] Control HB: seq=%u state=%s fault=%s flags=0x%02X",
+            } else {
+                ESP_LOGI(TAG_RX, "Control HB: seq=%u state=%s fault=%s flags=0x%02X",
                          hb.sequence, node_state_to_string(hb.state),
                          node_fault_to_string(hb.fault_code), hb.flags);
             }
@@ -368,25 +395,28 @@ void can_rx_task(void *param) {
 // Reads e-stop inputs, checks heartbeat timeouts, controls power relay,
 // runs the system state machine, and sends immediate heartbeat on state change.
 //
-// Decision logic (e-stop priority chain, relay) is delegated to the pure
+// Decision logic (e-stop bitmask evaluation, relay) is delegated to the pure
 // safety_logic module. State advancement is delegated to the pure
 // system_state module. Both are unit-testable on host.
 void safety_task(void *param) {
     (void)param;
     ESP_LOGI(TAG, "Safety task started");
 
-    uint8_t last_fault_code = 0xFF;
-
-    // Initial delay to let nodes report in
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
     while (true) {
         // Read hardware inputs into the pure-function input struct
         safety_inputs_t inputs = {
-            .push_button_active = push_button_hb2es544_read_active(&g_push_button_cfg),
-            .rf_remote_active   = rf_remote_ev1527_is_active(&g_rf_remote_cfg),
-            .ultrasonic_too_close = ultrasonic_a02yyuw_is_too_close(ULTRASONIC_STOP_DISTANCE_MM, NULL),
-            .ultrasonic_healthy = ultrasonic_a02yyuw_is_healthy(),
+            .push_button_active = g_push_button_init_ok
+                                  ? push_button_hb2es544_read_active(&g_push_button_cfg)
+                                  : true,
+            .rf_remote_active   = g_rf_remote_init_ok
+                                  ? rf_remote_ev1527_is_active(&g_rf_remote_cfg)
+                                  : true,
+            .ultrasonic_too_close = g_ultrasonic_init_ok
+                                    ? ultrasonic_a02yyuw_is_too_close(ULTRASONIC_STOP_DISTANCE_MM, NULL)
+                                    : false,
+            .ultrasonic_healthy = g_ultrasonic_init_ok
+                                  ? ultrasonic_a02yyuw_is_healthy()
+                                  : false,
             .planner_alive = true,   // updated below from heartbeat monitor
             .control_alive = true,   // updated below from heartbeat monitor
             .planner_error = (g_planner_state == NODE_STATE_FAULT),
@@ -401,9 +431,11 @@ void safety_task(void *param) {
         // Apply test bypasses
 #ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
         inputs.planner_alive = true;
+        inputs.planner_error = false;
 #endif
 #ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
         inputs.control_alive = true;
+        inputs.control_error = false;
 #endif
 #ifdef CONFIG_BYPASS_PUSH_BUTTON
         inputs.push_button_active = false;
@@ -417,7 +449,7 @@ void safety_task(void *param) {
 #endif
 
 #ifdef CONFIG_LOG_ESTOP_INPUTS
-        ESP_LOGI(TAG, "[INPUTS] button=%d remote=%d ultra_close=%d ultra_healthy=%d planner=%s(%s) control=%s(%s)",
+        ESP_LOGI(TAG, "button=%d remote=%d ultra_close=%d ultra_healthy=%d planner=%s(%s) control=%s(%s)",
                  inputs.push_button_active, inputs.rf_remote_active,
                  inputs.ultrasonic_too_close, inputs.ultrasonic_healthy,
                  inputs.planner_alive ? "alive" : "DEAD",
@@ -443,10 +475,24 @@ void safety_task(void *param) {
             .planner_enable_complete = (g_planner_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE) != 0,
             .control_enable_complete = (g_control_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE) != 0,
         };
+
+        // Planner bypass: simulate a cooperative Planner that mirrors the
+        // current target state and always signals enable_complete.
+#ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
+        ss_in.planner_state = (g_target_state >= NODE_STATE_ENABLING)
+                              ? NODE_STATE_ENABLING : NODE_STATE_READY;
+        ss_in.planner_enable_complete = true;
+#endif
+        // Control bypass: same pattern for Control.
+#ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
+        ss_in.control_state = (g_target_state >= NODE_STATE_ENABLING)
+                              ? NODE_STATE_ENABLING : NODE_STATE_READY;
+        ss_in.control_enable_complete = true;
+#endif
         system_state_result_t ss_out = system_state_step(&ss_in);
 
 #ifdef CONFIG_LOG_STATE_MACHINE
-        ESP_LOGI(TAG, "[SM] estop=%d planner=%s control=%s p_complete=%d c_complete=%d target=%s -> %s",
+        ESP_LOGI(TAG, "estop=%d planner=%s control=%s p_complete=%d c_complete=%d target=%s -> %s",
                  decision.estop_active,
                  node_state_to_string(g_planner_state),
                  node_state_to_string(g_control_node_state),
@@ -455,15 +501,16 @@ void safety_task(void *param) {
                  node_state_to_string(ss_out.new_target));
 #endif
 
-        // Apply new target state
-        uint8_t prev_target = g_target_state;
-        g_target_state = ss_out.new_target;
-
+#ifdef CONFIG_LOG_STATE_MACHINE
         if (ss_out.target_changed) {
-            ESP_LOGW(TAG, "System target: %s -> %s",
-                     node_state_to_string(prev_target),
+            ESP_LOGI(TAG, "System target: %s -> %s",
+                     node_state_to_string(g_target_state),
                      node_state_to_string(ss_out.new_target));
         }
+#endif
+
+        // Apply new target state
+        g_target_state = ss_out.new_target;
 
         // Control power relay based on safety decision
         if (decision.relay_enable) {
@@ -483,17 +530,6 @@ void safety_task(void *param) {
         // Send immediate heartbeat on target state change
         if (ss_out.target_changed) {
             send_safety_heartbeat(true);
-        }
-
-        // Log on fault code change
-        if (decision.fault_code != last_fault_code) {
-            ESP_LOGI(TAG, "target=%s | planner=%s control=%s | estop %-6s (%s)",
-                     node_state_to_string(g_target_state),
-                     node_state_to_string(g_planner_state),
-                     node_state_to_string(g_control_node_state),
-                     decision.estop_active ? "ACTIVE" : "clear",
-                     node_fault_to_string(decision.fault_code));
-            last_fault_code = decision.fault_code;
         }
 
         vTaskDelay(SAFETY_LOOP_INTERVAL);
@@ -524,10 +560,17 @@ void heartbeat_task(void *param) {
         // because can_twai_recover_bus_off() calls vTaskDelay() internally.
         taskENTER_CRITICAL(&g_can_tx_lock);
         bool bus_unhealthy = !can_twai_bus_ok();
+        bool trigger_recovery = bus_unhealthy && !g_can_recovery_in_progress;
+        if (trigger_recovery) g_can_recovery_in_progress = true;
         taskEXIT_CRITICAL(&g_can_tx_lock);
-        if (bus_unhealthy) {
-            ESP_LOGW(TAG, "CAN bus unhealthy, attempting recovery");
+        if (trigger_recovery) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
+            ESP_LOGI(TAG, "CAN bus unhealthy, attempting recovery");
+#endif
             can_twai_recover_bus_off();
+            taskENTER_CRITICAL(&g_can_tx_lock);
+            g_can_recovery_in_progress = false;
+            taskEXIT_CRITICAL(&g_can_tx_lock);
         }
 
         vTaskDelay(HEARTBEAT_SEND_INTERVAL);
@@ -567,7 +610,9 @@ void main_task(void *param) {
     };
 
     esp_err_t err = retry_init("Push button HB2-ES544",
-        (init_fn_t)push_button_hb2es544_init, &g_push_button_cfg);
+                               push_button_hb2es544_init,
+                               &g_push_button_cfg);
+    g_push_button_init_ok = (err == ESP_OK);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Push button init failed after retries - safety will default to blocking");
 
@@ -580,7 +625,9 @@ void main_task(void *param) {
     };
 
     err = retry_init("RF remote EV1527",
-        (init_fn_t)rf_remote_ev1527_init, &g_rf_remote_cfg);
+                     rf_remote_ev1527_init,
+                     &g_rf_remote_cfg);
+    g_rf_remote_init_ok = (err == ESP_OK);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "RF remote init failed after retries - safety will default to blocking");
 
@@ -592,7 +639,7 @@ void main_task(void *param) {
         .enable_pulldown = true,  // Pull down to ensure OFF on reset
     };
 
-    err = retry_init("Relay", (init_fn_t)relay_srd05vdc_init, &g_relay_cfg);
+    err = retry_init("Relay", relay_srd05vdc_init, &g_relay_cfg);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Power relay init failed after retries - relay stays OFF (safe)");
 
@@ -605,7 +652,9 @@ void main_task(void *param) {
     };
 
     err = retry_init("Ultrasonic A02YYUW",
-        (init_fn_t)ultrasonic_a02yyuw_init, &g_ultrasonic_cfg);
+                     ultrasonic_a02yyuw_init,
+                     &g_ultrasonic_cfg);
+    g_ultrasonic_init_ok = (err == ESP_OK);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Ultrasonic init failed after retries - health check will block auto");
 
@@ -619,7 +668,7 @@ void main_task(void *param) {
             if (i > 0) ESP_LOGI(TAG, "TWAI init succeeded on attempt %d", i + 1);
             break;
         }
-        ESP_LOGW(TAG, "TWAI init failed (attempt %d/%d): %s", i + 1, INIT_MAX_RETRIES, esp_err_to_name(err));
+        ESP_LOGI(TAG, "TWAI init failed (attempt %d/%d): %s", i + 1, INIT_MAX_RETRIES, esp_err_to_name(err));
         if (i < INIT_MAX_RETRIES - 1) vTaskDelay(pdMS_TO_TICKS(INIT_RETRY_DELAY_MS));
     }
     if (err != ESP_OK) {
@@ -648,14 +697,14 @@ void main_task(void *param) {
 
     err = heartbeat_init(&g_heartbeat_led_cfg);
     if (err != ESP_OK)
-        ESP_LOGW(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
+        ESP_LOGI(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
 
     // Log active bypasses
 #ifdef CONFIG_BYPASS_PLANNER_HEARTBEAT
-    ESP_LOGW(TAG, "BYPASS: Planner heartbeat check DISABLED");
+    ESP_LOGW(TAG, "BYPASS: Planner DISABLED (simulating cooperative Planner)");
 #endif
 #ifdef CONFIG_BYPASS_CONTROL_HEARTBEAT
-    ESP_LOGW(TAG, "BYPASS: Control heartbeat check DISABLED");
+    ESP_LOGW(TAG, "BYPASS: Control DISABLED (simulating cooperative Control)");
 #endif
 #ifdef CONFIG_BYPASS_PUSH_BUTTON
     ESP_LOGW(TAG, "BYPASS: Push button e-stop DISABLED");
@@ -689,5 +738,8 @@ void main_task(void *param) {
 }
 
 extern "C" void app_main(void) {
-    xTaskCreate(main_task, "main_task", 4096, nullptr, 5, nullptr);
+    if (xTaskCreate(main_task, "main_task", 4096, nullptr, 5, nullptr) != pdPASS) {
+        ESP_LOGE("SAFETY", "Failed to create main_task, restarting");
+        esp_restart();
+    }
 }

@@ -15,7 +15,7 @@
 
 namespace {
 
-static const char *TAG = "ULTRASONIC_A02YYUW";
+static const char *TAG = "ULTRASONIC";
 
 // ============================================================================
 // Configuration
@@ -131,7 +131,7 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
             }
 #ifdef CONFIG_LOG_ULTRASONIC_PARSE_ERRORS
             else {
-                ESP_LOGW(TAG, "Parse failed - no valid 0xFF frame in %d bytes", read_len);
+                ESP_LOGI(TAG, "Parse failed - no valid 0xFF frame in %d bytes", read_len);
             }
 #endif
         }
@@ -186,7 +186,16 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     s_config = *config;
 
     // Start background task to continuously read sensor (uses internal config copy)
-    xTaskCreate(ultrasonic_a02yyuw_uart_rx_task, "ultrasonic_a02yyuw_rx", RX_TASK_STACK, (void *)&s_config, RX_TASK_PRIO, nullptr);
+    BaseType_t task_ok = xTaskCreate(ultrasonic_a02yyuw_uart_rx_task,
+                                     "ultrasonic_a02yyuw_rx",
+                                     RX_TASK_STACK,
+                                     (void *)&s_config,
+                                     RX_TASK_PRIO,
+                                     nullptr);
+    if (task_ok != pdPASS) {
+        uart_driver_delete(config->uart_num);
+        return ESP_FAIL;
+    }
     
     ESP_LOGI(TAG, "Initialization complete - waiting for sensor data");
     return ESP_OK;

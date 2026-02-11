@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "can_twai.hh"
 
-static const char *TAG = "STEPPER_UIM2852";
+static const char *TAG = "STEPPER";
 
 // Default timeout for CAN transmit
 static const TickType_t TX_TIMEOUT = pdMS_TO_TICKS(20);
@@ -38,9 +38,12 @@ static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw,
         motor->last_command_tick = xTaskGetTickCount();
         motor->last_cw_sent = cw;
         if (motor->config.request_ack) motor->ack_pending = true;
-    } else
-        ESP_LOGW(TAG, "Node %u: TX failed for CW=0x%02X: %s", 
+    }
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
+    else
+        ESP_LOGI(TAG, "Node %u: TX failed for CW=0x%02X: %s", 
             motor->config.node_id, cw, esp_err_to_name(err));
+#endif
     
     return err;
 }
@@ -60,7 +63,6 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
         motor->config = defaults;
     }
     
-    motor->initialized = true;
     motor->microstep_resolution = 16;  // Assume 16 until queried
     motor->pulses_per_rev = 3200;      // 16 * 200
     
@@ -72,6 +74,7 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
     }
     motor->query_pending_cw = 0;
     portMUX_INITIALIZE(&motor->lock);
+    motor->initialized = true;
     
     ESP_LOGI(TAG, "Motor initialized: node_id=%u, producer_id=%u", 
         motor->config.node_id, motor->config.producer_id);
@@ -93,7 +96,7 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor) {
             motor->config.node_id, motor->microstep_resolution, 
             (long)motor->pulses_per_rev);
     } else
-        ESP_LOGW(TAG, "Node %u: Failed to query microstep, using default 16",
+        ESP_LOGI(TAG, "Node %u: Failed to query microstep, using default 16",
             motor->config.node_id);
     
     // Set default motion parameters
@@ -125,7 +128,9 @@ esp_err_t stepper_motor_uim2852_enable(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_MO, data, dl);
     if (err == ESP_OK) {
         motor->driver_enabled = true;
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
         ESP_LOGI(TAG, "Node %u: Motor enabled", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -138,7 +143,9 @@ esp_err_t stepper_motor_uim2852_disable(stepper_motor_uim2852_t *motor) {
     if (err == ESP_OK) {
         motor->driver_enabled = false;
         motor->motion_in_progress = false;
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
         ESP_LOGI(TAG, "Node %u: Motor disabled", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -166,9 +173,13 @@ esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
     if (emergency_decel < motor->config.stop_decel) emergency_decel = UINT32_MAX; // overflow guard
     dl = stepper_uim2852_build_sd(data, emergency_decel);
     esp_err_t sd_err = send_instruction(motor, STEPPER_UIM2852_CW_SD, data, dl);
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
     if (sd_err != ESP_OK) {
-        ESP_LOGW(TAG, "Node %u: Emergency SD failed: %s", motor->config.node_id, esp_err_to_name(sd_err));
+        ESP_LOGI(TAG, "Node %u: Emergency SD failed: %s", motor->config.node_id, esp_err_to_name(sd_err));
     }
+#else
+    (void)sd_err;
+#endif
     
     // Issue stop command
     dl = stepper_uim2852_build_st(data);
@@ -176,7 +187,9 @@ esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
     
     if (err == ESP_OK) {
         motor->motion_in_progress = false;
-        ESP_LOGW(TAG, "Node %u: Emergency stop!", motor->config.node_id);
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
+        ESP_LOGI(TAG, "Node %u: Emergency stop!", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -262,7 +275,9 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_OG, data, dl);
     if (err == ESP_OK) {
         motor->absolute_position = 0;
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
         ESP_LOGI(TAG, "Node %u: Origin set", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -368,17 +383,24 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                         motor->status.in_position = true;
                         motor->absolute_position = notif.position;
                         taskEXIT_CRITICAL(&motor->lock);
+#ifdef CONFIG_LOG_STEPPER_RX
                         ESP_LOGI(TAG, "Node %u: PTP complete at pos=%ld",
                             motor->config.node_id, (long)notif.position);
+#endif
                     } else if (notif.type == STEPPER_UIM2852_ALARM_STALL) {
                         taskENTER_CRITICAL(&motor->lock);
                         motor->status.stall_detected = true;
                         motor->motion_in_progress = false;
                         taskEXIT_CRITICAL(&motor->lock);
-                        ESP_LOGW(TAG, "Node %u: STALL DETECTED!", motor->config.node_id);
-                    } else if (notif.is_alarm)
-                        ESP_LOGW(TAG, "Node %u: Alarm 0x%02X", 
+#ifdef CONFIG_LOG_STEPPER_RX
+                        ESP_LOGI(TAG, "Node %u: STALL DETECTED!", motor->config.node_id);
+#endif
+                    }
+#ifdef CONFIG_LOG_STEPPER_RX
+                    else if (notif.is_alarm)
+                        ESP_LOGI(TAG, "Node %u: Alarm 0x%02X", 
                             motor->config.node_id, notif.type);
+#endif
                     
                     // Call per-motor notification callback if set
                     if (motor->notify_callback) motor->notify_callback(motor, &notif);
@@ -495,8 +517,10 @@ esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint
         taskENTER_CRITICAL(&motor->lock);
         motor->query_pending_cw = 0;
         taskEXIT_CRITICAL(&motor->lock);
-        ESP_LOGW(TAG, "Node %u: query_param CW=0x%02X[%u] timed out",
+#ifdef CONFIG_LOG_STEPPER_COMMANDS
+        ESP_LOGI(TAG, "Node %u: query_param CW=0x%02X[%u] timed out",
             motor->config.node_id, cw, index);
+#endif
         return ESP_ERR_TIMEOUT;
     }
     

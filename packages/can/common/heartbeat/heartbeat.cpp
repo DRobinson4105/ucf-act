@@ -10,7 +10,7 @@
 
 namespace {
 
-static const char *TAG = "HB_LED";
+static const char *TAG = "LED";
 
 // ============================================================================
 // Module State

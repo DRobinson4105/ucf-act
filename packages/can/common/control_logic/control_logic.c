@@ -44,7 +44,7 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
         // Clamp to valid throttle range [0, 7]
         if (r.new_level < 0) r.new_level = 0;
         if (r.new_level > 7) r.new_level = 7;
-        r.changed = true;
+        r.changed = (r.new_level != inputs->current);
     }
 
     return r;
@@ -77,6 +77,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
     r.throttle_level = inputs->throttle_current;
     r.throttle_change_ms = inputs->last_throttle_change_ms;
     r.enable_start_ms = inputs->enable_start_ms;
+    r.enable_work_done = inputs->enable_work_done;
 
     // Check for motor fault from CAN RX task (one-shot)
     if (inputs->motor_fault_code != NODE_FAULT_NONE &&
@@ -129,6 +130,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                     r.new_state = NODE_STATE_ENABLING;
                     r.actions |= CONTROL_ACTION_START_ENABLE;
                     r.enable_start_ms = inputs->now_ms;
+                    r.enable_work_done = false;
                     r.throttle_level = 0;
                     r.throttle_change_ms = inputs->now_ms;
                 }
@@ -141,25 +143,31 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             if (inputs->target_state < NODE_STATE_ENABLING) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.enable_work_done = false;
                 break;
             }
             // Pedal pressed during enable? Abort.
             if (inputs->pedal_pressed) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.enable_work_done = false;
                 break;
             }
             // FR no longer forward? Abort.
             if (inputs->fr_state != FR_STATE_FORWARD) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.enable_work_done = false;
                 break;
             }
 
             // Check if enable work is done (timer expired)
             if ((inputs->now_ms - inputs->enable_start_ms) >= inputs->enable_sequence_ms) {
-                // Enable hardware is ready
-                r.actions |= CONTROL_ACTION_COMPLETE_ENABLE;
+                // Only fire COMPLETE_ENABLE action once per enable sequence
+                if (!inputs->enable_work_done) {
+                    r.actions |= CONTROL_ACTION_COMPLETE_ENABLE;
+                }
+                r.enable_work_done = true;
 
                 // If Safety already says ACTIVE, go directly to ACTIVE
                 if (inputs->target_state >= NODE_STATE_ACTIVE) {
@@ -177,11 +185,13 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         }
 
         case NODE_STATE_ACTIVE: {
-            // Safety retreated? Disable.
+            // Safety retreated? Disable actuators and return to READY.
+            // This is NOT an override (human intervention) — Safety commanded
+            // the retreat, so we go directly to READY rather than OVERRIDE.
             if (inputs->target_state < NODE_STATE_ACTIVE) {
                 r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
                 r.override_reason = OVERRIDE_REASON_NONE;
-                r.new_state = NODE_STATE_OVERRIDE;
+                r.new_state = NODE_STATE_READY;
                 r.throttle_level = 0;
                 r.new_last_steering = INT16_MIN;
                 r.new_last_braking = INT16_MIN;
