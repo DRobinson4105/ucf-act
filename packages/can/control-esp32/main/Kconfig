@@ -42,21 +42,21 @@ menu "Test Bypasses"
             not connected or floating during bench testing.
 
     config BYPASS_ENABLE_RELAY
-        bool "Bypass enable relay (skip energize/de-energize)"
+        bool "Bypass pedal bypass relay (skip energize/de-energize)"
         default n
         help
-            Skip enable relay (IRLZ44N MOSFET for JD-2912) control.
+            Skip JD-2912 pedal bypass relay control (via IRLZ44N MOSFET).
             The relay will not be energized during enable sequence or
             de-energized during override. Use when the relay circuit
             is not connected during bench testing.
 
-    config BYPASS_THROTTLE_MUX
-        bool "Bypass throttle mux (skip DG408 control)"
+    config BYPASS_MULTIPLEXER
+        bool "Bypass multiplexer (skip DG408DJZ control)"
         default n
         help
-            Skip DG408 analog multiplexer and throttle relay control.
+            Skip DG408DJZ analog multiplexer and throttle relay control.
             No throttle level changes will be applied. Use when the
-            throttle mux circuit is not connected during bench testing.
+            multiplexer circuit is not connected during bench testing.
 
 endmenu
 
@@ -118,12 +118,71 @@ menu "Debug Logging"
             change) and when it clears. Enabled by default since
             override events are safety-critical.
 
-    config LOG_CAN_RECOVERY
-        bool "Log CAN recovery attempts"
-        default y
-        help
-            Log CAN bus health checks and recovery attempts.
-            Enabled by default since recovery events are rare
-            and important for diagnostics.
+    menu "Multiplexer (DG408DJZ)"
+
+        config LOG_MUX_LEVEL
+            bool "Log mux level changes (address lines)"
+            default n
+            help
+                Log every DG408DJZ mux level change with A2/A1/A0
+                address line values. Verbose when throttle is slewing.
+                Useful for verifying mux hardware operation.
+
+    endmenu
+
+    menu "Pedal Bypass Relay (JD-2912)"
+
+        config LOG_PEDAL_RELAY
+            bool "Log pedal bypass relay state changes"
+            default y
+            help
+                Log when the JD-2912 pedal bypass relay is energized
+                or de-energized. Enabled by default since relay
+                transitions are infrequent and safety-relevant.
+
+    endmenu
+
+    menu "Override Sensors"
+
+        config LOG_PEDAL_ADC
+            bool "Log pedal ADC readings"
+            default n
+            help
+                Log pedal ADC millivolt readings and re-arm events
+                every control cycle (20ms). Extremely verbose. Useful
+                for tuning the pedal threshold or verifying the
+                voltage divider.
+
+        config LOG_FR_DEBOUNCE
+            bool "Log F/R switch debounce transitions"
+            default n
+            help
+                Log F/R gear selector debounce state machine
+                transitions (start, reset, complete, cancel).
+                Useful for verifying optocoupler wiring and
+                debounce timing.
+
+    endmenu
+
+    menu "Stepper Motor (UIM2852)"
+
+        config LOG_STEPPER_MOTION
+            bool "Log stepper motion commands (PA/PR/ST)"
+            default n
+            help
+                Log every stepper motor motion command (absolute,
+                relative, stop) with target position. Verbose when
+                active. Useful for verifying motor command delivery.
+
+        config LOG_STEPPER_RX
+            bool "Log stepper CAN RX frame details"
+            default n
+            help
+                Log parsed stepper motor CAN responses including
+                status (MS[0]), position/speed (MS[1]), parameter
+                responses, and ACKs. Verbose. Useful for debugging
+                motor communication issues.
+
+    endmenu
 
 endmenu

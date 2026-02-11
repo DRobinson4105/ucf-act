@@ -60,8 +60,9 @@ uint8_t stepper_uim2852_build_st(uint8_t *data) {
 }
 
 uint8_t stepper_uim2852_build_emergency_stop(uint8_t *data) {
-    // Emergency stop: set very high SD rate then stop
-    // Or simply stop - the motor will use current SD
+    // Sends ST (deceleration stop) — identical to build_st().
+    // The motor decelerates using its current SD (deceleration rate).
+    // For a harder stop, set a high SD rate first via build_sd().
     memset(data, 0, 8);
     return 0;
 }

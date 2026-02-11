@@ -280,6 +280,49 @@ static void test_ultrasonic_fault_alone_blocks(void) {
 }
 
 // ============================================================================
+// Single-fault isolation tests (2)
+// ============================================================================
+
+// 22. rf_remote_active alone -> exactly ESTOP_REMOTE
+static void test_rf_remote_alone(void) {
+    safety_inputs_t in = safe_inputs();
+    in.rf_remote_active = true;
+    safety_decision_t d = safety_evaluate(&in);
+    assert(d.estop_active == true);
+    assert(d.fault_code == NODE_FAULT_ESTOP_REMOTE);
+    assert(d.relay_enable == false);
+}
+
+// 23. planner_error alone -> exactly ESTOP_PLANNER
+static void test_planner_error_alone(void) {
+    safety_inputs_t in = safe_inputs();
+    in.planner_error = true;
+    safety_decision_t d = safety_evaluate(&in);
+    assert(d.estop_active == true);
+    assert(d.fault_code == NODE_FAULT_ESTOP_PLANNER);
+    assert(d.relay_enable == false);
+}
+
+// ============================================================================
+// Estop string helper tests (1)
+// ============================================================================
+
+// 24. Full 7-bit bitmask 0x7F -> all flags in string
+static void test_full_bitmask_string(void) {
+    const char *s = node_estop_to_string(0x7F);
+    // Must contain all 7 flag names
+    assert(strstr(s, "button") != NULL);
+    assert(strstr(s, "remote") != NULL);
+    assert(strstr(s, "ultrasonic") != NULL);
+    assert(strstr(s, "planner_timeout") != NULL);
+    assert(strstr(s, "control_timeout") != NULL);
+    // "planner" appears in "planner_timeout" — verify standalone planner is present
+    // by checking for "+planner+" or "planner+" at start
+    assert(strstr(s, "planner+planner_timeout") != NULL);
+    assert(strstr(s, "control+control_timeout") != NULL);
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -324,6 +367,15 @@ int main(void) {
     TEST(test_multiple_faults_all_bits);
     TEST(test_transition_estop_on_then_off);
     TEST(test_ultrasonic_fault_alone_blocks);
+
+    // Single-fault isolation (2)
+    printf("\n--- Single-fault isolation ---\n");
+    TEST(test_rf_remote_alone);
+    TEST(test_planner_error_alone);
+
+    // Estop string helper (1)
+    printf("\n--- Estop string helper ---\n");
+    TEST(test_full_bitmask_string);
 
     printf("\n=== %d / %d tests passed ===\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

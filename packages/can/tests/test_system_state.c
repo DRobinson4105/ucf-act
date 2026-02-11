@@ -310,6 +310,42 @@ static void test_unknown_state_retreats(void) {
 }
 
 // ============================================================================
+// 19. ENABLING stays ENABLING (control_enable_complete only — symmetric case)
+// ============================================================================
+
+static void test_enabling_stays_control_complete_only(void) {
+    system_state_inputs_t in = default_inputs();
+    in.current_target = NODE_STATE_ENABLING;
+    in.planner_state = NODE_STATE_ENABLING;
+    in.control_state = NODE_STATE_ENABLING;
+    in.planner_enable_complete = false;
+    in.control_enable_complete = true;
+    system_state_result_t r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_ENABLING);
+    assert(r.target_changed == false);
+}
+
+// ============================================================================
+// 20. OVERRIDE and FAULT as current_target -> retreat to READY
+// ============================================================================
+
+static void test_override_as_current_target(void) {
+    system_state_inputs_t in = default_inputs();
+    in.current_target = NODE_STATE_OVERRIDE;
+    system_state_result_t r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_READY);
+    assert(r.target_changed == true);
+}
+
+static void test_fault_as_current_target(void) {
+    system_state_inputs_t in = default_inputs();
+    in.current_target = NODE_STATE_FAULT;
+    system_state_result_t r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_READY);
+    assert(r.target_changed == true);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -324,6 +360,7 @@ int main(void) {
     TEST(test_enabling_to_active);
     TEST(test_enabling_stays_one_complete);
     TEST(test_enabling_stays_none_complete);
+    TEST(test_enabling_stays_control_complete_only);
     TEST(test_active_stays_active);
 
     // Retreat: estop
@@ -347,6 +384,8 @@ int main(void) {
     TEST(test_already_ready_estop_no_change);
     TEST(test_null_input);
     TEST(test_unknown_state_retreats);
+    TEST(test_override_as_current_target);
+    TEST(test_fault_as_current_target);
 
     printf("\n  %d / %d tests passed\n\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

@@ -16,7 +16,7 @@
 #include "heartbeat.hh"
 #include "heartbeat_monitor.hh"
 #include "push_button_hb2es544.hh"
-#include "power_relay.hh"
+#include "relay_srd05vdc.hh"
 #include "ultrasonic_a02yyuw.hh"
 #include "rf_remote_ev1527.hh"
 #include "safety_logic.h"
@@ -39,8 +39,8 @@
 //   ENABLING -> ACTIVE: both report ENABLING + enable_complete flag set
 //   ANY -> READY:       e-stop, fault, override, timeout
 //
-// E-stop priority: push_button > rf_remote > ultrasonic > planner_error > planner_timeout
-//                  > control_error > control_timeout
+// E-stop faults are OR'd into a bitmask — all active faults are reported simultaneously.
+// Fault bits: button | remote | ultrasonic | planner | planner_timeout | control | control_timeout
 
 namespace {
 
@@ -140,7 +140,7 @@ static volatile uint8_t g_estop_fault_code = NODE_FAULT_NONE;
 
 static push_button_hb2es544_config_t g_push_button_cfg;
 static rf_remote_ev1527_config_t g_rf_remote_cfg;
-static power_relay_config_t g_relay_cfg;
+static relay_srd05vdc_config_t g_relay_cfg;
 static ultrasonic_a02yyuw_config_t g_ultrasonic_cfg;
 static heartbeat_config_t g_heartbeat_led_cfg;
 
@@ -467,18 +467,18 @@ void safety_task(void *param) {
 
         // Control power relay based on safety decision
         if (decision.relay_enable) {
-            esp_err_t relay_err = power_relay_enable(&g_relay_cfg);
+            esp_err_t relay_err = relay_srd05vdc_enable(&g_relay_cfg);
             if (relay_err != ESP_OK)
-                ESP_LOGE(TAG, "power_relay_enable FAILED: %s — relay may be stuck OFF", esp_err_to_name(relay_err));
+                ESP_LOGE(TAG, "relay_srd05vdc_enable FAILED: %s — relay may be stuck OFF", esp_err_to_name(relay_err));
             heartbeat_set_error(false);
         } else {
-            esp_err_t relay_err = power_relay_disable(&g_relay_cfg);
+            esp_err_t relay_err = relay_srd05vdc_disable(&g_relay_cfg);
             if (relay_err != ESP_OK)
-                ESP_LOGE(TAG, "power_relay_disable FAILED: %s — relay may be stuck ON!", esp_err_to_name(relay_err));
+                ESP_LOGE(TAG, "relay_srd05vdc_disable FAILED: %s — relay may be stuck ON!", esp_err_to_name(relay_err));
             heartbeat_set_error(true);
         }
 
-        // Relay state changes are logged by the power_relay component itself
+        // Relay state changes are logged by the relay_srd05vdc component itself
 
         // Send immediate heartbeat on target state change
         if (ss_out.target_changed) {
@@ -487,12 +487,12 @@ void safety_task(void *param) {
 
         // Log on fault code change
         if (decision.fault_code != last_fault_code) {
-            ESP_LOGI(TAG, "Estop %-6s (%s) | target=%s | planner=%s control=%s",
-                     decision.estop_active ? "ACTIVE" : "clear",
-                     node_fault_to_string(decision.fault_code),
+            ESP_LOGI(TAG, "target=%s | planner=%s control=%s | estop %-6s (%s)",
                      node_state_to_string(g_target_state),
                      node_state_to_string(g_planner_state),
-                     node_state_to_string(g_control_node_state));
+                     node_state_to_string(g_control_node_state),
+                     decision.estop_active ? "ACTIVE" : "clear",
+                     node_fault_to_string(decision.fault_code));
             last_fault_code = decision.fault_code;
         }
 
@@ -520,15 +520,14 @@ void heartbeat_task(void *param) {
         // Send Safety heartbeat (periodic)
         send_safety_heartbeat(false);
 
-        // Check CAN bus health (under lock to prevent concurrent recovery with safety_task)
+        // Check CAN bus health — recovery must happen OUTSIDE critical section
+        // because can_twai_recover_bus_off() calls vTaskDelay() internally.
         taskENTER_CRITICAL(&g_can_tx_lock);
         bool bus_unhealthy = !can_twai_bus_ok();
         taskEXIT_CRITICAL(&g_can_tx_lock);
         if (bus_unhealthy) {
             ESP_LOGW(TAG, "CAN bus unhealthy, attempting recovery");
-            taskENTER_CRITICAL(&g_can_tx_lock);
             can_twai_recover_bus_off();
-            taskEXIT_CRITICAL(&g_can_tx_lock);
         }
 
         vTaskDelay(HEARTBEAT_SEND_INTERVAL);
@@ -593,7 +592,7 @@ void main_task(void *param) {
         .enable_pulldown = true,  // Pull down to ensure OFF on reset
     };
 
-    err = retry_init("Power relay", (init_fn_t)power_relay_init, &g_relay_cfg);
+    err = retry_init("Relay", (init_fn_t)relay_srd05vdc_init, &g_relay_cfg);
     if (err != ESP_OK)
         ESP_LOGE(TAG, "Power relay init failed after retries - relay stays OFF (safe)");
 

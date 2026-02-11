@@ -19,7 +19,7 @@ Control follows the system target state from Safety's heartbeat (0x100). It tran
 | ENABLING | 200ms transition. Enable relay energized, waiting to switch throttle source. Sets `HEARTBEAT_FLAG_ENABLE_COMPLETE` when done. |
 | ACTIVE | Autonomous mode. Executing throttle/steering/braking commands from Planner. |
 | OVERRIDE | Safe state after driver takeover. All actuators disabled, manual control restored. |
-| FAULT | Hardware failure detected. Requires power cycle to clear. |
+| FAULT | Hardware failure detected. Recoverable via cooldown + re-init; esp_restart() after max attempts. |
 
 ### Transitions
 
@@ -102,14 +102,13 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 | Component | Description |
 |-----------|-------------|
-| `throttle_mux` | DG408 8-channel mux + DPDT throttle relay control |
+| `multiplexer_dg408djz` | DG408DJZ 8-channel analog mux + DPDT throttle relay control |
 | `stepper_motor_uim2852` | UIM2852CA closed-loop stepper motor control API |
-| `enable_relay` | MOSFET driver for pedal microswitch bypass relay |
+| `relay_jd2912` | JD-2912 pedal bypass relay driver (via IRLZ44N MOSFET) |
 | `override_sensors` | Pedal ADC reading + F/R optocoupler debouncing |
 | `can_twai` | CAN bus driver wrapper (shared) |
 | `can_protocol` | Message definitions and encode/decode (shared) |
 | `heartbeat` | WS2812 status LED driver (shared) |
-| `heartbeat_monitor` | CAN node liveness tracking (shared) |
 | `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared) |
 | `control_logic` | Extracted state machine decision logic (shared, tested) |
 
@@ -122,7 +121,7 @@ The throttle system uses an 8-channel analog multiplexer to select from 8 resist
 
 Enable sequence (READY -> ACTIVE):
 1. Set mux to level 0
-2. Energize enable relay (GPIO10) - bypasses pedal microswitch
+2. Energize pedal bypass relay (GPIO10) - JD-2912 bypasses pedal microswitch
 3. Wait 200ms for Curtis controller to recognize
 4. Energize throttle relay (GPIO9) - switches to mux output
 5. Enable steering and braking motors
@@ -138,8 +137,8 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_PLANNER_COMMANDS` | Zero throttle/steering/braking, suppress stale detection |
 | `CONFIG_BYPASS_STEPPER_MOTORS` | Skip stepper motor init/configure/commands (no UIM2852CA needed) |
 | `CONFIG_BYPASS_PEDAL_OVERRIDE` | Ignore pedal ADC (always not pressed, always re-armed) |
-| `CONFIG_BYPASS_ENABLE_RELAY` | Skip enable relay energize/de-energize |
-| `CONFIG_BYPASS_THROTTLE_MUX` | Skip DG408 mux and throttle relay control |
+| `CONFIG_BYPASS_ENABLE_RELAY` | Skip JD-2912 pedal bypass relay energize/de-energize |
+| `CONFIG_BYPASS_MULTIPLEXER` | Skip DG408DJZ mux and throttle relay control |
 
 ## Debug Logging
 
@@ -154,7 +153,16 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | `CONFIG_LOG_THROTTLE` | on | Log throttle level changes |
 | `CONFIG_LOG_STEPPER_COMMANDS` | off | Log stepper motor position commands |
 | `CONFIG_LOG_OVERRIDE` | on | Log override trigger and clear events |
-| `CONFIG_LOG_CAN_RECOVERY` | on | Log CAN bus recovery attempts |
+| **Multiplexer (DG408DJZ)** | | |
+| `CONFIG_LOG_MUX_LEVEL` | off | Log mux level changes with A2/A1/A0 values |
+| **Pedal Bypass Relay (JD-2912)** | | |
+| `CONFIG_LOG_PEDAL_RELAY` | **on** | Log pedal bypass relay energize/de-energize |
+| **Override Sensors** | | |
+| `CONFIG_LOG_PEDAL_ADC` | off | Log pedal ADC millivolt readings (extremely verbose) |
+| `CONFIG_LOG_FR_DEBOUNCE` | off | Log F/R switch debounce transitions |
+| **Stepper Motor (UIM2852)** | | |
+| `CONFIG_LOG_STEPPER_MOTION` | off | Log stepper motion commands (PA/PR/ST) |
+| `CONFIG_LOG_STEPPER_RX` | off | Log stepper CAN RX frame details (MS, params, ACKs) |
 
 ## Build
 

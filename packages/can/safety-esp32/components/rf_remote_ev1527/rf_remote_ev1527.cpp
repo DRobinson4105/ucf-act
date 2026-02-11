@@ -4,6 +4,14 @@
  */
 #include "rf_remote_ev1527.hh"
 
+#include "esp_log.h"
+
+namespace {
+
+static const char *TAG = "RF_REMOTE";
+
+}  // namespace
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -19,7 +27,12 @@ esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
         .intr_type = GPIO_INTR_DISABLE,
     };
 
-    return gpio_config(&io_conf);
+    esp_err_t err = gpio_config(&io_conf);
+    if (err != ESP_OK) return err;
+
+    ESP_LOGI(TAG, "Initialized on GPIO %d (active %s)",
+             config->gpio, config->active_level ? "HIGH" : "LOW");
+    return ESP_OK;
 }
 
 // ============================================================================
@@ -29,5 +42,17 @@ esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
 // Returns true when remote e-stop button is pressed
 bool rf_remote_ev1527_is_active(const rf_remote_ev1527_config_t *config) {
     if (!config) return true;  // fail-safe: treat as active (e-stop triggered)
-    return gpio_get_level(config->gpio) == config->active_level;
+    bool active = gpio_get_level(config->gpio) == config->active_level;
+
+#ifdef CONFIG_LOG_RF_REMOTE
+    static bool s_prev = false;
+    static bool s_first = true;
+    if (active != s_prev || s_first) {
+        ESP_LOGI(TAG, "RF remote %s", active ? "ENGAGED" : "disengaged");
+        s_prev = active;
+        s_first = false;
+    }
+#endif
+
+    return active;
 }

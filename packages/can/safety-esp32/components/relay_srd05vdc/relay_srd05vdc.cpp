@@ -1,14 +1,14 @@
 /**
- * @file power_relay.cpp
- * @brief GPIO-driven power relay implementation.
+ * @file relay_srd05vdc.cpp
+ * @brief GPIO-driven SRD-05VDC-SL-C relay implementation.
  */
-#include "power_relay.hh"
+#include "relay_srd05vdc.hh"
 
 #include "esp_log.h"
 
 namespace {
 
-static const char *TAG = "POWER_RELAY";
+static const char *TAG = "RELAY";
 
 // ============================================================================
 // Module State
@@ -22,7 +22,7 @@ static bool s_enabled = false;
 // Initialization
 // ============================================================================
 
-esp_err_t power_relay_init(const power_relay_config_t *config) {
+esp_err_t relay_srd05vdc_init(const relay_srd05vdc_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     gpio_config_t io_conf = {
@@ -36,11 +36,11 @@ esp_err_t power_relay_init(const power_relay_config_t *config) {
     esp_err_t err = gpio_config(&io_conf);
     if (err != ESP_OK) return err;
 
-    // Start in safe state (disabled)
-    err = power_relay_disable(config);
+    // Start in safe state (de-energized)
+    err = relay_srd05vdc_disable(config);
     if (err != ESP_OK) return err;
 
-    ESP_LOGI(TAG, "Power relay init on GPIO %d (active %s)",
+    ESP_LOGI(TAG, "Relay init on GPIO %d (active %s)",
              config->gpio, config->active_high ? "HIGH" : "LOW");
     return ESP_OK;
 }
@@ -49,33 +49,37 @@ esp_err_t power_relay_init(const power_relay_config_t *config) {
 // Relay Control
 // ============================================================================
 
-// Enable power relay - allows power to flow to motor controller
-esp_err_t power_relay_enable(const power_relay_config_t *config) {
+// Enable relay - energizes coil, closes NO contact
+esp_err_t relay_srd05vdc_enable(const relay_srd05vdc_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     int level = config->active_high ? 1 : 0;
     esp_err_t err = gpio_set_level(config->gpio, level);
     if (err == ESP_OK) {
+#ifdef CONFIG_LOG_RELAY_STATE
         if (!s_enabled) ESP_LOGI(TAG, "Power relay ENABLED");
+#endif
         s_enabled = true;
     }
     return err;
 }
 
-// Disable power relay - cuts power to motor controller (safe state)
-esp_err_t power_relay_disable(const power_relay_config_t *config) {
+// Disable relay - de-energizes coil, opens NO contact (safe state)
+esp_err_t relay_srd05vdc_disable(const relay_srd05vdc_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     int level = config->active_high ? 0 : 1;
     esp_err_t err = gpio_set_level(config->gpio, level);
     if (err == ESP_OK) {
+#ifdef CONFIG_LOG_RELAY_STATE
         if (s_enabled) ESP_LOGI(TAG, "Power relay DISABLED");
+#endif
         s_enabled = false;
     }
     return err;
 }
 
-bool power_relay_is_enabled(const power_relay_config_t *config) {
+bool relay_srd05vdc_is_enabled(const relay_srd05vdc_config_t *config) {
     (void)config;
     return s_enabled;
 }

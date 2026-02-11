@@ -1,6 +1,10 @@
 /**
- * @file enable_relay.hh
- * @brief MOSFET-driven relay control for autonomous actuator enable circuit.
+ * @file relay_jd2912.hh
+ * @brief JD-2912 automotive relay driver (via IRLZ44N MOSFET).
+ *
+ * Controls the pedal bypass relay that allows the Curtis motor controller
+ * to accept autonomous throttle input without the accelerator pedal
+ * microswitch being physically pressed.
  */
 #pragma once
 
@@ -14,11 +18,14 @@ extern "C" {
 #endif
 
 // ============================================================================
-// Pedal Enable Relay Driver
+// Pedal Bypass Relay Driver (JD-2912 via IRLZ44N)
 // ============================================================================
 // Controls a relay that bypasses the accelerator pedal microswitch.
 //
 // Hardware:
+//   - ESP32 GPIO drives an IRLZ44N logic-level N-channel MOSFET gate
+//   - MOSFET switches the JD-2912 automotive relay coil (12V)
+//   - 10k pull-down on gate ensures safe default (relay off at boot/reset)
 //   - Golf cart throttle requires pedal microswitch to be closed before
 //     motor controller accepts throttle input
 //   - This relay bypasses the microswitch during autonomous operation
@@ -35,33 +42,33 @@ extern "C" {
 // Configuration
 // ============================================================================
 
-// enable_relay_config_t - relay control pin configuration
-//   gpio:        GPIO pin controlling relay coil
+// relay_jd2912_config_t - relay control pin configuration
+//   gpio:        GPIO pin controlling MOSFET gate (drives relay coil)
 //   active_high: true = HIGH energizes relay, false = LOW energizes relay
 typedef struct {
     gpio_num_t gpio;
     bool active_high;
-} enable_relay_config_t;
+} relay_jd2912_config_t;
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
 // Initialize GPIO and set relay to de-energized state (safe default)
-esp_err_t enable_relay_init(const enable_relay_config_t *config);
+esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config);
 
 // ============================================================================
 // Relay Control
 // ============================================================================
 
 // Energize relay - bypasses pedal microswitch (for autonomous mode)
-void enable_relay_energize(void);
+void relay_jd2912_energize(void);
 
 // De-energize relay - restores normal pedal operation (safe state)
-void enable_relay_deenergize(void);
+void relay_jd2912_deenergize(void);
 
 // Check if relay is currently energized
-bool enable_relay_is_energized(void);
+bool relay_jd2912_is_energized(void);
 
 #ifdef __cplusplus
 }

@@ -12,7 +12,7 @@ bool control_check_preconditions(const precondition_inputs_t *inputs) {
     if (!inputs) return false;
 
     // Must be in Forward
-    if (inputs->fr_state != CONTROL_FR_FORWARD) return false;
+    if (inputs->fr_state != FR_STATE_FORWARD) return false;
 
     // Pedal must NOT be pressed
     if (inputs->pedal_pressed) return false;
@@ -150,7 +150,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                 break;
             }
             // FR no longer forward? Abort.
-            if (inputs->fr_state != CONTROL_FR_FORWARD) {
+            if (inputs->fr_state != FR_STATE_FORWARD) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
                 break;
@@ -197,7 +197,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                 r.new_last_braking = INT16_MIN;
                 break;
             }
-            if (inputs->fr_state != CONTROL_FR_FORWARD) {
+            if (inputs->fr_state != FR_STATE_FORWARD) {
                 r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
                 r.override_reason = OVERRIDE_REASON_FR_CHANGED;
                 r.new_state = NODE_STATE_OVERRIDE;
@@ -244,7 +244,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             // Recover to READY when conditions clear
             // Safety will re-advance us through the state machine
             if (inputs->target_state >= NODE_STATE_READY &&
-                inputs->fr_state == CONTROL_FR_FORWARD &&
+                inputs->fr_state == FR_STATE_FORWARD &&
                 inputs->pedal_rearmed) {
                 r.new_state = NODE_STATE_READY;
                 r.override_reason = OVERRIDE_REASON_NONE;

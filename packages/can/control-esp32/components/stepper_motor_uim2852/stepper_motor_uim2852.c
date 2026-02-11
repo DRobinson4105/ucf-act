@@ -150,7 +150,9 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_ST, data, dl);
     if (err == ESP_OK) {
         motor->motion_in_progress = false;
-        ESP_LOGD(TAG, "Node %u: Stop commanded", motor->config.node_id);
+#ifdef CONFIG_LOG_STEPPER_MOTION
+        ESP_LOGI(TAG, "Node %u: Stop commanded", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -220,7 +222,9 @@ esp_err_t stepper_motor_uim2852_go_absolute(stepper_motor_uim2852_t *motor, int3
     
     if (err == ESP_OK) {
         motor->motion_in_progress = true;
-        ESP_LOGD(TAG, "Node %u: Moving to PA=%ld", motor->config.node_id, (long)position);
+#ifdef CONFIG_LOG_STEPPER_MOTION
+        ESP_LOGI(TAG, "Node %u: Moving to PA=%ld", motor->config.node_id, (long)position);
+#endif
     }
     return err;
 }
@@ -244,7 +248,9 @@ esp_err_t stepper_motor_uim2852_go_relative(stepper_motor_uim2852_t *motor, int3
     
     if (err == ESP_OK) {
         motor->motion_in_progress = true;
-        ESP_LOGD(TAG, "Node %u: Moving PR=%ld", motor->config.node_id, (long)displacement);
+#ifdef CONFIG_LOG_STEPPER_MOTION
+        ESP_LOGI(TAG, "Node %u: Moving PR=%ld", motor->config.node_id, (long)displacement);
+#endif
     }
     return err;
 }
@@ -324,22 +330,26 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                         motor->motion_in_progress = false;
                     taskEXIT_CRITICAL(&motor->lock);
                     
-                    ESP_LOGD(TAG, "Node %u: MS[0] drv=%d stop=%d inpos=%d stall=%d",
+#ifdef CONFIG_LOG_STEPPER_RX
+                    ESP_LOGI(TAG, "Node %u: MS[0] drv=%d stop=%d inpos=%d stall=%d",
                         motor->config.node_id,
                         motor->status.driver_on,
                         motor->status.stopped,
                         motor->status.in_position,
                         motor->status.stall_detected);
+#endif
                 } else if (index == STEPPER_UIM2852_MS_SPEED_ABSPOS) {
                     taskENTER_CRITICAL(&motor->lock);
                     stepper_uim2852_parse_ms1(data, dl, &motor->current_speed, 
                         &motor->absolute_position);
                     taskEXIT_CRITICAL(&motor->lock);
                     
-                    ESP_LOGD(TAG, "Node %u: MS[1] speed=%ld pos=%ld",
+#ifdef CONFIG_LOG_STEPPER_RX
+                    ESP_LOGI(TAG, "Node %u: MS[1] speed=%ld pos=%ld",
                         motor->config.node_id,
                         (long)motor->current_speed,
                         (long)motor->absolute_position);
+#endif
                 }
             }
             break;
@@ -417,15 +427,19 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                     motor->query_pending_cw = 0;
                     taskEXIT_CRITICAL(&motor->lock);
                     xSemaphoreGive(motor->query_sem);
-                    ESP_LOGD(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
+#ifdef CONFIG_LOG_STEPPER_RX
+                    ESP_LOGI(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
                         motor->config.node_id, cw_base, data[0], (long)val);
+#endif
                 }
             }
             break;
             
         default:
             // ACK for other commands
-            ESP_LOGD(TAG, "Node %u: ACK for CW=0x%02X", motor->config.node_id, cw_base);
+#ifdef CONFIG_LOG_STEPPER_RX
+            ESP_LOGI(TAG, "Node %u: ACK for CW=0x%02X", motor->config.node_id, cw_base);
+#endif
             break;
     }
     

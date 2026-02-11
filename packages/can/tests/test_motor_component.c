@@ -1075,6 +1075,79 @@ static void test_set_notify_callback_null_motor(void) {
 }
 
 // ============================================================================
+// go_relative failure paths
+// ============================================================================
+
+static void test_go_relative_pr_failure(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    mock_twai_send_result = ESP_FAIL;
+
+    esp_err_t err = stepper_motor_uim2852_go_relative(&motor, 800);
+    assert(err == ESP_FAIL);
+    assert(mock_sent_count == 0);
+    assert(motor.motion_in_progress == false);
+}
+
+static void test_go_relative_bg_failure(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+
+    // Fail on the 2nd call to can_twai_send_extended (the BG send)
+    g_mock_send_ext_fail_after = 2;
+    esp_err_t err = stepper_motor_uim2852_go_relative(&motor, 800);
+    assert(err == ESP_FAIL);
+    assert(mock_sent_count == 1);  // only PR succeeded
+    assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PR);
+    assert(motor.motion_in_progress == false);
+    g_mock_send_ext_fail_after = 0;
+}
+
+// ============================================================================
+// Uninitialized tests for motion / stop functions
+// ============================================================================
+
+static void test_go_absolute_uninitialized(void) {
+    mock_reset_all();
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    motor.initialized = false;
+
+    esp_err_t err = stepper_motor_uim2852_go_absolute(&motor, 3200);
+    assert(err == ESP_ERR_INVALID_STATE);
+}
+
+static void test_go_relative_uninitialized(void) {
+    mock_reset_all();
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    motor.initialized = false;
+
+    esp_err_t err = stepper_motor_uim2852_go_relative(&motor, 800);
+    assert(err == ESP_ERR_INVALID_STATE);
+}
+
+static void test_stop_uninitialized(void) {
+    mock_reset_all();
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    motor.initialized = false;
+
+    esp_err_t err = stepper_motor_uim2852_stop(&motor);
+    assert(err == ESP_ERR_INVALID_STATE);
+}
+
+static void test_emergency_stop_uninitialized(void) {
+    mock_reset_all();
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    motor.initialized = false;
+
+    esp_err_t err = stepper_motor_uim2852_emergency_stop(&motor);
+    assert(err == ESP_ERR_INVALID_STATE);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -1099,6 +1172,8 @@ int main(void) {
     printf("\n  --- stop ---\n");
     TEST(test_stop_sends_st);
     TEST(test_emergency_stop_sends_sd_then_st);
+    TEST(test_stop_uninitialized);
+    TEST(test_emergency_stop_uninitialized);
 
     // go_absolute tests
     printf("\n  --- go_absolute ---\n");
@@ -1106,12 +1181,16 @@ int main(void) {
     TEST(test_go_absolute_negative);
     TEST(test_go_absolute_pa_failure);
     TEST(test_go_absolute_bg_failure);
+    TEST(test_go_absolute_uninitialized);
 
     // go_relative tests
     printf("\n  --- go_relative ---\n");
     TEST(test_go_relative_sends_pr_then_bg);
     TEST(test_go_relative_negative);
     TEST(test_go_relative_motion_flag);
+    TEST(test_go_relative_pr_failure);
+    TEST(test_go_relative_bg_failure);
+    TEST(test_go_relative_uninitialized);
 
     // set_origin tests
     printf("\n  --- set_origin ---\n");

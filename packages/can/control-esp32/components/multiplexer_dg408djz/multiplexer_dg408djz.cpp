@@ -1,8 +1,8 @@
 /**
- * @file throttle_mux.cpp
- * @brief DG408 analog multiplexer throttle control implementation.
+ * @file multiplexer_dg408djz.cpp
+ * @brief DG408DJZ 8-channel analog multiplexer throttle control implementation.
  */
-#include "throttle_mux.hh"
+#include "multiplexer_dg408djz.hh"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -11,7 +11,7 @@
 
 namespace {
 
-static const char *TAG = "THROTTLE_MUX";
+static const char *TAG = "MUX";
 
 // ============================================================================
 // Timing Constants
@@ -25,7 +25,7 @@ constexpr uint32_t THROTTLE_REGISTER_MS = 100;  // Time for Curtis controller to
 // Module State
 // ============================================================================
 
-static throttle_mux_config_t s_config = {};
+static multiplexer_dg408djz_config_t s_config = {};
 static bool s_initialized = false;
 static int8_t s_current_level = -1;  // -1 = mux disabled, 0-7 = active channel
 static bool s_autonomous = false;    // true = relay energized (mux output to Curtis)
@@ -36,7 +36,7 @@ static bool s_autonomous = false;    // true = relay energized (mux output to Cu
 // Initialization
 // ============================================================================
 
-esp_err_t throttle_mux_init(const throttle_mux_config_t *config) {
+esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     s_config = *config;
@@ -79,7 +79,7 @@ esp_err_t throttle_mux_init(const throttle_mux_config_t *config) {
 // ============================================================================
 
 // Set throttle level 0-7, or <0 to disable mux output
-void throttle_mux_set_level(int8_t level) {
+void multiplexer_dg408djz_set_level(int8_t level) {
     if (!s_initialized) {
         ESP_LOGW(TAG, "Not initialized");
         return;
@@ -88,7 +88,9 @@ void throttle_mux_set_level(int8_t level) {
     if (level < 0 || level > 7) {
         gpio_set_level(s_config.en, 0);
         s_current_level = -1;
-        ESP_LOGD(TAG, "Disabled (level=%d)", level);
+#ifdef CONFIG_LOG_MUX_LEVEL
+        ESP_LOGI(TAG, "Disabled (level=%d)", level);
+#endif
         return;
     }
 
@@ -102,19 +104,23 @@ void throttle_mux_set_level(int8_t level) {
     gpio_set_level(s_config.en, 1);
     s_current_level = level;
 
-    ESP_LOGD(TAG, "Level set to %d (A2=%d A1=%d A0=%d)",
+#ifdef CONFIG_LOG_MUX_LEVEL
+    ESP_LOGI(TAG, "Level set to %d (A2=%d A1=%d A0=%d)",
              level, (level >> 2) & 1, (level >> 1) & 1, (level >> 0) & 1);
+#endif
 }
 
-void throttle_mux_disable(void) {
+void multiplexer_dg408djz_disable(void) {
     if (!s_initialized) return;
 
     gpio_set_level(s_config.en, 0);
     s_current_level = -1;
-    ESP_LOGD(TAG, "Mux disabled");
+#ifdef CONFIG_LOG_MUX_LEVEL
+    ESP_LOGI(TAG, "Mux disabled");
+#endif
 }
 
-int8_t throttle_mux_get_level(void) {
+int8_t multiplexer_dg408djz_get_level(void) {
     return s_current_level;
 }
 
@@ -125,7 +131,7 @@ int8_t throttle_mux_get_level(void) {
 // Enable autonomous throttle control
 // Sequence: set level 0 -> energize relay -> wait for settle
 // After this, Curtis motor controller reads mux output instead of pedal pot
-void throttle_mux_enable_autonomous(void) {
+void multiplexer_dg408djz_enable_autonomous(void) {
     if (!s_initialized) {
         ESP_LOGW(TAG, "Not initialized");
         return;
@@ -134,7 +140,7 @@ void throttle_mux_enable_autonomous(void) {
     ESP_LOGI(TAG, "Enabling autonomous mode");
 
     // Start at idle throttle to prevent surge when relay switches
-    throttle_mux_set_level(0);
+    multiplexer_dg408djz_set_level(0);
     vTaskDelay(pdMS_TO_TICKS(10));
 
     // Energize DPDT relay - switches Curtis input from pedal to mux
@@ -149,13 +155,13 @@ void throttle_mux_enable_autonomous(void) {
 
 // Gracefully disable autonomous mode
 // Sequence: ramp to 0 -> wait for Curtis -> de-energize relay -> disable mux
-void throttle_mux_disable_autonomous(void) {
+void multiplexer_dg408djz_disable_autonomous(void) {
     if (!s_initialized) return;
 
     ESP_LOGI(TAG, "Disabling autonomous mode");
 
     // Ramp to idle before switching to prevent throttle discontinuity
-    throttle_mux_set_level(0);
+    multiplexer_dg408djz_set_level(0);
     vTaskDelay(pdMS_TO_TICKS(THROTTLE_REGISTER_MS));
 
     // Switch relay back to manual pedal
@@ -163,13 +169,13 @@ void throttle_mux_disable_autonomous(void) {
     s_autonomous = false;
 
     vTaskDelay(pdMS_TO_TICKS(20));
-    throttle_mux_disable();
+    multiplexer_dg408djz_disable();
 
     ESP_LOGI(TAG, "Autonomous mode DISABLED (manual control active)");
 }
 
 // Immediate cutoff - no ramp down, used for override/fault conditions
-void throttle_mux_emergency_stop(void) {
+void multiplexer_dg408djz_emergency_stop(void) {
     if (!s_initialized) return;
 
     ESP_LOGW(TAG, "EMERGENCY STOP");
@@ -183,6 +189,6 @@ void throttle_mux_emergency_stop(void) {
     s_autonomous = false;
 }
 
-bool throttle_mux_is_autonomous(void) {
+bool multiplexer_dg408djz_is_autonomous(void) {
     return s_autonomous;
 }

@@ -24,7 +24,7 @@ extern "C" {
 //   CW = EID & 0x00FF
 // ============================================================================
 
-#define STEPPER_UIM2852_PRODUCER_ID_HOST    4   // Master controller ID
+// Host controller producer ID: see UIM2852_MASTER_ID in can_protocol.hh (= 4)
 
 // Calculate 29-bit CAN ID for sending instruction to motor
 static inline uint32_t stepper_uim2852_make_can_id(uint8_t consumer_id, uint8_t cw) {

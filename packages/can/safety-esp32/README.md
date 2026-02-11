@@ -100,7 +100,7 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 | `push_button_hb2es544` | mxuteek HB2-ES544 NC e-stop push button |
 | `rf_remote_ev1527` | DieseRC 433MHz RF remote (EV1527 encoding) |
 | `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor |
-| `power_relay` | 24V relay/transistor control for motor power |
+| `relay_srd05vdc` | AEDIKO SRD-05VDC-SL-C 5V relay module for 24V autonomous power rail |
 | `can_twai` | CAN bus driver wrapper (shared) |
 | `can_protocol` | Message definitions (shared) |
 | `heartbeat` | WS2812 status LED driver (shared) |
@@ -138,7 +138,16 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received heartbeat, not just state changes |
 | `CONFIG_LOG_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
 | `CONFIG_LOG_STATE_MACHINE` | off | Log state machine evaluation every cycle |
-| `CONFIG_LOG_CAN_RECOVERY` | on | Log CAN bus recovery attempts |
+| **Ultrasonic Sensor (A02YYUW)** | | |
+| `CONFIG_LOG_ULTRASONIC_DISTANCE` | off | Log every valid distance reading (~5-10/sec) |
+| `CONFIG_LOG_ULTRASONIC_RX` | off | Log raw UART RX hex bytes (extremely verbose) |
+| `CONFIG_LOG_ULTRASONIC_PARSE_ERRORS` | off | Log UART parse failures (bad checksum, missing header) |
+| **Push Button (HB2-ES544)** | | |
+| `CONFIG_LOG_PUSH_BUTTON` | off | Log push button state changes (pressed/released) |
+| **RF Remote (EV1527)** | | |
+| `CONFIG_LOG_RF_REMOTE` | off | Log RF remote state changes (engaged/disengaged) |
+| **Power Relay (SRD-05VDC)** | | |
+| `CONFIG_LOG_RELAY_STATE` | **on** | Log power relay enable/disable transitions |
 
 ## Build
 

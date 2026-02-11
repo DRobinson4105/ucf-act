@@ -22,20 +22,11 @@ extern "C" {
 #endif
 
 // ============================================================================
-// Forward/Reverse state (mirrors override_sensors enum)
-// ============================================================================
-
-#define CONTROL_FR_NEUTRAL  0
-#define CONTROL_FR_FORWARD  1
-#define CONTROL_FR_REVERSE  2
-#define CONTROL_FR_INVALID  3
-
-// ============================================================================
 // Enable Preconditions
 // ============================================================================
 
 typedef struct {
-    uint8_t fr_state;           // CONTROL_FR_* value
+    uint8_t fr_state;           // FR_STATE_* from can_protocol.hh
     bool pedal_pressed;         // true if pedal above threshold
     bool pedal_rearmed;         // true if pedal below threshold for 500ms
     uint8_t fault_code;         // NODE_FAULT_* from can_protocol.hh
@@ -88,7 +79,7 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 #define CONTROL_ACTION_ABORT_ENABLE     0x0004  // Cancel enable (relay off, mux disable)
 #define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008  // Emergency disable all actuators
 #define CONTROL_ACTION_ATTEMPT_RECOVERY 0x0010  // Try fault recovery
-#define CONTROL_ACTION_APPLY_THROTTLE   0x0020  // Update DG408 mux to new throttle level
+#define CONTROL_ACTION_APPLY_THROTTLE   0x0020  // Update DG408DJZ mux to new throttle level
 
 typedef struct {
     // Safety system command
@@ -101,7 +92,7 @@ typedef struct {
     uint8_t motor_fault_code;           // one-shot from CAN RX (NODE_FAULT_*)
 
     // Sensor state
-    uint8_t fr_state;                   // CONTROL_FR_*
+    uint8_t fr_state;                   // FR_STATE_*
     bool pedal_pressed;
     bool pedal_rearmed;
     bool fr_is_invalid;                 // true if FR reads as INVALID

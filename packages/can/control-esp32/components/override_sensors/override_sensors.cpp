@@ -238,6 +238,9 @@ void override_sensors_update(uint32_t now_ms) {
     // --- Pedal re-arm tracking ---
     // Once pedal pressed, must be released for PEDAL_REARM_MS before autonomous can resume
     uint16_t pedal_mv = read_pedal_adc_mv();
+#ifdef CONFIG_LOG_PEDAL_ADC
+    ESP_LOGI(TAG, "Pedal: %u mV (threshold: %u mV)", pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV);
+#endif
     if (pedal_mv >= PEDAL_ADC_THRESHOLD_MV) {
         s_pedal_was_above = true;
         s_pedal_below_threshold_since = 0;
@@ -250,7 +253,9 @@ void override_sensors_update(uint32_t now_ms) {
         if (s_pedal_below_threshold_since > 0 &&
             (now_ms - s_pedal_below_threshold_since) >= PEDAL_REARM_MS) {
             s_pedal_was_above = false;
-            ESP_LOGD(TAG, "Pedal re-armed");
+#ifdef CONFIG_LOG_PEDAL_ADC
+            ESP_LOGI(TAG, "Pedal re-armed");
+#endif
         }
     }
 
@@ -264,13 +269,17 @@ void override_sensors_update(uint32_t now_ms) {
             s_fr_state_pending = current_raw;
             s_fr_change_time = now_ms;
             s_fr_debouncing = true;
-            ESP_LOGD(TAG, "F/R change detected, starting debounce: %d -> %d",
+#ifdef CONFIG_LOG_FR_DEBOUNCE
+            ESP_LOGI(TAG, "F/R change detected, starting debounce: %d -> %d",
                      s_fr_state_debounced, current_raw);
+#endif
         } else if (current_raw != s_fr_state_pending) {
             // State changed again during debounce - reset timer with new target
             s_fr_state_pending = current_raw;
             s_fr_change_time = now_ms;
-            ESP_LOGD(TAG, "F/R changed during debounce, resetting: -> %d", current_raw);
+#ifdef CONFIG_LOG_FR_DEBOUNCE
+            ESP_LOGI(TAG, "F/R changed during debounce, resetting: -> %d", current_raw);
+#endif
         } else if ((now_ms - s_fr_change_time) >= FR_DEBOUNCE_MS) {
             // Held stable for debounce period - accept new state
             ESP_LOGI(TAG, "F/R state changed: %d -> %d",
@@ -280,12 +289,12 @@ void override_sensors_update(uint32_t now_ms) {
         }
     } else {
         // Raw matches debounced - cancel pending debounce
+#ifdef CONFIG_LOG_FR_DEBOUNCE
         if (s_fr_debouncing)
-			ESP_LOGD(TAG, "F/R returned to stable state, canceling debounce");
+            ESP_LOGI(TAG, "F/R returned to stable state, canceling debounce");
+#endif
         s_fr_debouncing = false;
     }
 }
 
-// ============================================================================
-// Status Flags
 

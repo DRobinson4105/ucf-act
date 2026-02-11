@@ -39,17 +39,13 @@ extern "C" {
 // ============================================================================
 
 typedef uint8_t fr_state_t;        // FR_STATE_* values
-typedef uint8_t override_reason_t; // OVERRIDE_REASON_* values
-
 // ============================================================================
 // Pedal ADC Thresholds
 // ============================================================================
 // Voltage divider: 270k/150k ratio ~0.36
 // 1.0V at pedal pot wiper -> ~360mV at ADC input
-// 12-bit ADC, 3.3V full scale: 360mV = ~450 counts
 
 #define PEDAL_ADC_THRESHOLD_MV   360   // Millivolt threshold at ADC pin
-#define PEDAL_ADC_THRESHOLD_RAW  450   // Raw ADC count threshold (12-bit)
 
 // ============================================================================
 // Timing Constants
@@ -121,8 +117,6 @@ fr_state_t override_sensors_get_fr_state_raw(void);
 // Must be called regularly from main loop
 void override_sensors_update(uint32_t now_ms);
 
-// ============================================================================
-// Status Flags
 #ifdef __cplusplus
 }
 #endif

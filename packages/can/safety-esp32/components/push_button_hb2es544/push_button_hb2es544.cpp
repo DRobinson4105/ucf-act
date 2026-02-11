@@ -4,6 +4,14 @@
  */
 #include "push_button_hb2es544.hh"
 
+#include "esp_log.h"
+
+namespace {
+
+static const char *TAG = "PUSH_BUTTON";
+
+}  // namespace
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -19,7 +27,12 @@ esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config)
         .intr_type = GPIO_INTR_DISABLE,
     };
 
-    return gpio_config(&io_conf);
+    esp_err_t err = gpio_config(&io_conf);
+    if (err != ESP_OK) return err;
+
+    ESP_LOGI(TAG, "Initialized on GPIO %d (active %s)",
+             config->gpio, config->active_level ? "HIGH" : "LOW");
+    return ESP_OK;
 }
 
 // ============================================================================
@@ -29,5 +42,17 @@ esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config)
 // Returns true when e-stop is active (push button pressed)
 bool push_button_hb2es544_read_active(const push_button_hb2es544_config_t *config) {
     if (!config) return true;  // fail-safe: treat as active (e-stop triggered)
-    return gpio_get_level(config->gpio) == config->active_level;
+    bool active = gpio_get_level(config->gpio) == config->active_level;
+
+#ifdef CONFIG_LOG_PUSH_BUTTON
+    static bool s_prev = false;
+    static bool s_first = true;
+    if (active != s_prev || s_first) {
+        ESP_LOGI(TAG, "Push button %s", active ? "PRESSED" : "released");
+        s_prev = active;
+        s_first = false;
+    }
+#endif
+
+    return active;
 }

@@ -16,9 +16,9 @@
 #include "can_protocol.hh"
 #include "can_twai.hh"
 #include "heartbeat.hh"
-#include "throttle_mux.hh"
+#include "multiplexer_dg408djz.hh"
 #include "stepper_motor_uim2852.h"
-#include "enable_relay.hh"
+#include "relay_jd2912.hh"
 #include "override_sensors.hh"
 #include "control_logic.h"
 
@@ -32,9 +32,13 @@
 // ACTIVE when target == ACTIVE (after enable work is done), and retreats to READY when
 // target drops below its current state.
 //
-// State machine: INIT -> READY -> ENABLING -> ACTIVE -> OVERRIDE -> READY
-//                                    |                      ^
-//                                    +-------(fault)--------+
+// State machine:
+//   INIT -> READY -> ENABLING -> ACTIVE
+//                        |          |
+//                        v          v
+//                      FAULT     OVERRIDE
+//                        |          |
+//                        +-> READY <+
 //
 // Recovery: FAULT state is now recoverable. After a cooldown, the system attempts
 // component-level re-init. If recovery fails after MAX_RECOVERY_ATTEMPTS, esp_restart().
@@ -111,7 +115,7 @@ constexpr int8_t THROTTLE_LEVEL_MAX = 7;
 // Component Configurations
 // ============================================================================
 
-static throttle_mux_config_t g_throttle_mux_cfg = {
+static multiplexer_dg408djz_config_t g_mux_cfg = {
     .a0 = MUX_A0_GPIO,
     .a1 = MUX_A1_GPIO,
     .a2 = MUX_A2_GPIO,
@@ -119,7 +123,7 @@ static throttle_mux_config_t g_throttle_mux_cfg = {
     .relay = THROTTLE_RELAY_GPIO,
 };
 
-static enable_relay_config_t g_enable_relay_cfg = {
+static relay_jd2912_config_t g_relay_cfg = {
     .gpio = ENABLE_MOSFET_GPIO,
     .active_high = true,
 };
@@ -186,7 +190,7 @@ struct recovery_state_t {
     uint8_t can_tx_fail_count;        // consecutive CAN TX failures
     uint8_t recovery_attempts;        // fault recovery attempts
     uint32_t last_recovery_ms;        // cooldown tracking
-    uint32_t fault_entered_ms;        // when fault state was entered
+
 };
 
 static recovery_state_t g_recovery = {};
@@ -347,12 +351,12 @@ static void execute_trigger_override(uint8_t reason) {
     (void)reason;
 #endif
 
-#ifndef CONFIG_BYPASS_THROTTLE_MUX
-    throttle_mux_disable();
-    throttle_mux_emergency_stop();
+#ifndef CONFIG_BYPASS_MULTIPLEXER
+    multiplexer_dg408djz_disable();
+    multiplexer_dg408djz_emergency_stop();
 #endif
 #ifndef CONFIG_BYPASS_ENABLE_RELAY
-    enable_relay_deenergize();
+    relay_jd2912_deenergize();
 #endif
 #ifndef CONFIG_BYPASS_STEPPER_MOTORS
     stepper_motor_uim2852_emergency_stop(&g_steering_stepper);
@@ -365,11 +369,11 @@ static void execute_trigger_override(uint8_t reason) {
 // Start the enable sequence (set mux to 0, energize relay)
 static void execute_start_enable() {
     ESP_LOGI(TAG, "Starting autonomous enable sequence");
-#ifndef CONFIG_BYPASS_THROTTLE_MUX
-    throttle_mux_set_level(0);
+#ifndef CONFIG_BYPASS_MULTIPLEXER
+    multiplexer_dg408djz_set_level(0);
 #endif
 #ifndef CONFIG_BYPASS_ENABLE_RELAY
-    enable_relay_energize();
+    relay_jd2912_energize();
 #endif
 }
 
@@ -387,14 +391,16 @@ static void execute_complete_enable() {
         ESP_LOGE(TAG, "Stepper enable failed, aborting autonomous enable");
         stepper_motor_uim2852_disable(&g_steering_stepper);
         stepper_motor_uim2852_disable(&g_braking_stepper);
-        enable_relay_deenergize();
-        throttle_mux_disable();
+#ifndef CONFIG_BYPASS_ENABLE_RELAY
+        relay_jd2912_deenergize();
+#endif
+        multiplexer_dg408djz_disable();
         return;
     }
 #endif
 
-#ifndef CONFIG_BYPASS_THROTTLE_MUX
-    throttle_mux_enable_autonomous();
+#ifndef CONFIG_BYPASS_MULTIPLEXER
+    multiplexer_dg408djz_enable_autonomous();
 #endif
     ESP_LOGI(TAG, "AUTONOMOUS MODE ACTIVE");
 }
@@ -403,21 +409,11 @@ static void execute_complete_enable() {
 static void execute_abort_enable() {
     ESP_LOGW(TAG, "Enable sequence aborted");
 #ifndef CONFIG_BYPASS_ENABLE_RELAY
-    enable_relay_deenergize();
+    relay_jd2912_deenergize();
 #endif
-#ifndef CONFIG_BYPASS_THROTTLE_MUX
-    throttle_mux_disable();
+#ifndef CONFIG_BYPASS_MULTIPLEXER
+    multiplexer_dg408djz_disable();
 #endif
-}
-
-// Map FR sensor state to control_logic FR constants
-static uint8_t map_fr_state(fr_state_t fr) {
-    switch (fr) {
-        case FR_STATE_NEUTRAL: return CONTROL_FR_NEUTRAL;
-        case FR_STATE_FORWARD: return CONTROL_FR_FORWARD;
-        case FR_STATE_REVERSE: return CONTROL_FR_REVERSE;
-        default:               return CONTROL_FR_INVALID;
-    }
 }
 
 // ============================================================================
@@ -460,11 +456,11 @@ static bool attempt_fault_recovery() {
             break;
 
         case NODE_FAULT_THROTTLE_INIT:
-            err = throttle_mux_init(&g_throttle_mux_cfg);
+            err = multiplexer_dg408djz_init(&g_mux_cfg);
             break;
 
         case NODE_FAULT_RELAY_INIT:
-            err = enable_relay_init(&g_enable_relay_cfg);
+            err = relay_jd2912_init(&g_relay_cfg);
             break;
 
         case NODE_FAULT_SENSOR_INVALID:
@@ -752,7 +748,7 @@ control_loop:
             .steering_cmd = cmd_local.steering_cmd,
             .braking_cmd = cmd_local.braking_cmd,
             .motor_fault_code = cmd_local.motor_fault_code,
-            .fr_state = map_fr_state(fr_state),
+            .fr_state = fr_state,
             .pedal_pressed = pedal_pressed,
             .pedal_rearmed = pedal_rearmed,
             .fr_is_invalid = (fr_state == FR_STATE_INVALID),
@@ -787,9 +783,9 @@ control_loop:
         }
         if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE) {
             execute_complete_enable();
-#if !defined(CONFIG_BYPASS_STEPPER_MOTORS) && !defined(CONFIG_BYPASS_THROTTLE_MUX)
+#if !defined(CONFIG_BYPASS_STEPPER_MOTORS) && !defined(CONFIG_BYPASS_MULTIPLEXER)
             // If stepper enable failed, execute_complete_enable leaves mux disabled
-            if (!throttle_mux_is_autonomous()) {
+            if (!multiplexer_dg408djz_is_autonomous()) {
                 step.new_state = NODE_STATE_FAULT;
                 step.new_fault_code = NODE_FAULT_MOTOR_COMM;
             }
@@ -799,8 +795,8 @@ control_loop:
             execute_abort_enable();
         }
         if (step.actions & CONTROL_ACTION_APPLY_THROTTLE) {
-#ifndef CONFIG_BYPASS_THROTTLE_MUX
-            throttle_mux_set_level(step.throttle_level);
+#ifndef CONFIG_BYPASS_MULTIPLEXER
+            multiplexer_dg408djz_set_level(step.throttle_level);
 #endif
 #ifdef CONFIG_LOG_THROTTLE
             {
@@ -853,7 +849,6 @@ control_loop:
 
         // Detect fault entry (before overwriting g_fault_code)
         if (step.new_fault_code != NODE_FAULT_NONE && step.new_fault_code != g_fault_code) {
-            g_recovery.fault_entered_ms = now_ms;
             g_recovery.recovery_attempts = 0;
             ESP_LOGE(TAG, "Entering FAULT state: %s", node_fault_to_string(step.new_fault_code));
         }
@@ -920,15 +915,14 @@ void heartbeat_task(void *param) {
         // Send heartbeat (periodic 100ms)
         send_control_heartbeat();
 
-        // Check CAN bus health (under lock to prevent concurrent recovery with control_task)
+        // Check CAN bus health — recovery must happen OUTSIDE critical section
+        // because can_twai_recover_bus_off() calls vTaskDelay() internally.
         taskENTER_CRITICAL(&g_can_tx_lock);
         bool bus_unhealthy = !can_twai_bus_ok();
         taskEXIT_CRITICAL(&g_can_tx_lock);
         if (bus_unhealthy) {
             ESP_LOGW(TAG, "CAN bus unhealthy, attempting recovery");
-            taskENTER_CRITICAL(&g_can_tx_lock);
             can_twai_recover_bus_off();
-            taskEXIT_CRITICAL(&g_can_tx_lock);
         }
 
         vTaskDelay(HEARTBEAT_SEND_INTERVAL);
@@ -969,13 +963,13 @@ void main_task(void *param) {
     // Initialize components with retry
     bool critical_failure = false;
 
-    err = retry_init("Throttle mux", (init_fn_t)throttle_mux_init, &g_throttle_mux_cfg);
+    err = retry_init("Multiplexer", (init_fn_t)multiplexer_dg408djz_init, &g_mux_cfg);
     if (err != ESP_OK) {
         g_fault_code = NODE_FAULT_THROTTLE_INIT;
         critical_failure = true;
     }
 
-    err = retry_init("Enable relay", (init_fn_t)enable_relay_init, &g_enable_relay_cfg);
+    err = retry_init("Pedal bypass relay", (init_fn_t)relay_jd2912_init, &g_relay_cfg);
     if (err != ESP_OK) {
         g_fault_code = NODE_FAULT_RELAY_INIT;
         critical_failure = true;
@@ -1032,9 +1026,9 @@ void main_task(void *param) {
     ESP_LOGW(TAG, "BYPASS: Pedal override detection DISABLED");
 #endif
 #ifdef CONFIG_BYPASS_ENABLE_RELAY
-    ESP_LOGW(TAG, "BYPASS: Enable relay DISABLED");
+    ESP_LOGW(TAG, "BYPASS: Pedal bypass relay DISABLED");
 #endif
-#ifdef CONFIG_BYPASS_THROTTLE_MUX
+#ifdef CONFIG_BYPASS_MULTIPLEXER
     ESP_LOGW(TAG, "BYPASS: Throttle mux DISABLED");
 #endif
 

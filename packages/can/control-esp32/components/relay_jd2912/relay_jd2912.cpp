@@ -1,20 +1,20 @@
 /**
- * @file enable_relay.cpp
- * @brief MOSFET-driven relay control implementation.
+ * @file relay_jd2912.cpp
+ * @brief JD-2912 automotive relay driver implementation (via IRLZ44N MOSFET).
  */
-#include "enable_relay.hh"
+#include "relay_jd2912.hh"
 
 #include "esp_log.h"
 
 namespace {
 
-static const char *TAG = "ENABLE_RELAY";
+static const char *TAG = "RELAY";
 
 // ============================================================================
 // Module State
 // ============================================================================
 
-static enable_relay_config_t s_config = {};
+static relay_jd2912_config_t s_config = {};
 static bool s_initialized = false;
 static bool s_energized = false;
 
@@ -24,7 +24,7 @@ static bool s_energized = false;
 // Initialization
 // ============================================================================
 
-esp_err_t enable_relay_init(const enable_relay_config_t *config) {
+esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     s_config = *config;
@@ -60,7 +60,7 @@ esp_err_t enable_relay_init(const enable_relay_config_t *config) {
 // ============================================================================
 
 // Energize relay to bypass pedal microswitch (for autonomous mode)
-void enable_relay_energize(void) {
+void relay_jd2912_energize(void) {
     if (!s_initialized) {
         ESP_LOGW(TAG, "Not initialized");
         return;
@@ -70,20 +70,24 @@ void enable_relay_energize(void) {
     gpio_set_level(s_config.gpio, level);
     s_energized = true;
 
+#ifdef CONFIG_LOG_PEDAL_RELAY
     ESP_LOGI(TAG, "ENERGIZED (pedal bypass active)");
+#endif
 }
 
 // De-energize relay to restore normal pedal operation
-void enable_relay_deenergize(void) {
+void relay_jd2912_deenergize(void) {
     if (!s_initialized) return;
 
     int level = s_config.active_high ? 0 : 1;
     gpio_set_level(s_config.gpio, level);
     s_energized = false;
 
+#ifdef CONFIG_LOG_PEDAL_RELAY
     ESP_LOGI(TAG, "DE-ENERGIZED (normal pedal operation)");
+#endif
 }
 
-bool enable_relay_is_energized(void) {
+bool relay_jd2912_is_energized(void) {
     return s_energized;
 }

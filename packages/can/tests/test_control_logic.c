@@ -40,7 +40,7 @@ static control_inputs_t default_inputs(void) {
     control_inputs_t in;
     memset(&in, 0, sizeof(in));
     in.target_state = NODE_STATE_ENABLING;
-    in.fr_state = CONTROL_FR_FORWARD;
+    in.fr_state = FR_STATE_FORWARD;
     in.pedal_pressed = false;
     in.pedal_rearmed = true;
     in.enable_sequence_ms = 200;
@@ -57,7 +57,7 @@ static control_inputs_t default_inputs(void) {
 // 1. All good -> true
 static void test_preconditions_all_good(void) {
     precondition_inputs_t p = {
-        .fr_state = CONTROL_FR_FORWARD,
+        .fr_state = FR_STATE_FORWARD,
         .pedal_pressed = false,
         .pedal_rearmed = true,
         .fault_code = NODE_FAULT_NONE,
@@ -68,7 +68,7 @@ static void test_preconditions_all_good(void) {
 // 2. FR not forward -> false
 static void test_preconditions_fr_not_forward(void) {
     precondition_inputs_t p = {
-        .fr_state = CONTROL_FR_REVERSE,
+        .fr_state = FR_STATE_REVERSE,
         .pedal_pressed = false,
         .pedal_rearmed = true,
         .fault_code = NODE_FAULT_NONE,
@@ -79,7 +79,7 @@ static void test_preconditions_fr_not_forward(void) {
 // 3. Pedal pressed -> false
 static void test_preconditions_pedal_pressed(void) {
     precondition_inputs_t p = {
-        .fr_state = CONTROL_FR_FORWARD,
+        .fr_state = FR_STATE_FORWARD,
         .pedal_pressed = true,
         .pedal_rearmed = true,
         .fault_code = NODE_FAULT_NONE,
@@ -90,7 +90,7 @@ static void test_preconditions_pedal_pressed(void) {
 // 4. Pedal not rearmed -> false
 static void test_preconditions_pedal_not_rearmed(void) {
     precondition_inputs_t p = {
-        .fr_state = CONTROL_FR_FORWARD,
+        .fr_state = FR_STATE_FORWARD,
         .pedal_pressed = false,
         .pedal_rearmed = false,
         .fault_code = NODE_FAULT_NONE,
@@ -101,7 +101,7 @@ static void test_preconditions_pedal_not_rearmed(void) {
 // 5. Active fault -> false
 static void test_preconditions_active_fault(void) {
     precondition_inputs_t p = {
-        .fr_state = CONTROL_FR_FORWARD,
+        .fr_state = FR_STATE_FORWARD,
         .pedal_pressed = false,
         .pedal_rearmed = true,
         .fault_code = NODE_FAULT_MOTOR_COMM,
@@ -218,7 +218,7 @@ static void test_ready_stays_no_auto(void) {
 // 16. READY + FR not forward -> stays READY
 static void test_ready_stays_fr_wrong(void) {
     control_inputs_t in = default_inputs();
-    in.fr_state = CONTROL_FR_REVERSE;
+    in.fr_state = FR_STATE_REVERSE;
     control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_READY);
 }
@@ -299,7 +299,7 @@ static void test_enabling_abort_pedal(void) {
 // 23. ENABLING + FR not forward -> READY + ABORT_ENABLE
 static void test_enabling_abort_fr(void) {
     control_inputs_t in = default_inputs();
-    in.fr_state = CONTROL_FR_NEUTRAL;
+    in.fr_state = FR_STATE_NEUTRAL;
     in.enable_start_ms = 1000;
     in.now_ms = 1050;
     control_step_result_t r = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
@@ -337,7 +337,7 @@ static void test_active_override_pedal(void) {
 static void test_active_override_fr(void) {
     control_inputs_t in = default_inputs();
     in.target_state = NODE_STATE_ACTIVE;
-    in.fr_state = CONTROL_FR_REVERSE;
+    in.fr_state = FR_STATE_REVERSE;
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_OVERRIDE);
     assert(r.override_reason == OVERRIDE_REASON_FR_CHANGED);
@@ -358,7 +358,7 @@ static void test_active_override_priority(void) {
     control_inputs_t in = default_inputs();
     in.target_state = NODE_STATE_ACTIVE;
     in.pedal_pressed = true;
-    in.fr_state = CONTROL_FR_REVERSE;
+    in.fr_state = FR_STATE_REVERSE;
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_OVERRIDE);
     assert(r.override_reason == OVERRIDE_REASON_PEDAL);
@@ -432,7 +432,7 @@ static void test_active_braking_changed(void) {
 static void test_override_to_ready(void) {
     control_inputs_t in = default_inputs();
     in.target_state = NODE_STATE_READY;
-    in.fr_state = CONTROL_FR_FORWARD;
+    in.fr_state = FR_STATE_FORWARD;
     in.pedal_rearmed = true;
     control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_READY);
@@ -719,6 +719,89 @@ static void test_enable_timer_overflow(void) {
 }
 
 // ============================================================================
+// Throttle slew boundary clamping (2)
+// ============================================================================
+
+// Slew at upper boundary: current=7, target=8 -> clamps to 7
+static void test_slew_clamp_upper_boundary(void) {
+    throttle_slew_inputs_t s = {
+        .current = 7, .target = 8, .last_change_ms = 0,
+        .now_ms = 100, .slew_interval_ms = 100,
+    };
+    throttle_slew_result_t r = control_compute_throttle_slew(&s);
+    assert(r.new_level == 7);
+    // current(7) != target(8), elapsed >= interval, so step up: 7+1=8, clamped to 7
+    // Level didn't actually change from current, but changed flag is true
+    // because the slew logic attempted a change (8 clamped to 7 == current)
+    // Actually: 7+1=8, clamp to 7, new_level==current -> changed may be true
+    // Let's verify what the code does: it sets new_level=current+1=8, clamps to 7,
+    // then sets changed=true (always when slew fires). So changed=true but level unchanged.
+    assert(r.new_level == 7);
+}
+
+// Slew at lower boundary: current=0, target=-1 -> clamps to 0
+static void test_slew_clamp_lower_boundary(void) {
+    throttle_slew_inputs_t s = {
+        .current = 0, .target = -1, .last_change_ms = 0,
+        .now_ms = 100, .slew_interval_ms = 100,
+    };
+    throttle_slew_result_t r = control_compute_throttle_slew(&s);
+    assert(r.new_level == 0);
+}
+
+// ============================================================================
+// CAN TX tracking: saturation + NULL (2)
+// ============================================================================
+
+// fail_count=255, tx_ok=false -> saturates at 255, doesn't wrap
+static void test_can_tx_saturation_at_255(void) {
+    can_tx_track_inputs_t t = { .fail_count = 255, .threshold = 255, .tx_ok = false };
+    can_tx_track_result_t r = control_track_can_tx(&t);
+    assert(r.new_fail_count == 255);
+    assert(r.trigger_recovery == true);
+}
+
+// NULL input -> safe defaults (no crash, count=0, no recovery)
+static void test_can_tx_null(void) {
+    can_tx_track_result_t r = control_track_can_tx(NULL);
+    assert(r.new_fail_count == 0);
+    assert(r.trigger_recovery == false);
+}
+
+// ============================================================================
+// Motor fault from OVERRIDE state (1)
+// ============================================================================
+
+// Motor fault while in OVERRIDE -> transitions to FAULT
+static void test_motor_fault_from_override(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_READY;
+    in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+    control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_FAULT);
+    assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+    // From OVERRIDE, neither TRIGGER_OVERRIDE nor ABORT_ENABLE should be set
+    assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
+    assert(!(r.actions & CONTROL_ACTION_ABORT_ENABLE));
+    assert(r.throttle_level == 0);
+    assert(r.new_last_steering == INT16_MIN);
+    assert(r.new_last_braking == INT16_MIN);
+}
+
+// ============================================================================
+// Unknown/default state (1)
+// ============================================================================
+
+// Unknown state (99) -> stays in that state (default: no-op)
+static void test_unknown_state_default(void) {
+    control_inputs_t in = default_inputs();
+    control_step_result_t r = control_compute_step(99, NODE_FAULT_NONE, &in);
+    // default case in switch: no state change, no actions
+    assert(r.new_state == 99);
+    assert(r.actions == CONTROL_ACTION_NONE);
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -734,12 +817,14 @@ int main(void) {
     TEST(test_preconditions_active_fault);
     TEST(test_preconditions_null);
 
-    // Throttle slew (4)
+    // Throttle slew (4 + 2)
     printf("\n--- Throttle slew ---\n");
     TEST(test_slew_at_target);
     TEST(test_slew_step_up);
     TEST(test_slew_step_down);
     TEST(test_slew_too_soon);
+    TEST(test_slew_clamp_upper_boundary);
+    TEST(test_slew_clamp_lower_boundary);
 
     // INIT -> READY (2)
     printf("\n--- INIT -> READY ---\n");
@@ -794,10 +879,11 @@ int main(void) {
     TEST(test_fault_resets_trackers);
     TEST(test_fault_preserves_code);
 
-    // Motor fault injection (2)
+    // Motor fault injection (2 + 1)
     printf("\n--- Motor fault injection ---\n");
     TEST(test_motor_fault_from_active);
     TEST(test_motor_fault_from_ready);
+    TEST(test_motor_fault_from_override);
 
     // FR INVALID (2)
     printf("\n--- FR INVALID sensor fault ---\n");
@@ -809,15 +895,21 @@ int main(void) {
     TEST(test_motor_fault_from_enabling);
     TEST(test_fr_invalid_from_enabling);
 
-    // CAN TX tracking (3)
+    // CAN TX tracking (3 + 2)
     printf("\n--- CAN TX tracking ---\n");
     TEST(test_can_tx_ok_resets);
     TEST(test_can_tx_fail_below_threshold);
     TEST(test_can_tx_fail_at_threshold);
+    TEST(test_can_tx_saturation_at_255);
+    TEST(test_can_tx_null);
 
     // NULL safety (1)
     printf("\n--- NULL safety ---\n");
     TEST(test_compute_step_null);
+
+    // Unknown state (1)
+    printf("\n--- Unknown state ---\n");
+    TEST(test_unknown_state_default);
 
     // Timer overflow (2)
     printf("\n--- Timer overflow (uint32 wrap) ---\n");
