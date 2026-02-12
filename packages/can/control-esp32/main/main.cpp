@@ -109,6 +109,8 @@ constexpr gpio_num_t FR_REV_GPIO = GPIO_NUM_15;   // reverse optocoupler
 
 // Status LED (WS2812)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
+constexpr uint8_t LED_LEVEL = 16;
+constexpr uint8_t LED_ORANGE_GREEN = 8;
 
 // Throttle limits
 constexpr int8_t THROTTLE_LEVEL_MAX = 7;
@@ -211,6 +213,41 @@ static stepper_motor_uim2852_t g_braking_stepper = {};
 
 static uint32_t get_time_ms() {
     return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+// ============================================================================
+// LED State Mapping
+// ============================================================================
+
+static void update_control_led_mode() {
+    uint8_t red = 0;
+    uint8_t green = 0;
+    uint8_t blue = 0;
+    const char *reason = "state_ready";
+
+    if (g_control_state == NODE_STATE_FAULT) {
+        red = LED_LEVEL;
+        reason = node_fault_to_string(g_fault_code);
+    } else if (g_control_state == NODE_STATE_OVERRIDE) {
+        red = LED_LEVEL;
+        reason = "state_override";
+    } else if (g_control_state == NODE_STATE_ACTIVE) {
+        blue = LED_LEVEL;
+        reason = "state_active";
+    } else if (g_control_state == NODE_STATE_ENABLING) {
+        red = LED_LEVEL;
+        green = LED_ORANGE_GREEN;
+        reason = "state_enabling";
+    } else if (g_control_state == NODE_STATE_READY) {
+        green = LED_LEVEL;
+        reason = "state_ready";
+    } else {
+        red = LED_LEVEL;
+        green = LED_ORANGE_GREEN;
+        reason = "state_other";
+    }
+
+    heartbeat_set_manual_color(red, green, blue, reason);
 }
 
 // ============================================================================
@@ -365,7 +402,7 @@ static void send_control_heartbeat(void) {
 // State Machine Action Helpers
 // ============================================================================
 
-static const char *override_reason_to_string(uint8_t reason) {
+[[maybe_unused]] static const char *override_reason_to_string(uint8_t reason) {
     switch (reason) {
         case OVERRIDE_REASON_PEDAL: return "pedal";
         case OVERRIDE_REASON_FR_CHANGED: return "fr_changed";
@@ -374,7 +411,7 @@ static const char *override_reason_to_string(uint8_t reason) {
     }
 }
 
-static const char *disable_reason_to_string(uint8_t reason) {
+[[maybe_unused]] static const char *disable_reason_to_string(uint8_t reason) {
     switch (reason) {
         case CONTROL_DISABLE_REASON_SAFETY_RETREAT: return "safety_retreat";
         case CONTROL_DISABLE_REASON_MOTOR_FAULT: return "motor_fault";
@@ -725,6 +762,8 @@ void control_task(void *param) {
 #ifdef CONFIG_LOG_STATE_CHANGES
     uint8_t prev_state = 0xFF;
     uint8_t prev_fault_code = 0xFF;
+#endif
+#ifdef CONFIG_LOG_SAFETY_MIRROR_CHANGES
     uint8_t prev_target_state = 0xFF;
     uint8_t prev_estop_fault = 0xFF;
 #endif
@@ -788,6 +827,8 @@ void control_task(void *param) {
 #ifdef CONFIG_LOG_STATE_CHANGES
     prev_state = g_control_state;
     prev_fault_code = g_fault_code;
+#endif
+#ifdef CONFIG_LOG_SAFETY_MIRROR_CHANGES
     prev_target_state = g_cmd.target_state;
     prev_estop_fault = g_cmd.estop_fault_code;
 #endif
@@ -1008,7 +1049,7 @@ control_loop:
             send_control_heartbeat();
         }
 
-        // Log state/control transitions only
+        // Log control-local transitions only
 #ifdef CONFIG_LOG_STATE_CHANGES
         if (g_control_state != prev_state) {
             const char *reason = "none";
@@ -1035,6 +1076,13 @@ control_loop:
                      node_fault_to_string(prev_fault_code),
                      node_fault_to_string(g_fault_code));
         }
+
+        prev_state = g_control_state;
+        prev_fault_code = g_fault_code;
+#endif
+
+        // Log Safety mirrored state/fault changes separately
+#ifdef CONFIG_LOG_SAFETY_MIRROR_CHANGES
         if (cmd_local.target_state != prev_target_state) {
             ESP_LOGI(TAG, "Safety target: %s -> %s",
                      node_state_to_string(prev_target_state),
@@ -1046,8 +1094,6 @@ control_loop:
                      node_fault_to_string(cmd_local.estop_fault_code));
         }
 
-        prev_state = g_control_state;
-        prev_fault_code = g_fault_code;
         prev_target_state = cmd_local.target_state;
         prev_estop_fault = cmd_local.estop_fault_code;
 #endif
@@ -1068,10 +1114,8 @@ void heartbeat_task(void *param) {
     while (true) {
         TickType_t now = xTaskGetTickCount();
 
-        if (g_control_state == NODE_STATE_FAULT || 
-            g_control_state == NODE_STATE_OVERRIDE)
-            heartbeat_set_error(true);
-        else heartbeat_set_error(false);
+        heartbeat_set_manual_mode(true);
+        update_control_led_mode();
         heartbeat_tick(cfg, now);
 
         // Send heartbeat (periodic 100ms)
@@ -1177,6 +1221,8 @@ void main_task(void *param) {
     err = heartbeat_init(&heartbeat_cfg);
     if (err != ESP_OK)
         ESP_LOGI(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
+    else
+        heartbeat_set_manual_mode(true);
 
     // Log active bypasses
 #ifdef CONFIG_BYPASS_SAFETY_TARGET_STATE

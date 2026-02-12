@@ -118,9 +118,15 @@ menu "Debug Logging"
             bool "Log control state changes and transition reasons"
             default n
             help
-                Log only important transition events: Control state changes,
-                fault changes, Safety target changes, and Safety estop fault
-                changes. Includes concise transition reason strings.
+                Log control-local transition events: state changes,
+                control fault changes, and transition reason strings.
+
+        config LOG_SAFETY_MIRROR_CHANGES
+            bool "Log mirrored Safety target/fault changes"
+            default n
+            help
+                Log Safety target_state and estop_fault transitions as
+                observed by Control from Safety heartbeat/commands.
 
         config LOG_STATE_TICK
             bool "Log control state evaluation each cycle"
@@ -174,6 +180,24 @@ menu "Debug Logging"
             help
                 Log when driver override is triggered by pedal press or
                 F/R change.
+
+    endmenu
+
+    menu "LED (WS2812)"
+
+        config LOG_LED_STATE_CHANGES
+            bool "Log LED color/reason state changes"
+            default n
+            help
+                Log when the LED color/reason mapping changes.
+                Useful for verifying state-driven LED behavior.
+
+        config LOG_LED_BLINKS
+            bool "Log every LED ON blink with color/reason"
+            default n
+            help
+                Log each ON blink pulse with color and reason text.
+                Very verbose. Useful for timing/behavior validation.
 
     endmenu
 

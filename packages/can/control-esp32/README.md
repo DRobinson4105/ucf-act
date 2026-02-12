@@ -91,6 +91,15 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | 14 | F/R Direction | Input | PC817 optocoupler, pull-up, active LOW |
 | 15 | F/R Reverse | Input | PC817 optocoupler, pull-up, active LOW |
 
+### LED Behavior
+
+| Color | State |
+|-------|-------|
+| Green blink | Local Control state READY |
+| Orange blink | Local Control state ENABLING |
+| Blue blink | Local Control state ACTIVE |
+| Red blink | Non-nominal local state (OVERRIDE or FAULT) |
+
 ### F/R Optocoupler Logic
 
 | GPIO14 (Dir) | GPIO15 (Rev) | State |
@@ -161,7 +170,8 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_STATE_CHANGES` | off | Log Control/Safety state changes and transition reasons |
+| `CONFIG_LOG_STATE_CHANGES` | off | Log control state/fault changes and transition reasons |
+| `CONFIG_LOG_SAFETY_MIRROR_CHANGES` | off | Log mirrored Safety target/fault changes seen by Control |
 | `CONFIG_LOG_STATE_TICK` | off | Log state-machine evaluation every 20ms cycle (very verbose) |
 | `CONFIG_LOG_ENABLE_SEQUENCE` | off | Log enable/disable sequence steps (start, complete, abort) |
 | `CONFIG_LOG_RECOVERY` | off | Log fault recovery attempts (re-init, success/failure) |
@@ -169,6 +179,13 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | `CONFIG_LOG_THROTTLE_TICK` | off | Log throttle current/target every 20ms cycle (very verbose) |
 | `CONFIG_LOG_STEPPER_COMMANDS` | off | Log stepper motor position commands |
 | `CONFIG_LOG_OVERRIDE` | off | Log driver override trigger events (pedal/FR) |
+
+### LED (WS2812)
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_LED_STATE_CHANGES` | off | Log LED color/reason mode changes |
+| `CONFIG_LOG_LED_BLINKS` | off | Log every LED ON blink with color/reason (very verbose) |
 
 ### Multiplexer (DG408DJZ)
 

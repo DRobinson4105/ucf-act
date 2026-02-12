@@ -8,6 +8,8 @@
 #include "esp_log.h"
 #include "driver/rmt_tx.h"
 
+#include <string.h>
+
 namespace {
 
 static const char *TAG = "LED";
@@ -22,11 +24,27 @@ static TickType_t s_last_toggle = 0;
 static volatile TickType_t s_last_activity = 0;
 static TickType_t s_activity_window = 0;
 static volatile bool s_error = false;
+static bool s_manual_mode = false;
 
 // Color configuration
 static uint8_t s_idle_red = 0, s_idle_green = 0, s_idle_blue = 0;
 static uint8_t s_activity_red = 0, s_activity_green = 0, s_activity_blue = 0;
 static uint8_t s_error_red = 0, s_error_green = 0, s_error_blue = 0;
+static uint8_t s_manual_red = 0, s_manual_green = 0, s_manual_blue = 0;
+
+constexpr size_t HEARTBEAT_REASON_MAX_LEN = 48;
+static char s_manual_reason[HEARTBEAT_REASON_MAX_LEN] = "manual";
+
+#if defined(CONFIG_LOG_LED_BLINKS) || defined(CONFIG_LOG_LED_STATE_CHANGES)
+static const char *led_color_name(uint8_t red, uint8_t green, uint8_t blue) {
+    if (red == 0 && green == 0 && blue == 0) return "OFF";
+    if (red > 0 && green == 0 && blue == 0) return "RED";
+    if (red == 0 && green > 0 && blue == 0) return "GREEN";
+    if (red > 0 && green > 0 && blue == 0) return "ORANGE";
+    if (red == 0 && green == 0 && blue > 0) return "BLUE";
+    return "CUSTOM";
+}
+#endif
 
 // ============================================================================
 // WS2812 RMT Driver
@@ -165,10 +183,42 @@ void heartbeat_tick(const heartbeat_config_t *config, TickType_t now_ticks) {
     s_led_on = !s_led_on;
 
     if (s_led_on) {
-        // Color priority: error (red) > activity (blue) > idle (green)
-        if (s_error) ws2812_set_rgb(s_error_red, s_error_green, s_error_blue);
-        else if (activity) ws2812_set_rgb(s_activity_red, s_activity_green, s_activity_blue);
-        else ws2812_set_rgb(s_idle_red, s_idle_green, s_idle_blue);
+        uint8_t red = 0;
+        uint8_t green = 0;
+        uint8_t blue = 0;
+        const char *reason = "idle";
+
+        if (s_manual_mode) {
+            red = s_manual_red;
+            green = s_manual_green;
+            blue = s_manual_blue;
+            reason = s_manual_reason;
+        } else if (s_error) {
+            red = s_error_red;
+            green = s_error_green;
+            blue = s_error_blue;
+            reason = "error";
+        } else if (activity) {
+            red = s_activity_red;
+            green = s_activity_green;
+            blue = s_activity_blue;
+            reason = "activity";
+        } else {
+            red = s_idle_red;
+            green = s_idle_green;
+            blue = s_idle_blue;
+            reason = "idle";
+        }
+
+        ws2812_set_rgb(red, green, blue);
+
+#ifdef CONFIG_LOG_LED_BLINKS
+        ESP_LOGI(TAG, "Blink ON: color=%s rgb=(%u,%u,%u) reason=%s",
+                 led_color_name(red, green, blue),
+                 red, green, blue, reason);
+#else
+        (void)reason;
+#endif
     } else {
         ws2812_set_rgb(0, 0, 0);
     }
@@ -186,4 +236,44 @@ void heartbeat_mark_activity(TickType_t now_ticks) {
 void heartbeat_set_error(bool active) {
     if (!s_initialized) return;
     s_error = active;
+}
+
+void heartbeat_set_manual_mode(bool enabled) {
+    if (!s_initialized) return;
+    if (s_manual_mode == enabled) return;
+    s_manual_mode = enabled;
+
+#ifdef CONFIG_LOG_LED_STATE_CHANGES
+    ESP_LOGI(TAG, "Manual mode %s", enabled ? "ENABLED" : "DISABLED");
+#endif
+}
+
+void heartbeat_set_manual_color(uint8_t red,
+                                uint8_t green,
+                                uint8_t blue,
+                                const char *reason) {
+    if (!s_initialized) return;
+
+    const char *new_reason = (reason && reason[0] != '\0') ? reason : "manual";
+
+#ifdef CONFIG_LOG_LED_STATE_CHANGES
+    bool changed = (s_manual_red != red) ||
+                   (s_manual_green != green) ||
+                   (s_manual_blue != blue) ||
+                   (strncmp(s_manual_reason, new_reason, sizeof(s_manual_reason)) != 0);
+#endif
+
+    s_manual_red = red;
+    s_manual_green = green;
+    s_manual_blue = blue;
+    strncpy(s_manual_reason, new_reason, sizeof(s_manual_reason) - 1);
+    s_manual_reason[sizeof(s_manual_reason) - 1] = '\0';
+
+#ifdef CONFIG_LOG_LED_STATE_CHANGES
+    if (changed) {
+        ESP_LOGI(TAG, "LED mode: color=%s rgb=(%u,%u,%u) reason=%s",
+                 led_color_name(red, green, blue),
+                 red, green, blue, s_manual_reason);
+    }
+#endif
 }

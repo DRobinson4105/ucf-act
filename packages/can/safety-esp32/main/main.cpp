@@ -105,6 +105,8 @@ constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 1000;
 
 // Status LED (WS2812)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
+constexpr uint8_t LED_LEVEL = 16;
+constexpr uint8_t LED_ORANGE_GREEN = 8;
 
 // ============================================================================
 // Global State
@@ -151,6 +153,45 @@ static rf_remote_ev1527_config_t g_rf_remote_cfg;
 static relay_srd05vdc_config_t g_relay_cfg;
 static ultrasonic_a02yyuw_config_t g_ultrasonic_cfg;
 static heartbeat_config_t g_heartbeat_led_cfg;
+
+// ============================================================================
+// LED State Mapping
+// ============================================================================
+
+static void update_safety_led_mode() {
+    uint8_t red = 0;
+    uint8_t green = 0;
+    uint8_t blue = 0;
+    const char *reason = "target_ready";
+
+    if (g_estop_fault_code != NODE_FAULT_NONE) {
+        red = LED_LEVEL;
+        reason = node_fault_to_string(g_estop_fault_code);
+    } else {
+        switch (g_target_state) {
+            case NODE_STATE_READY:
+                green = LED_LEVEL;
+                reason = "target_ready";
+                break;
+            case NODE_STATE_ENABLING:
+                red = LED_LEVEL;
+                green = LED_ORANGE_GREEN;
+                reason = "target_enabling";
+                break;
+            case NODE_STATE_ACTIVE:
+                blue = LED_LEVEL;
+                reason = "target_active";
+                break;
+            default:
+                red = LED_LEVEL;
+                green = LED_ORANGE_GREEN;
+                reason = "target_other";
+                break;
+        }
+    }
+
+    heartbeat_set_manual_color(red, green, blue, reason);
+}
 
 // ============================================================================
 // Recovery State
@@ -600,12 +641,10 @@ void safety_task(void *param) {
             esp_err_t relay_err = relay_srd05vdc_enable(&g_relay_cfg);
             if (relay_err != ESP_OK)
                 ESP_LOGE(TAG, "relay_srd05vdc_enable FAILED: %s — relay may be stuck OFF", esp_err_to_name(relay_err));
-            heartbeat_set_error(false);
         } else {
             esp_err_t relay_err = relay_srd05vdc_disable(&g_relay_cfg);
             if (relay_err != ESP_OK)
                 ESP_LOGE(TAG, "relay_srd05vdc_disable FAILED: %s — relay may be stuck ON!", esp_err_to_name(relay_err));
-            heartbeat_set_error(true);
         }
 
         // Relay state changes are logged by the relay_srd05vdc component itself
@@ -634,6 +673,8 @@ void heartbeat_task(void *param) {
         TickType_t now = xTaskGetTickCount();
 
         // Update LED heartbeat
+        heartbeat_set_manual_mode(true);
+        update_safety_led_mode();
         heartbeat_tick(&g_heartbeat_led_cfg, now);
 
         // Send Safety heartbeat (periodic)
@@ -781,6 +822,8 @@ void main_task(void *param) {
     err = heartbeat_init(&g_heartbeat_led_cfg);
     if (err != ESP_OK)
         ESP_LOGI(TAG, "Heartbeat LED init failed: %s", esp_err_to_name(err));
+    else
+        heartbeat_set_manual_mode(true);
 
     // Log active bypasses
 #ifdef CONFIG_BYPASS_PLANNER_LIVENESS

@@ -92,9 +92,10 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 
 | Color | State |
 |-------|-------|
-| Green blink | Normal, no e-stop |
-| Blue blink | CAN activity |
-| Red blink | E-stop active |
+| Green blink | Target state READY (no e-stop active) |
+| Orange blink | Target state ENABLING |
+| Blue blink | Target state ACTIVE |
+| Red blink | Non-nominal condition (e-stop active) |
 
 ## Components
 
@@ -153,6 +154,13 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | `CONFIG_LOG_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
 | `CONFIG_LOG_STATE_CHANGES` | off | Log target-state transitions and autonomy-request gate events |
 | `CONFIG_LOG_STATE_TICK` | off | Log state-machine evaluation every 50ms cycle (very verbose) |
+
+### LED (WS2812)
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_LED_STATE_CHANGES` | off | Log LED color/reason mode changes |
+| `CONFIG_LOG_LED_BLINKS` | off | Log every LED ON blink with color/reason (very verbose) |
 
 ### Push Button (HB2-ES544)
 

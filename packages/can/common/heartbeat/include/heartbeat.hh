@@ -70,6 +70,18 @@ void heartbeat_mark_activity(TickType_t now_ticks);
 // Error state takes priority over idle/activity states
 void heartbeat_set_error(bool active);
 
+// Enable/disable manual LED mode.
+// When enabled, heartbeat_set_manual_color() controls LED color/reason and
+// overrides idle/activity/error color selection.
+void heartbeat_set_manual_mode(bool enabled);
+
+// Set manual LED color and reason string.
+// Reason is copied internally and may be a temporary string.
+void heartbeat_set_manual_color(uint8_t red,
+                                uint8_t green,
+                                uint8_t blue,
+                                const char *reason);
+
 #ifdef __cplusplus
 }
 #endif

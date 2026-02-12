@@ -125,6 +125,24 @@ menu "Debug Logging"
 
     endmenu
 
+    menu "LED (WS2812)"
+
+        config LOG_LED_STATE_CHANGES
+            bool "Log LED color/reason state changes"
+            default n
+            help
+                Log when the LED color/reason mapping changes.
+                Useful for verifying state-driven LED behavior.
+
+        config LOG_LED_BLINKS
+            bool "Log every LED ON blink with color/reason"
+            default n
+            help
+                Log each ON blink pulse with color and reason text.
+                Very verbose. Useful for timing/behavior validation.
+
+    endmenu
+
     menu "Push Button (HB2-ES544)"
 
         config LOG_PUSH_BUTTON
