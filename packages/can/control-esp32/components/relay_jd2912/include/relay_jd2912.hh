@@ -62,10 +62,10 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config);
 // ============================================================================
 
 // Energize relay - bypasses pedal microswitch (for autonomous mode)
-void relay_jd2912_energize(void);
+esp_err_t relay_jd2912_energize(void);
 
 // De-energize relay - restores normal pedal operation (safe state)
-void relay_jd2912_deenergize(void);
+esp_err_t relay_jd2912_deenergize(void);
 
 // Check if relay is currently energized
 bool relay_jd2912_is_energized(void);

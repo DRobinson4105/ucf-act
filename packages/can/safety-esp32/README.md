@@ -4,16 +4,19 @@ ESP-IDF firmware for the Safety ESP32-C6. Acts as the **system state authority**
 
 ## System State Authority
 
-Safety owns the system target state and broadcasts it as `state` in its heartbeat (0x100). All nodes observe Safety's heartbeat to know the current system target. Safety advances the target only when all nodes are healthy and ready and Planner/Orin explicitly requests autonomy; it retreats to READY when any e-stop, fault, override, or timeout is detected.
+Safety owns the system target state and broadcasts it as `state` in its heartbeat (0x100). All nodes observe Safety's heartbeat to know the current system target. Safety commands target states using READY/ENABLING/ACTIVE only; Planner and Control still report local OVERRIDE/FAULT as live states. Safety advances the target only when all nodes are healthy and ready and Planner/Orin explicitly requests autonomy; it retreats to READY when any e-stop, fault, override, or timeout is detected.
 
 **State transitions (target state):**
-- **INIT -> READY**: Always, after boot
+- **Startup target**: Safety heartbeats start at READY immediately after boot
 - **READY -> ENABLING**: Both Planner and Control report READY, both alive, no e-stop, Planner/Orin request edge (`HEARTBEAT_FLAG_AUTONOMY_REQUEST`) latched
 - **ENABLING -> ACTIVE**: Both nodes report ENABLING with `HEARTBEAT_FLAG_ENABLE_COMPLETE`, no e-stop
+- **ENABLING/ACTIVE -> READY**: Planner/Orin drops autonomy request level (halt autonomy command)
 - **ANY -> READY**: E-stop active, node FAULT, node OVERRIDE, node timeout
 
-Autonomy request is handled as a one-shot gate: Safety latches a rising request edge,
-consumes it when entering ENABLING, and requires request drop before the next re-arm.
+Autonomy request is handled as a one-shot gate for entry and a level-hold for run:
+Safety latches a rising request edge, consumes it when entering ENABLING,
+requires request drop before next re-arm, and retreats back to READY if request
+is dropped while target is ENABLING or ACTIVE.
 
 ## Safety Logic
 
@@ -26,6 +29,11 @@ The Safety ESP32 continuously monitors:
 **Power relay behavior:**
 - ENABLED when all inputs are clear (no e-stop)
 - DISABLED immediately when any e-stop condition detected
+
+**Input debounce:**
+- Push-button and RF remote engage is immediate (safety-critical, no debounce)
+- Push-button and RF remote disengage requires 3 consecutive clear reads (~150ms at 50ms loop) to filter contact bounce
+- Ultrasonic health transitions require 3 consecutive agreeing samples (~150ms) to prevent flap around the 500ms timeout boundary
 
 **E-stop fault sources** (OR'ed into a bitmask):
 1. Push button pressed (HB2-ES544)
@@ -107,7 +115,7 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 | `relay_srd05vdc` | AEDIKO SRD-05VDC-SL-C 5V relay module for 24V autonomous power rail |
 | `can_twai` | CAN bus driver wrapper (shared) |
 | `can_protocol` | Message definitions (shared) |
-| `heartbeat` | WS2812 status LED driver (shared) |
+| `led_ws2812` | WS2812 status LED driver (shared) |
 | `heartbeat_monitor` | CAN node liveness tracking (shared) |
 | `safety_logic` | Extracted e-stop evaluation logic (shared, tested) |
 | `system_state` | System state machine — target state advancement (shared, tested) |
@@ -126,67 +134,74 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 | Flag | Effect |
 |------|--------|
-| `CONFIG_BYPASS_PLANNER_LIVENESS` | Ignore Planner heartbeat timeout + Planner FAULT checks |
-| `CONFIG_BYPASS_PLANNER_STATE` | Simulate Planner state/enable_complete by mirroring Safety target |
-| `CONFIG_BYPASS_CONTROL_LIVENESS` | Ignore Control heartbeat timeout + Control FAULT checks |
-| `CONFIG_BYPASS_CONTROL_STATE` | Simulate Control state/enable_complete by mirroring Safety target |
-| `CONFIG_BYPASS_AUTONOMY_REQUEST` | Force autonomy request true (bench mode without Orin; bypasses one-shot re-arm) |
-| `CONFIG_BYPASS_PUSH_BUTTON` | Force push button e-stop to inactive (not pressed) |
-| `CONFIG_BYPASS_RF_REMOTE` | Force RF remote e-stop to inactive (not engaged) |
-| `CONFIG_BYPASS_ULTRASONIC` | Force ultrasonic clear and healthy (skip sensor) |
+| `CONFIG_BYPASS_AUTONOMY_REQUEST_GATE` | Force autonomy request true (bench mode without Orin) |
+| `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner FAULT checks |
+| `CONFIG_BYPASS_PLANNER_STATE_MIRROR` | Simulate Planner state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS` | Ignore Control heartbeat timeout + Control FAULT checks |
+| `CONFIG_BYPASS_CONTROL_STATE_MIRROR` | Simulate Control state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_INPUT_PUSH_BUTTON` | Force push-button e-stop to inactive (not pressed) |
+| `CONFIG_BYPASS_INPUT_RF_REMOTE` | Force RF remote e-stop to inactive (not engaged) |
+| `CONFIG_BYPASS_INPUT_ULTRASONIC` | Force ultrasonic clear and healthy (skip sensor) |
 
 ## Debug Logging
 
 Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level):
 
-### CAN Bus
+### CAN I/O
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
-| `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received heartbeat, not just state changes |
+| `CONFIG_LOG_CAN_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
+| `CONFIG_LOG_CAN_HEARTBEAT_RX` | off | Log every received heartbeat, not just state changes |
+
+### Component Health & Recovery
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_COMPONENT_LOST` | on | Log component LOST edge transitions |
+| `CONFIG_LOG_COMPONENT_REGAINED` | on | Log component REGAINED edge transitions |
+| `CONFIG_LOG_HEARTBEAT_MONITOR_LOST` | on | Log Planner/Control heartbeat monitor lost events |
+| `CONFIG_LOG_HEARTBEAT_MONITOR_REGAINED` | on | Log Planner/Control heartbeat monitor regained events |
 | `CONFIG_LOG_CAN_RECOVERY` | off | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
+| `CONFIG_LOG_RETRY_TWAI` | off | Log TWAI retry attempts |
+| `CONFIG_LOG_RETRY_PUSH_BUTTON` | off | Log push-button retry attempts |
+| `CONFIG_LOG_RETRY_RF_REMOTE` | off | Log RF-remote retry attempts |
+| `CONFIG_LOG_RETRY_ULTRASONIC` | off | Log ultrasonic retry attempts |
+| `CONFIG_LOG_RETRY_POWER_RELAY` | off | Log power-relay retry attempts |
+
+Safety retries failed GPIO-attached safety components indefinitely at 500ms intervals until they are healthy again (no maximum attempt limit).
+HEARTBEAT_LED is non-critical and initialized once at startup.
 
 ### Safety Logic
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
-| `CONFIG_LOG_STATE_CHANGES` | off | Log target-state transitions and autonomy-request gate events |
-| `CONFIG_LOG_STATE_TICK` | off | Log state-machine evaluation every 50ms cycle (very verbose) |
+| `CONFIG_LOG_SAFETY_ESTOP_INPUTS` | off | Log all e-stop inputs every 50ms cycle (extremely verbose) |
+| `CONFIG_LOG_SAFETY_STATE_CHANGES` | **on** | Log target-state transitions and autonomy-request gate events |
+| `CONFIG_LOG_SAFETY_STATE_TICK` | off | Log state-machine evaluation every 50ms cycle (very verbose) |
 
-### LED (WS2812)
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `CONFIG_LOG_LED_STATE_CHANGES` | off | Log LED color/reason mode changes |
-| `CONFIG_LOG_LED_BLINKS` | off | Log every LED ON blink with color/reason (very verbose) |
-
-### Push Button (HB2-ES544)
+### Inputs
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_PUSH_BUTTON` | off | Log push button state changes (pressed/released) |
+| `CONFIG_LOG_INPUT_PUSH_BUTTON` | off | Log push-button state changes (pressed/released) |
+| `CONFIG_LOG_INPUT_RF_REMOTE` | off | Log RF remote state changes (engaged/disengaged) |
+| `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE` | off | Log every valid ultrasonic distance reading (~5-10/sec) |
+| `CONFIG_LOG_INPUT_ULTRASONIC_RX` | off | Log raw ultrasonic UART RX bytes (extremely verbose) |
+| `CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS` | off | Log ultrasonic UART parse failures |
 
-### RF Remote (EV1527)
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `CONFIG_LOG_RF_REMOTE` | off | Log RF remote state changes (engaged/disengaged) |
-
-### Power Relay (SRD-05VDC)
+### Actuators
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_RELAY_STATE` | **on** | Log power relay enable/disable transitions |
+| `CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE` | off | Log power relay enable/disable transitions |
 
-### Ultrasonic Sensor (A02YYUW)
+### HEARTBEAT_LED
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_ULTRASONIC_DISTANCE` | off | Log every valid distance reading (~5-10/sec) |
-| `CONFIG_LOG_ULTRASONIC_RX` | off | Log raw UART RX hex bytes (extremely verbose) |
-| `CONFIG_LOG_ULTRASONIC_PARSE_ERRORS` | off | Log UART parse failures (bad checksum, missing header) |
+| `CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES` | off | Log HEARTBEAT_LED color/reason mode changes |
+| `CONFIG_LOG_HEARTBEAT_LED_BLINK_PULSES` | off | Log every HEARTBEAT_LED ON pulse with color/reason (very verbose) |
 
 ## Build
 

@@ -61,6 +61,9 @@ typedef struct {
 // Initialize UART for ultrasonic sensor communication
 esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config);
 
+// Deinitialize UART/task resources.
+void ultrasonic_a02yyuw_deinit(void);
+
 // ============================================================================
 // Distance Reading
 // ============================================================================

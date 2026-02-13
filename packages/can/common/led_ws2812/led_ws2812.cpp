@@ -1,8 +1,8 @@
 /**
- * @file heartbeat.cpp
- * @brief WS2812 LED heartbeat indicator implementation.
+ * @file led_ws2812.cpp
+ * @brief WS2812 status LED driver implementation.
  */
-#include "heartbeat.hh"
+#include "led_ws2812.hh"
 
 #include "freertos/FreeRTOS.h"
 #include "esp_log.h"
@@ -12,7 +12,7 @@
 
 namespace {
 
-static const char *TAG = "LED";
+static const char *TAG = "HEARTBEAT_LED";
 
 // ============================================================================
 // Module State
@@ -32,10 +32,10 @@ static uint8_t s_activity_red = 0, s_activity_green = 0, s_activity_blue = 0;
 static uint8_t s_error_red = 0, s_error_green = 0, s_error_blue = 0;
 static uint8_t s_manual_red = 0, s_manual_green = 0, s_manual_blue = 0;
 
-constexpr size_t HEARTBEAT_REASON_MAX_LEN = 48;
-static char s_manual_reason[HEARTBEAT_REASON_MAX_LEN] = "manual";
+constexpr size_t LED_REASON_MAX_LEN = 48;
+static char s_manual_reason[LED_REASON_MAX_LEN] = "manual";
 
-#if defined(CONFIG_LOG_LED_BLINKS) || defined(CONFIG_LOG_LED_STATE_CHANGES)
+#if defined(CONFIG_LOG_HEARTBEAT_LED_BLINK_PULSES) || defined(CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES)
 static const char *led_color_name(uint8_t red, uint8_t green, uint8_t blue) {
     if (red == 0 && green == 0 && blue == 0) return "OFF";
     if (red > 0 && green == 0 && blue == 0) return "RED";
@@ -132,7 +132,7 @@ static esp_err_t ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue) {
 // Initialization
 // ============================================================================
 
-esp_err_t heartbeat_init(const heartbeat_config_t *config) {
+esp_err_t led_ws2812_init(const led_ws2812_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     if (s_initialized) {
@@ -166,8 +166,6 @@ esp_err_t heartbeat_init(const heartbeat_config_t *config) {
     s_activity_window = config->activity_window_ticks;
     s_initialized = true;
 
-    const char *label = config->label ? config->label : "device";
-    ESP_LOGI(TAG, "WS2812 heartbeat init: %s on GPIO %d", label, config->gpio);
     return ESP_OK;
 }
 
@@ -175,7 +173,7 @@ esp_err_t heartbeat_init(const heartbeat_config_t *config) {
 // Runtime Control
 // ============================================================================
 
-void heartbeat_tick(const heartbeat_config_t *config, TickType_t now_ticks) {
+void led_ws2812_tick(const led_ws2812_config_t *config, TickType_t now_ticks) {
     if (!config || !s_initialized) return;
     if (now_ticks - s_last_toggle < config->interval_ticks) return;
 
@@ -212,7 +210,7 @@ void heartbeat_tick(const heartbeat_config_t *config, TickType_t now_ticks) {
 
         ws2812_set_rgb(red, green, blue);
 
-#ifdef CONFIG_LOG_LED_BLINKS
+#ifdef CONFIG_LOG_HEARTBEAT_LED_BLINK_PULSES
         ESP_LOGI(TAG, "Blink ON: color=%s rgb=(%u,%u,%u) reason=%s",
                  led_color_name(red, green, blue),
                  red, green, blue, reason);
@@ -227,36 +225,36 @@ void heartbeat_tick(const heartbeat_config_t *config, TickType_t now_ticks) {
 }
 
 // Record CAN activity - triggers activity color for activity_window duration
-void heartbeat_mark_activity(TickType_t now_ticks) {
+void led_ws2812_mark_activity(TickType_t now_ticks) {
     if (!s_initialized) return;
     s_last_activity = now_ticks;
 }
 
 // Set error state - shows error color until cleared
-void heartbeat_set_error(bool active) {
+void led_ws2812_set_error(bool active) {
     if (!s_initialized) return;
     s_error = active;
 }
 
-void heartbeat_set_manual_mode(bool enabled) {
+void led_ws2812_set_manual_mode(bool enabled) {
     if (!s_initialized) return;
     if (s_manual_mode == enabled) return;
     s_manual_mode = enabled;
 
-#ifdef CONFIG_LOG_LED_STATE_CHANGES
+#ifdef CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES
     ESP_LOGI(TAG, "Manual mode %s", enabled ? "ENABLED" : "DISABLED");
 #endif
 }
 
-void heartbeat_set_manual_color(uint8_t red,
-                                uint8_t green,
-                                uint8_t blue,
-                                const char *reason) {
+void led_ws2812_set_manual_color(uint8_t red,
+                                 uint8_t green,
+                                 uint8_t blue,
+                                 const char *reason) {
     if (!s_initialized) return;
 
     const char *new_reason = (reason && reason[0] != '\0') ? reason : "manual";
 
-#ifdef CONFIG_LOG_LED_STATE_CHANGES
+#ifdef CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES
     bool changed = (s_manual_red != red) ||
                    (s_manual_green != green) ||
                    (s_manual_blue != blue) ||
@@ -269,9 +267,9 @@ void heartbeat_set_manual_color(uint8_t red,
     strncpy(s_manual_reason, new_reason, sizeof(s_manual_reason) - 1);
     s_manual_reason[sizeof(s_manual_reason) - 1] = '\0';
 
-#ifdef CONFIG_LOG_LED_STATE_CHANGES
+#ifdef CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES
     if (changed) {
-        ESP_LOGI(TAG, "LED mode: color=%s rgb=(%u,%u,%u) reason=%s",
+        ESP_LOGI(TAG, "Mode: color=%s rgb=(%u,%u,%u) reason=%s",
                  led_color_name(red, green, blue),
                  red, green, blue, s_manual_reason);
     }

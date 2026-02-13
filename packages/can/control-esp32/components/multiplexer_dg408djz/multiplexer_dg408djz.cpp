@@ -19,7 +19,6 @@ static const char *TAG = "MULTIPLEXER";
 
 constexpr uint32_t ADDRESS_SETTLE_US = 10;      // Wait for address lines before enabling mux
 constexpr uint32_t RELAY_SETTLE_MS = 50;        // Relay contact bounce/settle time
-constexpr uint32_t THROTTLE_REGISTER_MS = 100;  // Time for Curtis controller to see low throttle
 
 // ============================================================================
 // Module State
@@ -29,6 +28,13 @@ static multiplexer_dg408djz_config_t s_config = {};
 static bool s_initialized = false;
 static int8_t s_current_level = -1;  // -1 = mux disabled, 0-7 = active channel
 static bool s_autonomous = false;    // true = relay energized (mux output to Curtis)
+
+static esp_err_t set_and_verify(gpio_num_t gpio, int level) {
+    esp_err_t err = gpio_set_level(gpio, level);
+    if (err != ESP_OK) return err;
+    if (gpio_get_level(gpio) != level) return ESP_ERR_INVALID_STATE;
+    return ESP_OK;
+}
 
 }  // namespace
 
@@ -52,10 +58,7 @@ esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config)
     };
 
     esp_err_t err = gpio_config(&io_conf);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "GPIO config failed: %s", esp_err_to_name(err));
-        return err;
-    }
+    if (err != ESP_OK) return err;
 
     // Safe state: mux disabled, relay de-energized (manual pedal control)
     gpio_set_level(config->a0, 0);
@@ -64,12 +67,18 @@ esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config)
     gpio_set_level(config->en, 0);
     gpio_set_level(config->relay, 0);
 
+    // Verify MCU-side output levels reached expected safe defaults.
+    if (gpio_get_level(config->a0) != 0 ||
+        gpio_get_level(config->a1) != 0 ||
+        gpio_get_level(config->a2) != 0 ||
+        gpio_get_level(config->en) != 0 ||
+        gpio_get_level(config->relay) != 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     s_current_level = -1;
     s_autonomous = false;
     s_initialized = true;
-
-    ESP_LOGI(TAG, "Initialized: A0=%d A1=%d A2=%d EN=%d RELAY=%d",
-             config->a0, config->a1, config->a2, config->en, config->relay);
 
     return ESP_OK;
 }
@@ -79,45 +88,53 @@ esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config)
 // ============================================================================
 
 // Set throttle level 0-7, or <0 to disable mux output
-void multiplexer_dg408djz_set_level(int8_t level) {
+esp_err_t multiplexer_dg408djz_set_level(int8_t level) {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Not initialized");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     if (level < 0 || level > 7) {
-        gpio_set_level(s_config.en, 0);
+        esp_err_t err = set_and_verify(s_config.en, 0);
+        if (err != ESP_OK) return err;
         s_current_level = -1;
-#ifdef CONFIG_LOG_MUX_LEVEL
+#ifdef CONFIG_LOG_ACTUATOR_MUX_LEVEL
         ESP_LOGI(TAG, "Disabled (level=%d)", level);
 #endif
-        return;
+        return ESP_OK;
     }
 
     // Set address lines BEFORE enabling - prevents glitching through wrong channel
-    gpio_set_level(s_config.a0, (level >> 0) & 1);
-    gpio_set_level(s_config.a1, (level >> 1) & 1);
-    gpio_set_level(s_config.a2, (level >> 2) & 1);
+    esp_err_t err = set_and_verify(s_config.a0, (level >> 0) & 1);
+    if (err != ESP_OK) return err;
+    err = set_and_verify(s_config.a1, (level >> 1) & 1);
+    if (err != ESP_OK) return err;
+    err = set_and_verify(s_config.a2, (level >> 2) & 1);
+    if (err != ESP_OK) return err;
 
     ets_delay_us(ADDRESS_SETTLE_US);
 
-    gpio_set_level(s_config.en, 1);
+    err = set_and_verify(s_config.en, 1);
+    if (err != ESP_OK) return err;
     s_current_level = level;
 
-#ifdef CONFIG_LOG_MUX_LEVEL
+#ifdef CONFIG_LOG_ACTUATOR_MUX_LEVEL
     ESP_LOGI(TAG, "Level set to %d (A2=%d A1=%d A0=%d)",
              level, (level >> 2) & 1, (level >> 1) & 1, (level >> 0) & 1);
 #endif
+    return ESP_OK;
 }
 
-void multiplexer_dg408djz_disable(void) {
-    if (!s_initialized) return;
+esp_err_t multiplexer_dg408djz_disable(void) {
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
 
-    gpio_set_level(s_config.en, 0);
+    esp_err_t err = set_and_verify(s_config.en, 0);
+    if (err != ESP_OK) return err;
     s_current_level = -1;
-#ifdef CONFIG_LOG_MUX_LEVEL
+#ifdef CONFIG_LOG_ACTUATOR_MUX_LEVEL
     ESP_LOGI(TAG, "Mux disabled");
 #endif
+    return ESP_OK;
 }
 
 int8_t multiplexer_dg408djz_get_level(void) {
@@ -131,72 +148,53 @@ int8_t multiplexer_dg408djz_get_level(void) {
 // Enable autonomous throttle control
 // Sequence: set level 0 -> energize relay -> wait for settle
 // After this, Curtis motor controller reads mux output instead of pedal pot
-void multiplexer_dg408djz_enable_autonomous(void) {
+esp_err_t multiplexer_dg408djz_enable_autonomous(void) {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Not initialized");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
-#ifdef CONFIG_LOG_MUX_LEVEL
+#ifdef CONFIG_LOG_ACTUATOR_MUX_LEVEL
     ESP_LOGI(TAG, "Enabling autonomous mode");
 #endif
 
     // Start at idle throttle to prevent surge when relay switches
-    multiplexer_dg408djz_set_level(0);
+    esp_err_t err = multiplexer_dg408djz_set_level(0);
+    if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
 
     // Energize DPDT relay - switches Curtis input from pedal to mux
-    gpio_set_level(s_config.relay, 1);
+    err = set_and_verify(s_config.relay, 1);
+    if (err != ESP_OK) return err;
     s_autonomous = true;
 
     // Wait for relay contacts to settle before allowing throttle changes
     vTaskDelay(pdMS_TO_TICKS(RELAY_SETTLE_MS));
 
-#ifdef CONFIG_LOG_MUX_LEVEL
+#ifdef CONFIG_LOG_ACTUATOR_MUX_LEVEL
     ESP_LOGI(TAG, "Autonomous mode ENABLED");
 #endif
-}
-
-// Gracefully disable autonomous mode
-// Sequence: ramp to 0 -> wait for Curtis -> de-energize relay -> disable mux
-void multiplexer_dg408djz_disable_autonomous(void) {
-    if (!s_initialized) return;
-
-#ifdef CONFIG_LOG_MUX_LEVEL
-    ESP_LOGI(TAG, "Disabling autonomous mode");
-#endif
-
-    // Ramp to idle before switching to prevent throttle discontinuity
-    multiplexer_dg408djz_set_level(0);
-    vTaskDelay(pdMS_TO_TICKS(THROTTLE_REGISTER_MS));
-
-    // Switch relay back to manual pedal
-    gpio_set_level(s_config.relay, 0);
-    s_autonomous = false;
-
-    vTaskDelay(pdMS_TO_TICKS(20));
-    multiplexer_dg408djz_disable();
-
-#ifdef CONFIG_LOG_MUX_LEVEL
-    ESP_LOGI(TAG, "Autonomous mode DISABLED (manual control active)");
-#endif
+    return ESP_OK;
 }
 
 // Immediate cutoff - no ramp down, used for override/fault conditions
-void multiplexer_dg408djz_emergency_stop(void) {
-    if (!s_initialized) return;
+esp_err_t multiplexer_dg408djz_emergency_stop(void) {
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
 
-#ifdef CONFIG_LOG_MUX_LEVEL
+#ifdef CONFIG_LOG_ACTUATOR_MUX_LEVEL
     ESP_LOGI(TAG, "EMERGENCY STOP");
 #endif
 
     // Immediately disable mux output
-    gpio_set_level(s_config.en, 0);
+    esp_err_t err = set_and_verify(s_config.en, 0);
+    if (err != ESP_OK) return err;
     s_current_level = -1;
 
     // De-energize relay - NC contacts restore manual pedal control
-    gpio_set_level(s_config.relay, 0);
+    err = set_and_verify(s_config.relay, 0);
+    if (err != ESP_OK) return err;
     s_autonomous = false;
+    return ESP_OK;
 }
 
 bool multiplexer_dg408djz_is_autonomous(void) {

@@ -18,6 +18,13 @@ static relay_jd2912_config_t s_config = {};
 static bool s_initialized = false;
 static bool s_energized = false;
 
+static esp_err_t set_and_verify_level(int level) {
+    esp_err_t err = gpio_set_level(s_config.gpio, level);
+    if (err != ESP_OK) return err;
+    if (gpio_get_level(s_config.gpio) != level) return ESP_ERR_INVALID_STATE;
+    return ESP_OK;
+}
+
 }  // namespace
 
 // ============================================================================
@@ -38,19 +45,16 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config) {
     };
 
     esp_err_t err = gpio_config(&io_conf);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "GPIO config failed: %s", esp_err_to_name(err));
-        return err;
-    }
+    if (err != ESP_OK) return err;
 
     // Start de-energized - pedal microswitch operates normally
     int level = config->active_high ? 0 : 1;
     gpio_set_level(config->gpio, level);
+    if (gpio_get_level(config->gpio) != level) {
+        return ESP_ERR_INVALID_STATE;
+    }
     s_energized = false;
     s_initialized = true;
-
-    ESP_LOGI(TAG, "Initialized on GPIO %d (active %s), starting DE-ENERGIZED",
-             config->gpio, config->active_high ? "HIGH" : "LOW");
 
     return ESP_OK;
 }
@@ -60,32 +64,36 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config) {
 // ============================================================================
 
 // Energize relay to bypass pedal microswitch (for autonomous mode)
-void relay_jd2912_energize(void) {
+esp_err_t relay_jd2912_energize(void) {
     if (!s_initialized) {
         ESP_LOGE(TAG, "Not initialized");
-        return;
+        return ESP_ERR_INVALID_STATE;
     }
 
     int level = s_config.active_high ? 1 : 0;
-    gpio_set_level(s_config.gpio, level);
+    esp_err_t err = set_and_verify_level(level);
+    if (err != ESP_OK) return err;
     s_energized = true;
 
-#ifdef CONFIG_LOG_PEDAL_RELAY
+#ifdef CONFIG_LOG_ACTUATOR_PEDAL_RELAY
     ESP_LOGI(TAG, "ENERGIZED (pedal bypass active)");
 #endif
+    return ESP_OK;
 }
 
 // De-energize relay to restore normal pedal operation
-void relay_jd2912_deenergize(void) {
-    if (!s_initialized) return;
+esp_err_t relay_jd2912_deenergize(void) {
+    if (!s_initialized) return ESP_ERR_INVALID_STATE;
 
     int level = s_config.active_high ? 0 : 1;
-    gpio_set_level(s_config.gpio, level);
+    esp_err_t err = set_and_verify_level(level);
+    if (err != ESP_OK) return err;
     s_energized = false;
 
-#ifdef CONFIG_LOG_PEDAL_RELAY
+#ifdef CONFIG_LOG_ACTUATOR_PEDAL_RELAY
     ESP_LOGI(TAG, "DE-ENERGIZED (normal pedal operation)");
 #endif
+    return ESP_OK;
 }
 
 bool relay_jd2912_is_energized(void) {

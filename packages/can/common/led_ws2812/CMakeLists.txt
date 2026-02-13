@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "heartbeat.cpp"
+    SRCS "led_ws2812.cpp"
     INCLUDE_DIRS "include"
     REQUIRES driver
 )

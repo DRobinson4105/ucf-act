@@ -1,279 +1,259 @@
 menu "Test Bypasses"
 
-    config BYPASS_SAFETY_TARGET_STATE
-        bool "Bypass Safety target state (force ACTIVE)"
-        default n
-        help
-            Ignore Safety target state and force target_state=ACTIVE.
-            Use when testing Control state progression without a
-            Safety ESP32 heartbeat.
+    menu "Safety Mirror"
 
-    config BYPASS_SAFETY_ESTOP_FAULT
-        bool "Bypass Safety e-stop fault code (force clear)"
-        default n
-        help
-            Ignore Safety e-stop fault code and force estop_fault_code=NONE
-            in Control task inputs/logging.
+        config BYPASS_SAFETY_TARGET_MIRROR
+            bool "Bypass Safety target mirror: force ACTIVE"
+            default n
+            help
+                Ignore Safety target state and force target_state=ACTIVE.
+                Use when testing Control state progression without a
+                Safety ESP32 heartbeat.
 
-    config BYPASS_FR_SENSOR
-        bool "Bypass F/R sensor (force Forward)"
-        default n
-        help
-            Force the F/R gear selector reading to FORWARD regardless
-            of the actual hardware state. Use when the F/R switch is
-            not connected during bench testing.
+        config BYPASS_SAFETY_ESTOP_MIRROR
+            bool "Bypass Safety e-stop mirror: force clear"
+            default n
+            help
+                Ignore Safety e-stop fault code and force estop_fault_code=NONE
+                in Control task inputs and logs.
 
-    config BYPASS_PLANNER_CMD_INPUTS
-        bool "Bypass Planner command inputs (force zero cmds)"
-        default n
-        help
-            Force Planner command inputs to zero throttle/steering/braking.
-            Does not disable timeout/staleness detection.
+    endmenu
 
-    config BYPASS_PLANNER_CMD_STALE_CHECK
-        bool "Bypass Planner command stale/timeout checks"
-        default n
-        help
-            Disable Planner command timeout and stale-sequence checks.
-            Useful when Planner command cadence is irregular in bench tests.
+    menu "Planner Inputs"
 
-    config BYPASS_STEPPER_MOTORS
-        bool "Bypass stepper motors (skip init/commands)"
-        default n
-        help
-            Skip UIM2852CA stepper motor initialization, configuration,
-            and all motor CAN commands. Prevents FAULT state and CAN TX
-            timeouts when motors are not connected during bench testing.
+        config BYPASS_PLANNER_COMMAND_INPUTS
+            bool "Bypass Planner command inputs: force zero"
+            default n
+            help
+                Force Planner command inputs to zero throttle/steering/braking.
+                This does not disable timeout or stale-sequence checks.
 
-    config BYPASS_PEDAL_OVERRIDE
-        bool "Bypass pedal override detection"
-        default n
-        help
-            Ignore the accelerator pedal ADC reading for override
-            detection. Pedal will always read as not pressed and
-            always re-armed. Use when the pedal voltage divider is
-            not connected or floating during bench testing.
+        config BYPASS_PLANNER_COMMAND_STALE_CHECKS
+            bool "Bypass Planner stale checks: disable timeout/stale"
+            default n
+            help
+                Disable Planner command timeout and stale-sequence checks.
+                Useful when Planner command cadence is irregular in bench tests.
 
-    config BYPASS_ENABLE_RELAY
-        bool "Bypass pedal bypass relay (skip energize/de-energize)"
-        default n
-        help
-            Skip JD-2912 pedal bypass relay control (via IRLZ44N MOSFET).
-            The relay will not be energized during enable sequence or
-            de-energized during override. Use when the relay circuit
-            is not connected during bench testing.
+    endmenu
 
-    config BYPASS_MULTIPLEXER
-        bool "Bypass multiplexer (skip DG408DJZ control)"
-        default n
-        help
-            Skip DG408DJZ analog multiplexer and throttle relay control.
-            No throttle level changes will be applied. Use when the
-            multiplexer circuit is not connected during bench testing.
+    menu "Driver Inputs"
+
+        config BYPASS_INPUT_PEDAL_ADC
+            bool "Bypass pedal ADC input: force released"
+            default n
+            help
+                Skip accelerator pedal ADC readings. Pedal is forced to
+                not pressed and always re-armed.
+
+        config BYPASS_INPUT_FR_SENSOR
+            bool "Bypass F/R sensor input: force FORWARD"
+            default n
+            help
+                Force F/R selector reading to FORWARD regardless of hardware state.
+                Use when F/R optocoupler channels are not connected.
+
+    endmenu
+
+    menu "Actuators"
+
+        config BYPASS_ACTUATOR_MULTIPLEXER
+            bool "Bypass multiplexer actuator"
+            default n
+            help
+                Skip analog multiplexer and throttle relay control.
+
+        config BYPASS_ACTUATOR_PEDAL_RELAY
+            bool "Bypass pedal relay actuator"
+            default n
+            help
+                Skip pedal bypass relay control.
+
+        config BYPASS_ACTUATOR_STEPPER_STEERING
+            bool "Bypass steering stepper actuator"
+            default n
+            help
+                Skip steering stepper motor (node 5) initialization,
+                configuration, and CAN commands.
+
+        config BYPASS_ACTUATOR_STEPPER_BRAKING
+            bool "Bypass braking stepper actuator"
+            default n
+            help
+                Skip braking stepper motor (node 6) initialization,
+                configuration, and CAN commands.
+
+    endmenu
 
 endmenu
 
 menu "Debug Logging"
 
-    menu "CAN Bus"
+    menu "CAN Traffic & Planner I/O"
 
-        config LOG_HEARTBEAT_TX
-            bool "Log periodic heartbeat TX"
+        config LOG_CAN_HEARTBEAT_TX
+            bool "Log CAN heartbeat TX: every frame"
             default n
             help
-                Log every periodic heartbeat transmission (100ms interval).
-                Very verbose. Useful for confirming CAN TX is working.
-                Heartbeat TX failures are always logged as errors.
+                Log every successful heartbeat TX frame and every per-tick
+                TX failure. Without this option, only the first failure and
+                first recovery are logged (edge-triggered).
 
-        config LOG_HEARTBEAT_RX
-            bool "Log every Safety heartbeat RX"
+        config LOG_CAN_HEARTBEAT_RX
+            bool "Log CAN heartbeat RX: every frame"
             default n
-            help
-                Log every received Safety heartbeat, not just state/fault
-                changes. Very verbose. Useful for confirming CAN RX is
-                working and checking sequence numbers.
 
-        config LOG_PLANNER_COMMANDS
-            bool "Log every Planner command RX"
+        config LOG_CAN_PLANNER_COMMAND_RX
+            bool "Log Planner command RX: every frame"
             default n
+
+    endmenu
+
+    menu "Component Health & Recovery"
+
+        config LOG_COMPONENT_HEALTH_TRANSITIONS
+            bool "Log component LOST/REGAINED transitions"
+            default y
             help
-                Log every received Planner command with throttle, steering,
-                and braking values. Also logs planner command timeout and
-                stale sequence warnings. Very verbose. Useful for confirming
-                Planner communication is working.
+                Log component health edge transitions when a component becomes
+                unavailable or recovers during runtime.
 
         config LOG_CAN_RECOVERY
-            bool "Log CAN bus recovery attempts"
+            bool "Log CAN recovery flow"
             default n
             help
-                Log CAN bus recovery events: stop/start cycles, full
-                driver reinstall, bus-off recovery, and TX failure
-                counts. Useful for diagnosing CAN bus issues.
+                Log CAN recovery events: stop/start cycles, full driver reinstall,
+                bus-off recovery, and TX failure counters.
+
+        config LOG_RETRY_TWAI
+            bool "Log TWAI retry attempts"
+            default n
+            help
+                Log each failed TWAI retry while TWAI is unavailable.
+
+        config LOG_RETRY_MULTIPLEXER
+            bool "Log multiplexer retry attempts"
+            default n
+            help
+                Log each failed multiplexer re-initialization attempt.
+
+        config LOG_RETRY_PEDAL_RELAY
+            bool "Log pedal relay retry attempts"
+            default n
+            help
+                Log each failed pedal-relay re-initialization attempt.
+
+        config LOG_RETRY_PEDAL_INPUT
+            bool "Log pedal input retry attempts"
+            default n
+            help
+                Log each failed pedal ADC input re-initialization attempt.
+
+        config LOG_RETRY_FR_INPUT
+            bool "Log F/R input retry attempts"
+            default n
+            help
+                Log each failed F/R optocoupler input re-initialization attempt.
+
+        config LOG_RETRY_STEPPER_STEERING
+            bool "Log steering stepper retry attempts"
+            default n
+            help
+                Log each failed steering-stepper health recovery attempt.
+
+        config LOG_RETRY_STEPPER_BRAKING
+            bool "Log braking stepper retry attempts"
+            default n
+            help
+                Log each failed braking-stepper health recovery attempt.
 
     endmenu
 
     menu "Control Logic"
 
-        config LOG_STATE_CHANGES
-            bool "Log control state changes and transition reasons"
-            default n
-            help
-                Log control-local transition events: state changes,
-                control fault changes, and transition reason strings.
+        config LOG_CONTROL_STATE_CHANGES
+            bool "Log control state changes"
+            default y
 
-        config LOG_SAFETY_MIRROR_CHANGES
+        config LOG_CONTROL_FAULT_CHANGES
+            bool "Log control fault code changes"
+            default n
+
+        config LOG_CONTROL_STATE_TICK
+            bool "Log control state evaluation: every cycle"
+            default n
+
+        config LOG_CONTROL_ENABLE_SEQUENCE
+            bool "Log control enable sequence events"
+            default n
+
+        config LOG_CONTROL_OVERRIDE
+            bool "Log control override events"
+            default n
+
+        config LOG_CONTROL_THROTTLE_CHANGES
+            bool "Log control throttle changes"
+            default n
+
+        config LOG_CONTROL_THROTTLE_TICK
+            bool "Log control throttle every cycle"
+            default n
+
+        config LOG_CONTROL_SAFETY_MIRROR_CHANGES
             bool "Log mirrored Safety target/fault changes"
             default n
-            help
-                Log Safety target_state and estop_fault transitions as
-                observed by Control from Safety heartbeat/commands.
-
-        config LOG_STATE_TICK
-            bool "Log control state evaluation each cycle"
-            default n
-            help
-                Log control state inputs/result every control loop iteration
-                (20ms). Very verbose. Use when debugging state machine logic.
-
-        config LOG_ENABLE_SEQUENCE
-            bool "Log enable/disable sequence steps"
-            default n
-            help
-                Log the autonomous enable sequence steps: start enable,
-                complete enable (stepper + mux activation), abort enable,
-                and autonomous mode active confirmation.
-
-        config LOG_RECOVERY
-            bool "Log fault recovery attempts"
-            default n
-            help
-                Log fault recovery attempts: component re-init, success/
-                failure, and recovery exhaustion. Useful for diagnosing
-                intermittent hardware faults.
-
-        config LOG_THROTTLE
-            bool "Log throttle level changes"
-            default n
-            help
-                Log when the throttle level changes (slew rate limited).
-                Useful for normal diagnostics.
-
-        config LOG_THROTTLE_TICK
-            bool "Log throttle current/target each cycle"
-            default n
-            help
-                Log throttle current and target values every control loop
-                iteration (20ms). Very verbose. Useful for tuning or
-                diagnosing throttle behavior.
-
-        config LOG_STEPPER_COMMANDS
-            bool "Log stepper motor position commands"
-            default n
-            help
-                Log every steering and braking stepper motor position
-                command sent over CAN. Verbose when active. Useful for
-                confirming motor communication.
-
-        config LOG_OVERRIDE
-            bool "Log driver override trigger events"
-            default n
-            help
-                Log when driver override is triggered by pedal press or
-                F/R change.
 
     endmenu
 
-    menu "LED (WS2812)"
+    menu "Inputs"
 
-        config LOG_LED_STATE_CHANGES
-            bool "Log LED color/reason state changes"
+        config LOG_INPUT_PEDAL_ADC
+            bool "Log pedal ADC every cycle"
             default n
-            help
-                Log when the LED color/reason mapping changes.
-                Useful for verifying state-driven LED behavior.
 
-        config LOG_LED_BLINKS
-            bool "Log every LED ON blink with color/reason"
+        config LOG_INPUT_FR_DEBOUNCE
+            bool "Log F/R debounce transitions"
             default n
-            help
-                Log each ON blink pulse with color and reason text.
-                Very verbose. Useful for timing/behavior validation.
 
-    endmenu
-
-    menu "Multiplexer (DG408DJZ)"
-
-        config LOG_MUX_LEVEL
-            bool "Log mux level changes (address lines)"
-            default n
-            help
-                Log every DG408DJZ mux level change with A2/A1/A0
-                address line values. Verbose when throttle is slewing.
-                Useful for verifying mux hardware operation.
-
-    endmenu
-
-    menu "Pedal Bypass Relay (JD-2912)"
-
-        config LOG_PEDAL_RELAY
-            bool "Log pedal bypass relay state changes"
-            default n
-            help
-                Log when the JD-2912 pedal bypass relay is energized
-                or de-energized. Enabled by default since relay
-                transitions are infrequent and safety-relevant.
-
-    endmenu
-
-    menu "Override Sensors"
-
-        config LOG_PEDAL_ADC
-            bool "Log pedal ADC readings"
-            default n
-            help
-                Log pedal ADC millivolt readings and re-arm events
-                every control cycle (20ms). Extremely verbose. Useful
-                for tuning the pedal threshold or verifying the
-                voltage divider.
-
-        config LOG_FR_DEBOUNCE
-            bool "Log F/R switch debounce transitions"
-            default n
-            help
-                Log F/R gear selector debounce state machine
-                transitions (start, reset, complete, cancel).
-                Useful for verifying optocoupler wiring and
-                debounce timing.
-
-        config LOG_FR_STATE
+        config LOG_INPUT_FR_STATE
             bool "Log F/R state changes"
             default n
-            help
-                Log when the F/R gear selector state changes
-                (Forward, Reverse, Neutral, Invalid). Enabled
-                by default since F/R transitions are infrequent
-                and operationally relevant.
 
     endmenu
 
-    menu "Stepper Motor (UIM2852)"
+    menu "Actuators"
 
-        config LOG_STEPPER_MOTION
-            bool "Log stepper motion commands (PA/PR/ST)"
+        config LOG_ACTUATOR_MUX_LEVEL
+            bool "Log multiplexer level changes"
             default n
-            help
-                Log every stepper motor motion command (absolute,
-                relative, stop) with target position. Verbose when
-                active. Useful for verifying motor command delivery.
 
-        config LOG_STEPPER_RX
-            bool "Log stepper CAN RX frame details"
+        config LOG_ACTUATOR_PEDAL_RELAY
+            bool "Log pedal relay state changes"
             default n
-            help
-                Log parsed stepper motor CAN responses including
-                status (MS[0]), position/speed (MS[1]), parameter
-                responses, and ACKs. Verbose. Useful for debugging
-                motor communication issues.
+
+        config LOG_ACTUATOR_STEPPER_COMMAND_TX
+            bool "Log stepper position command TX"
+            default n
+
+        config LOG_ACTUATOR_STEPPER_MOTION_TX
+            bool "Log stepper motion command TX"
+            default n
+
+        config LOG_ACTUATOR_STEPPER_RX
+            bool "Log parsed stepper RX frames"
+            default n
+
+    endmenu
+
+    menu "HEARTBEAT_LED"
+
+        config LOG_HEARTBEAT_LED_STATE_CHANGES
+            bool "Log HEARTBEAT_LED color/reason changes"
+            default n
+
+        config LOG_HEARTBEAT_LED_BLINK_PULSES
+            bool "Log HEARTBEAT_LED ON pulses"
+            default n
 
     endmenu
 

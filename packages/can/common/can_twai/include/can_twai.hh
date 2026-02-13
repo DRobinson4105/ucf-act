@@ -67,6 +67,12 @@ bool can_twai_bus_ok(void);
 // Returns ESP_OK on successful recovery.
 esp_err_t can_twai_recover_bus_off(void);
 
+// Attempt full communication recovery.
+// Tries TWAI stop/start first, then escalates to full driver reinstall.
+// Returns ESP_OK when communication is restored.
+// log_tag identifies the caller device in optional recovery logs.
+esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag);
+
 #ifdef __cplusplus
 }
 #endif

@@ -14,7 +14,8 @@ SAFETY_SRC  = ../common/safety_logic/safety_logic.c
 CONTROL_SRC = ../common/control_logic/control_logic.c
 SYSTEM_STATE_SRC = ../common/system_state/system_state.c
 HEARTBEAT_MON_SRC = ../common/heartbeat_monitor/heartbeat_monitor.cpp
-OVERRIDE_SENSORS_SRC = ../control-esp32/components/override_sensors/override_sensors.cpp
+ADC_12BITSAR_SRC = ../control-esp32/components/adc_12bitsar/adc_12bitsar.cpp
+OPTOCOUPLER_PC817_SRC = ../control-esp32/components/optocoupler_pc817/optocoupler_pc817.cpp
 
 # Mock include path must come FIRST so esp_log.h, can_twai.hh, etc. resolve to mocks
 MOCK_INCLUDES = -Imocks \
@@ -22,9 +23,9 @@ MOCK_INCLUDES = -Imocks \
 
 # Motor component has an unused TAG variable when logging is mocked out
 MOTOR_CFLAGS = $(CFLAGS) -Wno-unused-variable
-OVERRIDE_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
+DRIVER_INPUTS_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 
-all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_override_sensors
+all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs
 	@set -eu; \
 	tmp_summary=$$(mktemp); \
 	tmp_out=$$(mktemp); \
@@ -69,7 +70,7 @@ all: test_stepper_protocol test_can_protocol test_motor_component test_safety_lo
 	run_suite "control_logic" ./test_control_logic; \
 	run_suite "system_state" ./test_system_state; \
 	run_suite "heartbeat_monitor" ./test_heartbeat_monitor; \
-	run_suite "override_sensors" ./test_override_sensors; \
+	run_suite "driver_inputs" ./test_driver_inputs; \
 	if [ $$total_pass -ne $$total_tests ]; then \
 		overall_fail=1; \
 	fi; \
@@ -95,33 +96,33 @@ all: test_stepper_protocol test_can_protocol test_motor_component test_safety_lo
 	fi
 
 test_stepper_protocol: test_stepper_protocol.c $(STEPPER_SRC)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+	@$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
 test_can_protocol: test_can_protocol.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+	@$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
 
 test_motor_component: test_motor_component.c $(STEPPER_SRC) $(MOTOR_SRC) $(MOCK_SRC)
-	$(CC) $(MOTOR_CFLAGS) $(MOCK_INCLUDES) $(INCLUDES) -o $@ $^
+	@$(CC) $(MOTOR_CFLAGS) $(MOCK_INCLUDES) $(INCLUDES) -o $@ $^
 
 test_safety_logic: test_safety_logic.c $(SAFETY_SRC)
-	$(CC) $(CFLAGS) -I../common/safety_logic/include $(INCLUDES) -o $@ $^
+	@$(CC) $(CFLAGS) -I../common/safety_logic/include $(INCLUDES) -o $@ $^
 
 test_control_logic: test_control_logic.c $(CONTROL_SRC)
-	$(CC) $(CFLAGS) -I../common/control_logic/include $(INCLUDES) -o $@ $^
+	@$(CC) $(CFLAGS) -I../common/control_logic/include $(INCLUDES) -o $@ $^
 
 test_system_state: test_system_state.c $(SYSTEM_STATE_SRC)
-	$(CC) $(CFLAGS) -I../common/system_state/include $(INCLUDES) -o $@ $^
+	@$(CC) $(CFLAGS) -I../common/system_state/include $(INCLUDES) -o $@ $^
 
 esp_idf_mock.o: mocks/esp_idf_mock.c
-	$(CC) $(CFLAGS) -Imocks -c $< -o $@
+	@$(CC) $(CFLAGS) -Imocks -c $< -o $@
 
 test_heartbeat_monitor: test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
-	$(CXX) $(CXXFLAGS) -Imocks -I../common/heartbeat_monitor/include -o $@ test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
+	@$(CXX) $(CXXFLAGS) -Imocks -I../common/heartbeat_monitor/include -o $@ test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
 
-test_override_sensors: test_override_sensors.cpp $(OVERRIDE_SENSORS_SRC) esp_idf_mock.o
-	$(CXX) $(OVERRIDE_CXXFLAGS) -Imocks -I../control-esp32/components/override_sensors/include -I../common/can_protocol/include -o $@ test_override_sensors.cpp $(OVERRIDE_SENSORS_SRC) esp_idf_mock.o
+test_driver_inputs: test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
+	@$(CXX) $(DRIVER_INPUTS_CXXFLAGS) -Imocks -I../control-esp32/components/adc_12bitsar/include -I../control-esp32/components/optocoupler_pc817/include -I../common/can_protocol/include -o $@ test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
 
 clean:
-	rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_override_sensors esp_idf_mock.o
+	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs esp_idf_mock.o
 
 .PHONY: all clean

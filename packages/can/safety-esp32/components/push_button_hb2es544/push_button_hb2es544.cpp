@@ -8,7 +8,7 @@
 
 namespace {
 
-static const char *TAG = "PUSH_BUTTON";
+[[maybe_unused]] static const char *TAG = "PUSH_BUTTON";
 
 }  // namespace
 
@@ -30,8 +30,6 @@ esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config)
     esp_err_t err = gpio_config(&io_conf);
     if (err != ESP_OK) return err;
 
-    ESP_LOGI(TAG, "Initialized on GPIO %d (active %s)",
-             config->gpio, config->active_level ? "HIGH" : "LOW");
     return ESP_OK;
 }
 
@@ -44,7 +42,7 @@ bool push_button_hb2es544_read_active(const push_button_hb2es544_config_t *confi
     if (!config) return true;  // fail-safe: treat as active (e-stop triggered)
     bool active = gpio_get_level(config->gpio) == config->active_level;
 
-#ifdef CONFIG_LOG_PUSH_BUTTON
+#ifdef CONFIG_LOG_INPUT_PUSH_BUTTON
     static bool s_prev = false;
     static bool s_first = true;
     if (active != s_prev || s_first) {

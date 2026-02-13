@@ -3,6 +3,7 @@
  * @brief CAN bus TWAI driver wrapper implementation.
  */
 #include "can_twai.hh"
+#include "esp_log.h"
 
 // ============================================================================
 // Initialization
@@ -94,4 +95,45 @@ esp_err_t can_twai_recover_bus_off(void) {
     }
     // Timeout — try starting anyway
     return twai_start();
+}
+
+esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    const char *tag = (log_tag && log_tag[0] != '\0') ? log_tag : "CAN_TWAI";
+#else
+    (void)log_tag;
+#endif
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    ESP_LOGI(tag, "CAN recovery: attempting TWAI stop/start");
+#endif
+    twai_stop();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    esp_err_t err = twai_start();
+    if (err == ESP_OK) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
+        ESP_LOGI(tag, "CAN recovery: stop/start succeeded");
+#endif
+        return ESP_OK;
+    }
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    ESP_LOGI(tag, "CAN recovery: stop/start failed (%s), reinstalling TWAI driver",
+             esp_err_to_name(err));
+#endif
+
+    twai_driver_uninstall();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    err = can_twai_init_default(tx_gpio, rx_gpio);
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    if (err == ESP_OK) {
+        ESP_LOGI(tag, "CAN recovery: driver reinstall succeeded");
+    } else {
+        ESP_LOGI(tag, "CAN recovery: driver reinstall failed (%s)", esp_err_to_name(err));
+    }
+#endif
+
+    return err;
 }

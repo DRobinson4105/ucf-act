@@ -1,209 +1,187 @@
 menu "Test Bypasses"
 
-    config BYPASS_PLANNER_LIVENESS
-        bool "Bypass Planner liveness/fault checks"
-        default n
-        help
-            Ignore Planner heartbeat timeout and Planner FAULT state when
-            evaluating e-stop conditions. This only affects liveness/fault
-            checks and does not simulate Planner node state transitions.
+    menu "Planner/Control Mirrors"
 
-    config BYPASS_PLANNER_STATE
-        bool "Bypass Planner state (mirror Safety target + complete)"
-        default n
-        help
-            Simulate a cooperative Planner state machine by mirroring
-            Safety target state and forcing Planner enable_complete.
-            This bypass does not affect Planner liveness checks.
+        config BYPASS_PLANNER_AUTONOMY_GATE
+            bool "Bypass Planner autonomy gate: force request=true"
+            default n
+            help
+                Force Planner autonomy request true so Safety can advance
+                READY -> ENABLING without an Orin request.
 
-    config BYPASS_CONTROL_LIVENESS
-        bool "Bypass Control liveness/fault checks"
-        default n
-        help
-            Ignore Control heartbeat timeout and Control FAULT state when
-            evaluating e-stop conditions. This only affects liveness/fault
-            checks and does not simulate Control node state transitions.
+        config BYPASS_PLANNER_LIVENESS_CHECKS
+            bool "Bypass Planner liveness checks"
+            default n
+            help
+                Ignore Planner heartbeat timeout and Planner FAULT state.
 
-    config BYPASS_CONTROL_STATE
-        bool "Bypass Control state (mirror Safety target + complete)"
-        default n
-        help
-            Simulate a cooperative Control state machine by mirroring
-            Safety target state and forcing Control enable_complete.
-            This bypass does not affect Control liveness checks.
+        config BYPASS_PLANNER_STATE_MIRROR
+            bool "Bypass Planner state mirror"
+            default n
+            help
+                Simulate cooperative Planner behavior by mirroring Safety target
+                state and forcing Planner enable_complete.
 
-    config BYPASS_AUTONOMY_REQUEST
-        bool "Bypass autonomy request gate (simulate Orin enable request)"
-        default n
-        help
-            Force Planner autonomy request to true so Safety can advance
-            from READY -> ENABLING without an Orin request message.
-            Intended for bench testing when Orin is not connected.
-            This bypass disables one-shot request re-arm behavior.
+        config BYPASS_CONTROL_LIVENESS_CHECKS
+            bool "Bypass Control liveness checks"
+            default n
+            help
+                Ignore Control heartbeat timeout and Control FAULT state.
 
-    config BYPASS_PUSH_BUTTON
-        bool "Bypass push button e-stop (HB2-ES544)"
-        default n
-        help
-            Force the push button e-stop to always read as inactive
-            (not pressed). Use when the HB2-ES544 is not connected
-            during bench testing.
+        config BYPASS_CONTROL_STATE_MIRROR
+            bool "Bypass Control state mirror"
+            default n
+            help
+                Simulate cooperative Control behavior by mirroring Safety target
+                state and forcing Control enable_complete.
 
-    config BYPASS_RF_REMOTE
-        bool "Bypass RF remote e-stop (EV1527)"
-        default n
-        help
-            Force the RF remote e-stop to always read as inactive
-            (not engaged). Use when the EV1527 RF remote receiver
-            is not connected during bench testing.
+    endmenu
 
-    config BYPASS_ULTRASONIC
-        bool "Bypass ultrasonic sensor (A02YYUW)"
-        default n
-        help
-            Force the ultrasonic sensor to always read as clear
-            (no obstacle) and healthy. Use when the A02YYUW sensor
-            is not connected during bench testing. Without this
-            bypass, a disconnected sensor triggers estop_ultrasonic
-            due to the fail-safe health check.
+    menu "Physical Inputs"
+
+        config BYPASS_INPUT_PUSH_BUTTON
+            bool "Bypass push button input: force inactive"
+            default n
+
+        config BYPASS_INPUT_RF_REMOTE
+            bool "Bypass RF remote input: force inactive"
+            default n
+
+        config BYPASS_INPUT_ULTRASONIC
+            bool "Bypass ultrasonic input: force clear and healthy"
+            default n
+
+    endmenu
 
 endmenu
 
 menu "Debug Logging"
 
-    menu "CAN Bus"
+    menu "CAN Traffic"
 
-        config LOG_HEARTBEAT_TX
-            bool "Log periodic heartbeat TX"
+        config LOG_CAN_HEARTBEAT_TX
+            bool "Log CAN heartbeat TX: every frame"
             default n
             help
-                Log every periodic heartbeat transmission (100ms interval).
-                Very verbose. Useful for confirming CAN TX is working.
-                Heartbeat TX failures are always logged as errors.
+                Log every successful heartbeat TX frame and every per-tick
+                TX failure. Without this option, only the first failure and
+                first recovery are logged (edge-triggered).
 
-        config LOG_HEARTBEAT_RX
-            bool "Log every heartbeat RX"
+        config LOG_CAN_HEARTBEAT_RX
+            bool "Log CAN heartbeat RX: every frame"
             default n
+
+        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
+            bool "Log heartbeat monitor node transitions"
+            default y
             help
-                Log every received Planner and Control heartbeat, not just
-                state changes. Very verbose. Useful for confirming CAN RX
-                is working and checking sequence numbers.
+                Log when a monitored CAN heartbeat node is lost (timed out)
+                or regained (first heartbeat after timeout).
+
+    endmenu
+
+    menu "Component Health & Recovery"
+
+        config LOG_COMPONENT_HEALTH_TRANSITIONS
+            bool "Log component LOST/REGAINED transitions"
+            default y
+            help
+                Log component health edge transitions when a component becomes
+                unavailable or recovers during runtime.
 
         config LOG_CAN_RECOVERY
-            bool "Log CAN bus recovery attempts"
+            bool "Log CAN recovery flow"
+            default n
+
+        config LOG_RETRY_TWAI
+            bool "Log TWAI retry attempts"
             default n
             help
-                Log CAN bus recovery events: stop/start cycles, full
-                driver reinstall, bus-off recovery, and TX failure
-                counts. Useful for diagnosing CAN bus issues.
+                Log each failed TWAI retry while TWAI is unavailable.
+
+        config LOG_RETRY_PUSH_BUTTON
+            bool "Log push-button retry attempts"
+            default n
+            help
+                Log each failed push-button re-initialization attempt.
+
+        config LOG_RETRY_RF_REMOTE
+            bool "Log RF-remote retry attempts"
+            default n
+            help
+                Log each failed RF-remote re-initialization attempt.
+
+        config LOG_RETRY_ULTRASONIC
+            bool "Log ultrasonic retry attempts"
+            default n
+            help
+                Log each failed ultrasonic re-initialization attempt.
+
+        config LOG_RETRY_POWER_RELAY
+            bool "Log power-relay retry attempts"
+            default n
+            help
+                Log each failed power-relay re-initialization attempt.
 
     endmenu
 
     menu "Safety Logic"
 
-        config LOG_ESTOP_INPUTS
-            bool "Log e-stop input readings each cycle"
+        config LOG_SAFETY_ESTOP_INPUTS
+            bool "Log Safety e-stop inputs: every cycle"
             default n
-            help
-                Log all e-stop input readings (button, remote, ultrasonic,
-                planner, control) every safety loop iteration (50ms).
-                Extremely verbose. Useful for debugging sensor wiring.
 
-        config LOG_STATE_CHANGES
-            bool "Log system target state changes and transition reasons"
-            default n
-            help
-                Log only target state transitions and autonomy-request gate
-                events (waiting, latched, consumed, re-armed).
+        config LOG_SAFETY_STATE_CHANGES
+            bool "Log Safety state changes"
+            default y
 
-        config LOG_STATE_TICK
-            bool "Log state machine evaluation each cycle"
+        config LOG_SAFETY_STATE_TICK
+            bool "Log Safety state evaluation: every cycle"
             default n
-            help
-                Log state machine inputs/result every safety loop iteration
-                (50ms). Very verbose. Use for deep state-machine debugging.
 
     endmenu
 
-    menu "LED (WS2812)"
+    menu "Inputs"
 
-        config LOG_LED_STATE_CHANGES
-            bool "Log LED color/reason state changes"
+        config LOG_INPUT_PUSH_BUTTON
+            bool "Log push-button input state changes"
             default n
-            help
-                Log when the LED color/reason mapping changes.
-                Useful for verifying state-driven LED behavior.
 
-        config LOG_LED_BLINKS
-            bool "Log every LED ON blink with color/reason"
+        config LOG_INPUT_RF_REMOTE
+            bool "Log RF remote input state changes"
             default n
-            help
-                Log each ON blink pulse with color and reason text.
-                Very verbose. Useful for timing/behavior validation.
+
+        config LOG_INPUT_ULTRASONIC_DISTANCE
+            bool "Log ultrasonic parsed distance"
+            default n
+
+        config LOG_INPUT_ULTRASONIC_RX
+            bool "Log ultrasonic raw UART RX"
+            default n
+
+        config LOG_INPUT_ULTRASONIC_PARSE_ERRORS
+            bool "Log ultrasonic parse errors"
+            default n
 
     endmenu
 
-    menu "Push Button (HB2-ES544)"
+    menu "Actuators"
 
-        config LOG_PUSH_BUTTON
-            bool "Log push button state changes"
-            default n
-            help
-                Log when the push button e-stop changes state
-                (pressed/released). Useful for verifying wiring
-                and switch operation.
-
-    endmenu
-
-    menu "RF Remote (EV1527)"
-
-        config LOG_RF_REMOTE
-            bool "Log RF remote state changes"
-            default n
-            help
-                Log when the RF remote e-stop changes state
-                (engaged/disengaged). Useful for verifying
-                receiver wiring and remote operation.
-
-    endmenu
-
-    menu "Power Relay (SRD-05VDC)"
-
-        config LOG_RELAY_STATE
+        config LOG_ACTUATOR_POWER_RELAY_STATE
             bool "Log power relay state changes"
             default n
-            help
-                Log when the power relay is enabled or disabled.
-                Enabled by default since relay transitions are
-                infrequent and safety-relevant.
 
     endmenu
 
-    menu "Ultrasonic Sensor (A02YYUW)"
+    menu "HEARTBEAT_LED"
 
-        config LOG_ULTRASONIC_DISTANCE
-            bool "Log parsed distance readings"
+        config LOG_HEARTBEAT_LED_STATE_CHANGES
+            bool "Log HEARTBEAT_LED color/reason changes"
             default n
-            help
-                Log every valid distance reading from the A02YYUW sensor.
-                Verbose (~5-10 logs/sec). Useful for verifying sensor
-                operation and checking distance values.
 
-        config LOG_ULTRASONIC_RX
-            bool "Log raw UART RX bytes"
+        config LOG_HEARTBEAT_LED_BLINK_PULSES
+            bool "Log HEARTBEAT_LED ON pulses"
             default n
-            help
-                Log raw hex bytes received from the A02YYUW UART.
-                Extremely verbose (~10 logs/sec). Useful for debugging
-                wiring or protocol issues at the byte level.
-
-        config LOG_ULTRASONIC_PARSE_ERRORS
-            bool "Log parse failures"
-            default n
-            help
-                Log when received UART bytes fail to parse as valid
-                A02YYUW frames (bad checksum, missing header). Useful
-                for diagnosing noisy or intermittent connections.
 
     endmenu
 

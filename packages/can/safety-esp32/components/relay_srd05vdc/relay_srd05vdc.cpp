@@ -8,7 +8,7 @@
 
 namespace {
 
-static const char *TAG = "RELAY";
+[[maybe_unused]] static const char *TAG = "RELAY";
 
 // ============================================================================
 // Module State
@@ -40,8 +40,6 @@ esp_err_t relay_srd05vdc_init(const relay_srd05vdc_config_t *config) {
     err = relay_srd05vdc_disable(config);
     if (err != ESP_OK) return err;
 
-    ESP_LOGI(TAG, "Relay init on GPIO %d (active %s)",
-             config->gpio, config->active_high ? "HIGH" : "LOW");
     return ESP_OK;
 }
 
@@ -56,7 +54,7 @@ esp_err_t relay_srd05vdc_enable(const relay_srd05vdc_config_t *config) {
     int level = config->active_high ? 1 : 0;
     esp_err_t err = gpio_set_level(config->gpio, level);
     if (err == ESP_OK) {
-#ifdef CONFIG_LOG_RELAY_STATE
+#ifdef CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE
         if (!s_enabled) ESP_LOGI(TAG, "Power relay ENABLED");
 #endif
         s_enabled = true;
@@ -71,7 +69,7 @@ esp_err_t relay_srd05vdc_disable(const relay_srd05vdc_config_t *config) {
     int level = config->active_high ? 0 : 1;
     esp_err_t err = gpio_set_level(config->gpio, level);
     if (err == ESP_OK) {
-#ifdef CONFIG_LOG_RELAY_STATE
+#ifdef CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE
         if (s_enabled) ESP_LOGI(TAG, "Power relay DISABLED");
 #endif
         s_enabled = false;

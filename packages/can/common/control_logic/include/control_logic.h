@@ -104,6 +104,10 @@ typedef struct {
     bool pedal_rearmed;
     bool fr_is_invalid;                 // true if FR reads as INVALID
 
+    // Stepper position error (computed by caller from motor feedback)
+    bool steering_position_error;       // true if steering position diverged beyond threshold
+    bool braking_position_error;        // true if braking position diverged beyond threshold
+
     // Timing
     uint32_t now_ms;
     uint32_t enable_start_ms;           // when enable sequence began
@@ -156,11 +160,14 @@ typedef struct {
  * Pure function: reads current state + inputs, produces next state + action list.
  * The caller executes the hardware side effects indicated by the actions bitmask.
  *
- * Control reacts to Safety's target_state:
- *   - target_state >= ENABLING && preconditions met -> begin ENABLING
- *   - enable work done -> set enable_complete flag, stay ENABLING
- *   - target_state == ACTIVE -> transition to ACTIVE
- *   - target_state < current -> retreat (override/disable)
+ * Control reacts to Safety's target_state (READY/ENABLING/ACTIVE).
+ * Any other target value is treated as READY for a safe retreat.
+ *
+ * Live-state behavior:
+ *   - INIT -> READY -> ENABLING -> ACTIVE
+ *   - ACTIVE -> OVERRIDE -> READY
+ *   - Any live state can enter FAULT
+ *   - FAULT returns to READY when faults clear (handled by caller health checks)
  *
  * @param current_state  Current NODE_STATE_* value
  * @param current_fault  Current fault code

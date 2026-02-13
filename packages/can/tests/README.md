@@ -1,15 +1,17 @@
 # Unit Tests
 
-Host-native unit tests for the CAN bus protocol libraries. These compile and run with plain `gcc` on any dev machine — no ESP-IDF, FreeRTOS, or embedded toolchain required.
+Host-native unit tests for the CAN bus shared protocol, logic, and component libraries. These compile and run on any dev machine — no ESP-IDF, FreeRTOS, or embedded toolchain required.
 
 The tests cover:
 - Pure protocol logic (`common/stepper_protocol_uim2852`, `common/can_protocol`)
 - Motor driver component (`control-esp32/components/stepper_motor_uim2852`) via mocked ESP-IDF APIs
+- Driver input hardware components (`control-esp32/components/adc_12bitsar`, `control-esp32/components/optocoupler_pc817`)
 - Extracted decision logic (`common/safety_logic`, `common/control_logic`, `common/system_state`) — pure functions with no hardware deps
 
 ## Prerequisites
 
 - `gcc` (any recent version)
+- `g++` with C++17 support (for C++ test suites)
 - `make`
 
 ## How to Run
@@ -27,7 +29,7 @@ make
 
 | Command | Description |
 |---------|-------------|
-| `make` | Compile and run all 258 tests |
+| `make` | Compile and run all test suites |
 | `make test_stepper_protocol` | Compile only the stepper protocol test binary |
 | `make test_can_protocol` | Compile only the CAN protocol test binary |
 | `make test_motor_component` | Compile only the motor component test binary |
@@ -35,7 +37,7 @@ make
 | `make test_control_logic` | Compile only the control logic test binary |
 | `make test_system_state` | Compile only the system state test binary |
 | `make test_heartbeat_monitor` | Compile only the heartbeat monitor test binary |
-| `make test_override_sensors` | Compile only the override sensors test binary |
+| `make test_driver_inputs` | Compile only the driver inputs test binary |
 | `make clean` | Delete compiled binaries |
 
 To run a single suite after building:
@@ -115,7 +117,7 @@ Tests the pure `safety_logic` module (e-stop bitmask evaluation, ultrasonic fail
 | NULL safety | 1 | NULL input returns safe defaults (relay off) |
 | Combined scenarios | 3 | Multiple simultaneous faults (all bits preserved), estop on/off transition, ultrasonic fault alone blocks |
 
-### `test_control_logic.c` — 59 tests
+### `test_control_logic.c` — 65 tests
 
 Tests the pure `control_logic` module (state machine, throttle slew, preconditions, CAN TX tracking).
 
@@ -127,19 +129,19 @@ Tests the pure `control_logic` module (state machine, throttle slew, preconditio
 | READY -> ENABLING | 4 | Preconditions met, blocked by pedal/auto/FR |
 | ENABLING -> ACTIVE | 4 | Timer expired, timer not expired, exact boundary, enable_complete stays in ENABLING |
 | ENABLING -> READY abort | 4 | Auto blocked, pedal pressed, FR wrong, abort priority (auto checked first) |
-| ACTIVE override | 4 | Pedal override, FR changed, auto blocked, priority (pedal > FR > auto) |
+| ACTIVE override | 4 | Pedal override, FR changed, safety retreat disable, priority (safety retreat > pedal > FR) |
 | ACTIVE throttle + steering | 4 | Slew triggers APPLY_THROTTLE, at target, steering/braking dedup |
 | OVERRIDE -> READY | 4 | Conditions met, stays (no auto/pedal not rearmed), resets dedup trackers |
 | FAULT -> recovery | 3 | Signals ATTEMPT_RECOVERY, resets trackers, preserves fault code |
-| Motor fault injection | 2 | From ACTIVE (triggers override), from READY (no override) |
-| FR INVALID sensor fault | 2 | From ACTIVE (override + fault), already faulted (no double-fault) |
+| Motor fault injection | 2 | From ACTIVE (disables autonomy + FAULT), from READY (FAULT only) |
+| FR INVALID sensor fault | 2 | From ACTIVE (disables autonomy + fault), already faulted (no double-fault) |
 | Motor/FR fault from ENABLING | 2 | Motor fault during ENABLING aborts, FR_INVALID during ENABLING aborts |
 | CAN TX tracking | 3 | OK resets count, fail below threshold, fail at threshold triggers recovery |
 | NULL safety | 1 | NULL inputs returns safe defaults |
 | Timer overflow | 2 | Slew timer and enable timer handle uint32 wrap correctly |
 | Full lifecycle | 1 | Walks READY -> ENABLING -> ACTIVE -> OVERRIDE -> READY |
 
-### `test_system_state.c` — 24 tests
+### `test_system_state.c` — 26 tests
 
 ### `test_heartbeat_monitor.cpp` — 6 tests
 
@@ -152,15 +154,17 @@ Tests the `heartbeat_monitor` component (name handling, timeout transitions, and
 | Timeout/liveness | 1 | Alive -> timeout -> alive transition and timeout mask bit behavior |
 | Capacity limits | 1 | Registration failure when max nodes reached |
 
-### `test_override_sensors.cpp` — 4 tests
+### `test_driver_inputs.cpp` — 6 tests
 
-Tests the `override_sensors` component (pedal re-arm seeding, release timing, and F/R debounce).
+Tests the split hardware input components used by Control: `adc_12bitsar` and
+`optocoupler_pc817`.
 
 | Category | Tests | What it covers |
 |----------|-------|----------------|
-| Pedal initialization/re-arm | 2 | Initial above-threshold latch, 500ms release window before re-arm |
-| F/R debounce | 1 | Debounced transition requires stable `FR_DEBOUNCE_MS` interval |
-| Init failure path | 1 | ADC setup failure propagates init failure |
+| Pedal ADC | 3 | Raw conversion path, calibration path, ADC init failure handling |
+| F/R debounce | 1 | Debounced transition requires stable `FR_PC817_DEBOUNCE_MS` interval |
+| F/R raw mapping | 1 | PC817 active-low mapping for Forward/Reverse/Neutral/Invalid |
+| F/R init failure | 1 | GPIO setup failure propagates init failure |
 
 Tests the pure `system_state` module (Safety's target state advancement logic).
 
@@ -172,6 +176,7 @@ Tests the pure `system_state` module (Safety's target state advancement logic).
 | ENABLING -> ACTIVE | 1 | Both nodes ENABLING with enable_complete flag |
 | ENABLING stays | 2 | One node complete, no nodes complete |
 | ACTIVE stays | 1 | Normal operation |
+| Autonomy halt retreat | 2 | ENABLING/ACTIVE retreat to READY when Planner drops autonomy hold request |
 | E-stop retreat | 3 | From READY, ENABLING, ACTIVE — all retreat to READY |
 | Fault retreat | 2 | Planner fault, Control fault from ACTIVE |
 | Override retreat | 2 | Planner override from ACTIVE, Control override from ENABLING |

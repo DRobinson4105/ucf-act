@@ -59,6 +59,7 @@ typedef struct stepper_motor_uim2852 {
     // Speed and position from last MS[1] query
     int32_t current_speed;      // pulses/sec
     int32_t absolute_position;  // pulses
+    int32_t target_position;    // last commanded absolute position (from go_absolute)
     
     // Tracking
     TickType_t last_response_tick;
@@ -248,6 +249,22 @@ static inline int32_t stepper_motor_uim2852_get_position(const stepper_motor_uim
  */
 static inline int32_t stepper_motor_uim2852_get_speed(const stepper_motor_uim2852_t *motor) {
     return motor->current_speed;
+}
+
+/**
+ * @brief Get last commanded target position (from go_absolute)
+ */
+static inline int32_t stepper_motor_uim2852_get_target_position(const stepper_motor_uim2852_t *motor) {
+    return motor->target_position;
+}
+
+/**
+ * @brief Compute absolute position error (|target - actual|)
+ * @return Position error in pulses (always >= 0)
+ */
+static inline int32_t stepper_motor_uim2852_position_error(const stepper_motor_uim2852_t *motor) {
+    int32_t err = motor->target_position - motor->absolute_position;
+    return (err < 0) ? -err : err;
 }
 
 // ============================================================================

@@ -19,7 +19,7 @@ void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_co
     if (!mon) return;
 
     if (config && config->name && config->name[0] != '\0')
-        snprintf(mon->tag, sizeof(mon->tag), "%s_HB", config->name);
+        snprintf(mon->tag, sizeof(mon->tag), "%s", config->name);
     else
         snprintf(mon->tag, sizeof(mon->tag), "HEARTBEAT");
 
@@ -27,7 +27,6 @@ void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_co
     mon->node_count = 0;
     portMUX_INITIALIZE(&mon->lock);
 
-    ESP_LOGI(mon->tag, "Heartbeat monitor initialized");
 }
 
 // ============================================================================
@@ -57,7 +56,6 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon,
     mon->nodes[node_id].alive = false;  // Not alive until first heartbeat received
     taskEXIT_CRITICAL(&mon->lock);
 
-    ESP_LOGI(mon->tag, "Registered %s (timeout %lu ms)", effective_name, (unsigned long)timeout_ms);
     return node_id;
 }
 
@@ -93,11 +91,10 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon,
     name[sizeof(name) - 1] = '\0';
     taskEXIT_CRITICAL(&mon->lock);
 
-    // Log state transitions for debugging
-#ifdef CONFIG_LOG_HEARTBEAT_RX
+    // Log lost/regained transitions independently from frame RX logs.
+#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
     if (!was_alive) {
-        if (!ever_seen) ESP_LOGI(mon->tag, "%s ALIVE", name);
-        else ESP_LOGI(mon->tag, "%s regained", name);
+        if (ever_seen) ESP_LOGI(mon->tag, "%s regained", name);
     }
 #else
     (void)was_alive;
@@ -143,7 +140,7 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
     taskEXIT_CRITICAL(&mon->lock);
 
     // Log outside critical section
-#ifdef CONFIG_LOG_HEARTBEAT_RX
+#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
     for (int i = 0; i < timeout_count; i++) {
         ESP_LOGI(mon->tag, "%s lost (no response for %lu ms)",
                  timeouts[i].name, timeouts[i].elapsed_ms);
@@ -217,7 +214,7 @@ uint8_t heartbeat_monitor_get_timeout_mask(heartbeat_monitor_t *mon) {
 void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
     if (!mon) return;
 
-#ifdef CONFIG_LOG_HEARTBEAT_RX
+#ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
     ESP_LOGI(mon->tag, "--- Node Status ---");
 
     // Snapshot all node data inside a single critical section, log outside.

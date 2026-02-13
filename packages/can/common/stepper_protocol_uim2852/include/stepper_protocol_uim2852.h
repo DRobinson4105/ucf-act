@@ -1,6 +1,10 @@
 /**
  * @file stepper_protocol_uim2852.h
- * @brief UIM2852 stepper motor SimpleCAN protocol frame encoding and parsing.
+ * @brief UIM2852 stepper motor SimpleCAN3.0 protocol frame encoding and parsing.
+ *
+ * All CW (Control Word) hex codes and data formats match the UIM342CA CAN
+ * Interface Reference specification.  Byte ordering is little-endian (LSB
+ * first) throughout.
  */
 #pragma once
 
@@ -51,55 +55,65 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 // ============================================================================
 // bit7 of CW: 0 = no ACK requested, 1 = ACK requested
 // For instructions, add 0x80 to request acknowledgment
+//
+// CW values below are from the UIM342CA CAN Interface Reference spec, section 15.
 
 #define STEPPER_UIM2852_CW_ACK_BIT          0x80    // OR with CW to request ACK
 
-// Parameter instructions
-#define STEPPER_UIM2852_CW_PP               0x01    // System parameters (Node ID, Group ID, etc.)
-#define STEPPER_UIM2852_CW_IC               0x0C    // Internal configuration
-#define STEPPER_UIM2852_CW_IE               0x0D    // Information enable
+// Protocol / configuration
+#define STEPPER_UIM2852_CW_PP               0x01    // System parameters (Node ID, Group ID, bit rate)
+#define STEPPER_UIM2852_CW_IC               0x06    // Initial configuration
+#define STEPPER_UIM2852_CW_IE               0x07    // Information enable (notifications)
+#define STEPPER_UIM2852_CW_ML               0x0B    // Model string (read-only)
+#define STEPPER_UIM2852_CW_SN               0x0C    // Serial number (read-only)
 #define STEPPER_UIM2852_CW_ER               0x0F    // Error query/report
 
-// Motion status
+// Motor driver
+#define STEPPER_UIM2852_CW_MT               0x10    // Motor driver parameters (microstep, current, brake)
 #define STEPPER_UIM2852_CW_MS               0x11    // Motion status query
 
 // Motion control
 #define STEPPER_UIM2852_CW_MO               0x15    // Motor driver on/off
 #define STEPPER_UIM2852_CW_BG               0x16    // Begin motion
 #define STEPPER_UIM2852_CW_ST               0x17    // Stop motion (decel)
-#define STEPPER_UIM2852_CW_SD               0x18    // Stop deceleration rate
+#define STEPPER_UIM2852_CW_MF               0x18    // Motion parameter frame (read-only)
 #define STEPPER_UIM2852_CW_AC               0x19    // Acceleration
 #define STEPPER_UIM2852_CW_DC               0x1A    // Deceleration
-#define STEPPER_UIM2852_CW_OG               0x1C    // Set origin
+#define STEPPER_UIM2852_CW_SS               0x1B    // Cut-in speed
+#define STEPPER_UIM2852_CW_SD               0x1C    // Stop deceleration rate
 #define STEPPER_UIM2852_CW_JV               0x1D    // Jog velocity
 #define STEPPER_UIM2852_CW_SP               0x1E    // Speed for PTP mode
 #define STEPPER_UIM2852_CW_PR               0x1F    // Relative position
 #define STEPPER_UIM2852_CW_PA               0x20    // Absolute position
+#define STEPPER_UIM2852_CW_OG               0x21    // Set origin
 
-// Limits
-#define STEPPER_UIM2852_CW_LM               0x21    // Software limits
+// PVT/PT interpolated motion
+#define STEPPER_UIM2852_CW_MP               0x22    // PVT motion parameters
+#define STEPPER_UIM2852_CW_PV               0x23    // PVT mode select / start
+#define STEPPER_UIM2852_CW_PT               0x24    // PT position
+#define STEPPER_UIM2852_CW_QP               0x25    // PVT queue position
+#define STEPPER_UIM2852_CW_QV               0x26    // PVT queue velocity
+#define STEPPER_UIM2852_CW_QT               0x27    // PVT queue time
+#define STEPPER_UIM2852_CW_QF               0x29    // PVT quick feed (8 bytes packed)
 
-// Stall/encoder
-#define STEPPER_UIM2852_CW_QE               0x22    // Encoder/stall parameters
+// Limits and compensation
+#define STEPPER_UIM2852_CW_LM               0x2C    // Software limits
+#define STEPPER_UIM2852_CW_BL               0x2D    // Backlash compensation
+#define STEPPER_UIM2852_CW_DV               0x2E    // Desired values (read-only)
 
-// Input logic
-#define STEPPER_UIM2852_CW_IL               0x23    // Input logic action
-#define STEPPER_UIM2852_CW_TG               0x24    // Trigger type/filter
+// I/O control
+#define STEPPER_UIM2852_CW_IL               0x34    // Input logic action
+#define STEPPER_UIM2852_CW_TG               0x35    // Trigger type/filter
+#define STEPPER_UIM2852_CW_DI               0x37    // Digital I/O
 
-// Brake control
-#define STEPPER_UIM2852_CW_MT               0x25    // Brake control
+// Encoder / stall
+#define STEPPER_UIM2852_CW_QE               0x3D    // Quadrature encoder / stall parameters
 
-// PVT/PT motion
-#define STEPPER_UIM2852_CW_MP               0x26    // PVT motion parameters
-#define STEPPER_UIM2852_CW_QP               0x27    // PVT position
-#define STEPPER_UIM2852_CW_QV               0x28    // PVT velocity
-#define STEPPER_UIM2852_CW_QT               0x29    // PVT time
-#define STEPPER_UIM2852_CW_QF               0x2A    // PVT quick feed
-#define STEPPER_UIM2852_CW_PV               0x2B    // Select PVT mode
-#define STEPPER_UIM2852_CW_PT               0x2C    // PT position
-
-// Real-time notification (from motor)
+// Real-time notification (from motor, asynchronous)
 #define STEPPER_UIM2852_CW_NOTIFY           0x5A    // Real-time notification
+
+// System operation
+#define STEPPER_UIM2852_CW_SY               0x7E    // System operation (reboot, factory reset)
 
 // High-speed functions
 #define STEPPER_UIM2852_CW_D1               0xD1    // High-speed reciprocating / fixed-angle pulse
@@ -108,27 +122,51 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 // Parameter Indices
 // ============================================================================
 
-// PP[i] - System parameters
-#define STEPPER_UIM2852_PP_MICROSTEP        5       // Microstepping resolution
-#define STEPPER_UIM2852_PP_NODE_ID          7       // Node ID
-#define STEPPER_UIM2852_PP_GROUP_ID         8       // Group ID
+// PP[i] - System parameters (CW: 0x01)
+//   GET: DL=1, d0=index  ->  ACK: DL=2, d0=index, d1=value (u8)
+//   SET: DL=2, d0=index, d1=value  ->  ACK echoes
+#define STEPPER_UIM2852_PP_BITRATE          5       // CAN bit rate (0:1M 1:800K 2:500K 3:250K 4:125K)
+#define STEPPER_UIM2852_PP_NODE_ID          7       // Node ID (5-126)
+#define STEPPER_UIM2852_PP_GROUP_ID         8       // Group ID (5-126)
 
-// IC[i] - Internal configuration
-#define STEPPER_UIM2852_IC_DIR_POLARITY     1       // Position counter direction
-#define STEPPER_UIM2852_IC_CLOSED_LOOP      6       // Closed loop enable
-#define STEPPER_UIM2852_IC_BRAKE_LOGIC      8       // Brake control logic enable
-#define STEPPER_UIM2852_IC_STALL_FREEWHEEL  16      // Freewheel on stall (vs lock)
+// IC[i] - Initial configuration (CW: 0x06)
+//   GET: DL=1, d0=index  ->  ACK: DL=3, d0=index, d1-d2=value (u16 LE)
+//   SET: DL=3, d0=index, d1-d2=value  ->  ACK echoes
+#define STEPPER_UIM2852_IC_AUTO_ENABLE      0       // Auto-enable motor driver on power-up (0/1)
+#define STEPPER_UIM2852_IC_DIR_POLARITY     1       // Positive direction (0:CW, 1:CCW)
+#define STEPPER_UIM2852_IC_LOCKDOWN         3       // Enable lockdown system (0/1)
+#define STEPPER_UIM2852_IC_ACDC_UNITS       4       // AC/DC units (0:pulse/sec^2, 1:milliseconds)
+#define STEPPER_UIM2852_IC_CLOSED_LOOP      6       // Closed-loop control (0/1)
+#define STEPPER_UIM2852_IC_SOFTWARE_LIMITS  7       // Software limits (0/1)
+#define STEPPER_UIM2852_IC_BRAKE_LOGIC      8       // Brake safety interlock (0/1)
+#define STEPPER_UIM2852_IC_INTERNAL_BRAKE   15      // Use internally controlled brake (0/1)
+#define STEPPER_UIM2852_IC_STALL_REACTION   16      // Stall event reaction
 
-// IE[i] - Information enable (real-time notifications)
-#define STEPPER_UIM2852_IE_INPUT1           0       // Input 1 edge notification
-#define STEPPER_UIM2852_IE_INPUT2           1       // Input 2 edge notification
-#define STEPPER_UIM2852_IE_INPUT3           2       // Input 3 edge notification
+// IE[i] - Information enable / notifications (CW: 0x07)
+//   GET/SET same format as IC (DL=1 query, DL=3 set, 16-bit value)
+#define STEPPER_UIM2852_IE_INPUT1           0       // Input 1 edge notification (0/1)
+#define STEPPER_UIM2852_IE_INPUT2           1       // Input 2 edge notification (0/1)
+#define STEPPER_UIM2852_IE_INPUT3           2       // Input 3 edge notification (0/1)
+#define STEPPER_UIM2852_IE_PTP_COMPLETE     8       // PTP positioning finished notification (0/1)
+#define STEPPER_UIM2852_IE_PVT_FIFO_EMPTY   10      // PVT/PT FIFO empty (dry out) notification (0/1)
+#define STEPPER_UIM2852_IE_PVT_FIFO_LOW     11      // PVT/PT FIFO low warning notification (0/1)
 
-// MS[i] - Motion status query
+// MT[i] - Motor driver parameters (CW: 0x10)
+//   GET: DL=1, d0=index  ->  ACK: DL=3, d0=index, d1-d2=value (u16 LE)
+//   SET: DL=3, d0=index, d1-d2=value  ->  ACK echoes
+#define STEPPER_UIM2852_MT_MICROSTEP        0       // Micro-stepping (1, 2, 4, 8, 16, 32, 64)
+#define STEPPER_UIM2852_MT_WORKING_CURRENT  1       // Working current (5-80 = 0.5-8.0A in 0.1A steps)
+#define STEPPER_UIM2852_MT_IDLE_CURRENT     2       // Idle current (0-100% of working current)
+#define STEPPER_UIM2852_MT_AUTO_ENABLE_DELAY 3      // Auto-enable delay (0-60000 ms)
+#define STEPPER_UIM2852_MT_BRAKE            5       // Internal brake (0=release, 1=engage/lock)
+
+// MS[i] - Motion status query (CW: 0x11)
 #define STEPPER_UIM2852_MS_FLAGS_RELPOS     0       // Status flags + relative position
 #define STEPPER_UIM2852_MS_SPEED_ABSPOS     1       // Speed + absolute position
 
-// LM[i] - Software limits
+// LM[i] - Software limits (CW: 0x2C)
+//   GET: DL=1, d0=index  ->  ACK varies
+//   SET: DL=5, d0=index, d1-d4=value (s32 LE)  ->  ACK echoes
 #define STEPPER_UIM2852_LM_MAX_SPEED        0       // Maximum working speed
 #define STEPPER_UIM2852_LM_LOWER_WORK       1       // Lower working limit
 #define STEPPER_UIM2852_LM_UPPER_WORK       2       // Upper working limit
@@ -137,16 +175,25 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 #define STEPPER_UIM2852_LM_MAX_POS_ERR      6       // Maximum position error (stall)
 #define STEPPER_UIM2852_LM_MAX_ACCEL        7       // Maximum acceleration
 #define STEPPER_UIM2852_LM_RESET            254     // Reset limits to defaults
-#define STEPPER_UIM2852_LM_ENABLE           255     // Enable/disable limits
+#define STEPPER_UIM2852_LM_ENABLE           255     // Enable/disable limits (0/1)
 
-// QE[i] - Encoder/stall parameters
-#define STEPPER_UIM2852_QE_STALL_TOLERANCE  1       // Stall tolerance in pulses
+// QE[i] - Quadrature encoder / stall parameters (CW: 0x3D)
+//   GET/SET same format as IC/MT (DL=1 query, DL=3 set, 16-bit value)
+#define STEPPER_UIM2852_QE_LPR              0       // Lines per revolution (1-65535)
+#define STEPPER_UIM2852_QE_STALL_TOLERANCE  1       // Max position error / stall tolerance (10-65535 pulses)
+#define STEPPER_UIM2852_QE_BATTERY_VOLTAGE  3       // Abs encoder battery voltage (0-3300 mV, read-only)
+#define STEPPER_UIM2852_QE_CPR              4       // Counts per revolution (microstep * 200, 200-25600)
 
-// MT[i] - Brake control
-#define STEPPER_UIM2852_MT_BRAKE            5       // 0=release, 1=engage
+// DV[i] - Desired values (CW: 0x2E, read-only)
+//   GET: DL=1, d0=index  ->  ACK: DL=5, d0=index, d1-d4=value
+#define STEPPER_UIM2852_DV_MOTION_MODE      0       // Current motion mode (0:JOG, 1:PTP)
+#define STEPPER_UIM2852_DV_WORKING_CURRENT  1       // Desired working current (0-80)
+#define STEPPER_UIM2852_DV_SPEED            2       // Desired speed (s32)
+#define STEPPER_UIM2852_DV_REL_POSITION     3       // Desired relative position (s32)
+#define STEPPER_UIM2852_DV_ABS_POSITION     4       // Desired absolute position (s32)
 
 // ============================================================================
-// Notification Types (d0 values when CW=0x5A)
+// Notification Types (d0/d1 values when CW=0x5A)
 // ============================================================================
 
 typedef enum {
@@ -162,7 +209,7 @@ typedef enum {
     STEPPER_UIM2852_ALARM_ENCODER_ERROR     = 0x1E,
     STEPPER_UIM2852_ALARM_ENCODER_BATTERY   = 0x1F,
     
-    // Status notifications (d0=type, d1=0)
+    // Status notifications (d0=type)
     STEPPER_UIM2852_STATUS_IN1_FALL         = 0x01,
     STEPPER_UIM2852_STATUS_IN1_RISE         = 0x02,
     STEPPER_UIM2852_STATUS_IN2_FALL         = 0x03,
@@ -194,110 +241,132 @@ typedef enum {
 // MS[0] response - Status flags and relative position
 typedef struct {
     // d1 flags
-    uint8_t mode;           // 0=JOG, 1=PTP
-    bool driver_on;         // Motor driver enabled
-    bool in1_level;         // Input 1 logic level
-    bool in2_level;         // Input 2 logic level
-    bool in3_level;         // Input 3 logic level
-    bool out1_level;        // Output 1 logic level
+    uint8_t mode;           // bits 1:0 - 0=JOG, 1=PTP
+    bool driver_on;         // bit 2 - SON, motor driver enabled
+    bool in1_level;         // bit 3 - Input 1 logic level
+    bool in2_level;         // bit 4 - Input 2 logic level
+    bool in3_level;         // bit 5 - Input 3 logic level
+    bool out1_level;        // bit 6 - Output 1 logic level
     
     // d2 flags
-    bool stopped;           // Motor is stationary
-    bool in_position;       // PAIF - motor reached target position
-    bool pvt_stopped;       // PSIF - PVT stopped
-    bool stall_detected;    // TLIF - stall detected
-    bool system_locked;     // System locked down
-    bool error_detected;    // Error flag
+    bool stopped;           // bit 0 - STOP, motor is stationary
+    bool in_position;       // bit 1 - PAIF, motor reached target position
+    bool pvt_stopped;       // bit 2 - PSIF, PVT stopped
+    bool stall_detected;    // bit 3 - TLIF, stall detected
+    bool system_locked;     // bit 5 - LOCK, system locked down
+    bool error_detected;    // bit 7 - ERR, error flag
     
-    // d4-d7: relative position
+    // d4-d7: relative position (signed 32-bit LE)
     int32_t relative_position;
 } stepper_uim2852_status_t;
 
 // Notification structure
 typedef struct {
     uint8_t node_id;
-    bool is_alarm;          // true if alarm, false if status
-    uint8_t type;           // notification type code
-    int32_t position;       // For PTP_COMPLETE, current position
+    bool is_alarm;          // true if alarm (d0==0x00), false if status
+    uint8_t type;           // notification type code (alarm code or status code)
+    int32_t position;       // For PTP_COMPLETE, current position from d4-d7
 } stepper_uim2852_notification_t;
 
-// Error report structure
+// Error report structure (from ER response)
 typedef struct {
-    uint8_t error_code;
-    uint8_t related_cw;     // CW that caused the error
-    uint8_t subindex;       // Sub-index of the CW
+    uint8_t error_code;     // d1: error code
+    uint8_t related_cw;     // d2: CW that caused the error
+    uint8_t subindex;       // d3: sub-index of the CW
 } stepper_uim2852_error_t;
 
 // ============================================================================
 // Frame Building Functions
 // ============================================================================
-// All functions return the data length (DL) to use
-// The 'data' array should be at least 8 bytes
+// All functions return the data length (DL) to use.
+// The 'data' array should be at least 8 bytes.
 
-// Motor driver on/off: MO = value (0=off, 1=on)
+// Motor driver on/off: MO (CW 0x15), DL=1
 uint8_t stepper_uim2852_build_mo(uint8_t *data, bool enable);
 
-// Begin motion: BG
+// Begin motion: BG (CW 0x16), DL=0
 uint8_t stepper_uim2852_build_bg(uint8_t *data);
 
-// Stop motion (decelerate): ST
+// Stop motion (decelerate): ST (CW 0x17), DL=0
 uint8_t stepper_uim2852_build_st(uint8_t *data);
 
-// Emergency stop: ST with SD rate (or use high SD value)
+// Emergency stop: ST with high SD rate (use build_sd() first)
 uint8_t stepper_uim2852_build_emergency_stop(uint8_t *data);
 
-// Set stop deceleration: SD = value (pulses/sec^2)
+// Set stop deceleration: SD (CW 0x1C), DL=4, u32
 uint8_t stepper_uim2852_build_sd(uint8_t *data, uint32_t decel_rate);
 
-// Set acceleration: AC = value (pulses/sec^2)
+// Set acceleration: AC (CW 0x19), DL=4, u32
 uint8_t stepper_uim2852_build_ac(uint8_t *data, uint32_t accel_rate);
 
-// Set deceleration: DC = value (pulses/sec^2)
+// Set deceleration: DC (CW 0x1A), DL=4, u32
 uint8_t stepper_uim2852_build_dc(uint8_t *data, uint32_t decel_rate);
 
-// Set speed for PTP: SP = value (pulses/sec, signed for direction)
+// Set cut-in speed: SS (CW 0x1B), DL=4, u32
+uint8_t stepper_uim2852_build_ss(uint8_t *data, uint32_t speed_pps);
+
+// Set speed for PTP: SP (CW 0x1E), DL=4, s32
 uint8_t stepper_uim2852_build_sp(uint8_t *data, int32_t speed_pps);
 
-// Set jog velocity: JV = value (pulses/sec, signed for direction)
+// Set jog velocity: JV (CW 0x1D), DL=4, s32
 uint8_t stepper_uim2852_build_jv(uint8_t *data, int32_t velocity_pps);
 
-// Set absolute position: PA = value (pulses)
+// Set absolute position: PA (CW 0x20), DL=4, s32
 uint8_t stepper_uim2852_build_pa(uint8_t *data, int32_t position);
 
-// Set relative position: PR = value (pulses)
+// Set relative position: PR (CW 0x1F), DL=4, s32
 uint8_t stepper_uim2852_build_pr(uint8_t *data, int32_t displacement);
 
-// Set origin: OG
+// Set origin: OG (CW 0x21), DL=0
 uint8_t stepper_uim2852_build_og(uint8_t *data);
 
-// Query motion status: MS[index]
+// Query motion status: MS[index] (CW 0x11), DL=1
 uint8_t stepper_uim2852_build_ms(uint8_t *data, uint8_t index);
 
-// Clear status flags: MS[0] = 0
+// Clear status flags: MS[0]=0 (CW 0x11), DL=2
 uint8_t stepper_uim2852_build_ms_clear(uint8_t *data);
 
-// Query/set parameter: PP[index] or PP[index] = value
+// Query system parameter: PP[index] (CW 0x01), DL=1
 uint8_t stepper_uim2852_build_pp_query(uint8_t *data, uint8_t index);
-uint8_t stepper_uim2852_build_pp_set(uint8_t *data, uint8_t index, int32_t value);
+// Set system parameter: PP[index]=value (CW 0x01), DL=2 (u8 value)
+uint8_t stepper_uim2852_build_pp_set(uint8_t *data, uint8_t index, uint8_t value);
 
-// Query/set internal config: IC[index] or IC[index] = value
+// Query initial config: IC[index] (CW 0x06), DL=1
 uint8_t stepper_uim2852_build_ic_query(uint8_t *data, uint8_t index);
-uint8_t stepper_uim2852_build_ic_set(uint8_t *data, uint8_t index, int32_t value);
+// Set initial config: IC[index]=value (CW 0x06), DL=3 (u16 LE value)
+uint8_t stepper_uim2852_build_ic_set(uint8_t *data, uint8_t index, uint16_t value);
 
-// Query/set information enable: IE[index] or IE[index] = value
+// Query info enable: IE[index] (CW 0x07), DL=1
 uint8_t stepper_uim2852_build_ie_query(uint8_t *data, uint8_t index);
-uint8_t stepper_uim2852_build_ie_set(uint8_t *data, uint8_t index, int32_t value);
+// Set info enable: IE[index]=value (CW 0x07), DL=3 (u16 LE value)
+uint8_t stepper_uim2852_build_ie_set(uint8_t *data, uint8_t index, uint16_t value);
 
-// Query/set software limits: LM[index] or LM[index] = value
+// Query motor driver param: MT[index] (CW 0x10), DL=1
+uint8_t stepper_uim2852_build_mt_query(uint8_t *data, uint8_t index);
+// Set motor driver param: MT[index]=value (CW 0x10), DL=3 (u16 LE value)
+uint8_t stepper_uim2852_build_mt_set(uint8_t *data, uint8_t index, uint16_t value);
+
+// Query software limit: LM[index] (CW 0x2C), DL=1
 uint8_t stepper_uim2852_build_lm_query(uint8_t *data, uint8_t index);
+// Set software limit: LM[index]=value (CW 0x2C), DL=5 (s32 LE value)
 uint8_t stepper_uim2852_build_lm_set(uint8_t *data, uint8_t index, int32_t value);
 
-// Query/set stall tolerance: QE[index] or QE[index] = value
+// Query encoder/stall param: QE[index] (CW 0x3D), DL=1
 uint8_t stepper_uim2852_build_qe_query(uint8_t *data, uint8_t index);
-uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, int32_t value);
+// Set encoder/stall param: QE[index]=value (CW 0x3D), DL=3 (u16 LE value)
+uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t value);
 
-// Brake control: MT[5] = value (0=release, 1=engage)
+// Brake control: MT[5]=value (CW 0x10), DL=3 (u16 LE value)
 uint8_t stepper_uim2852_build_brake(uint8_t *data, bool engage);
+
+// Query model string: ML (CW 0x0B), DL=0
+uint8_t stepper_uim2852_build_ml(uint8_t *data);
+
+// Query serial number: SN (CW 0x0C), DL=0
+uint8_t stepper_uim2852_build_sn(uint8_t *data);
+
+// Set backlash compensation: BL (CW 0x2D), DL=2 (u16 LE)
+uint8_t stepper_uim2852_build_bl(uint8_t *data, uint16_t pulses);
 
 // ============================================================================
 // Response Parsing Functions
@@ -315,7 +384,8 @@ bool stepper_uim2852_parse_notification(const uint8_t *data, uint8_t dl, stepper
 // Parse error report (CW = 0x0F)
 bool stepper_uim2852_parse_error(const uint8_t *data, uint8_t dl, stepper_uim2852_error_t *error);
 
-// Parse parameter query response (PP, IC, IE, LM, QE)
+// Parse parameter query response (PP, IC, IE, MT, LM, QE)
+// Handles 8-bit (DL=2), 16-bit (DL=3), and 32-bit (DL>=5) values automatically
 bool stepper_uim2852_parse_param_response(const uint8_t *data, uint8_t dl, uint8_t *index, int32_t *value);
 
 // ============================================================================

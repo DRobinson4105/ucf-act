@@ -4,43 +4,58 @@ ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (J
 
 ## State Machine
 
-**Normal operation:** INIT -> READY -> ENABLING -> ACTIVE
+Control follows Safety's target state (`READY`/`ENABLING`/`ACTIVE`) but owns its own live state machine:
 
-**Driver takeover:** ACTIVE -> OVERRIDE -> READY -> (can re-enable)
+```text
+INIT -> READY -> ENABLING -> ACTIVE
+ V      ^ ^ V       V        V   V
+ |      | | |       |        |   |
+ +------|-+-+---- FAULT -----+-<-+
+        +------- OVERRIDE -------+
+```
 
-Control follows the system target state from Safety's heartbeat (0x100). It transitions locally through ENABLING and ACTIVE, and can enter OVERRIDE or FAULT immediately for safety.
+- Any live state can enter `FAULT`.
+- `FAULT` is independent from `OVERRIDE` and returns to `READY` when fault conditions clear.
+- `OVERRIDE` is a separate retreat path and returns to `READY` when override conditions clear.
+- `OVERRIDE` can still enter `FAULT` if a component/runtime fault is detected.
 
 ### States
 
 | State | Description |
 |-------|-------------|
 | INIT | Hardware initializing. Transitions to READY immediately after boot. |
-| READY | Manual mode. Cart drives normally via pedal. Waiting for Safety to advance. |
-| ENABLING | 200ms transition. Enable relay energized, waiting to switch throttle source. Sets `HEARTBEAT_FLAG_ENABLE_COMPLETE` when done. |
+| READY | Manual mode. Cart drives normally via manual controls. Waiting for Safety to advance. |
+| ENABLING | Enable relay energized, waiting to switch throttle source. Sets `HEARTBEAT_FLAG_ENABLE_COMPLETE` when done. |
 | ACTIVE | Autonomous mode. Executing throttle/steering/braking commands from Planner. |
-| OVERRIDE | Safe state after driver takeover. All actuators disabled, manual control restored. |
-| FAULT | Hardware failure detected. Recoverable via cooldown + re-init; esp_restart() after max attempts. |
+| OVERRIDE | Safe state after driver takeover. All actuators disabled, manual control restored. Separate from FAULT. |
+| FAULT | Faulted state. Entered from any state on local component/runtime fault; returns to READY once faults clear. |
 
 ### Transitions
 
 **READY -> ENABLING** requires ALL:
-- Safety target state is ENABLING (from Safety heartbeat `state` field)
+- Safety target state is ENABLING or ACTIVE (from Safety heartbeat `state` field)
 - F/R switch in Forward position
 - Pedal not pressed
 - Pedal re-armed (released for 500ms after any press)
 - No active fault codes
 
-**ENABLING -> ACTIVE** after 200ms settle time completes. Can abort back to READY if Safety retreats, pedal pressed, or F/R moved.
+**ENABLING -> ACTIVE** Safety target reaches ACTIVE. Can abort back to READY if Safety retreats, pedal pressed, or F/R moved.
 
 **ACTIVE -> OVERRIDE** triggered immediately by ANY:
-- Pedal pressed (no debounce - immediate response)
+- Pedal press (no debounce - immediate response)
 - F/R switch moved from Forward (debounced)
+- Steering position error (actual encoder diverged >200 pulses from commanded target after motion complete)
+- Braking position error (actual encoder diverged >200 pulses from commanded target after motion complete)
 
-**ACTIVE -> READY** when Safety target state retreats (e-stop or node timeout).
+**ACTIVE -> READY** when Safety target state retreats (e-stop, node fault/override/timeout, or Planner/Orin halt autonomy command).
 This is a commanded retreat from Safety, not a human override event.
 
+**ANY -> FAULT** when a local component/runtime fault is detected.
+
+**FAULT -> READY** when local fault conditions are cleared and required components recover.
+
 **OVERRIDE -> READY** auto-clears when ALL conditions met:
-- Safety target state is ENABLING or higher
+- Safety target state is READY or higher
 - F/R switch in Forward position
 - Pedal re-armed (released for 500ms)
 
@@ -88,7 +103,7 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | 8 | Status LED | Output | WS2812 RGB LED |
 | 9 | Throttle Relay | Output | AEDIKO relay module (NO=autonomous) |
 | 10 | Enable MOSFET | Output | IRLZ44N gate (10k pull-down), bypasses pedal microswitch |
-| 14 | F/R Direction | Input | PC817 optocoupler, pull-up, active LOW |
+| 14 | F/R Forward | Input | PC817 optocoupler, pull-up, active LOW |
 | 15 | F/R Reverse | Input | PC817 optocoupler, pull-up, active LOW |
 
 ### LED Behavior
@@ -102,12 +117,12 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 ### F/R Optocoupler Logic
 
-| GPIO14 (Dir) | GPIO15 (Rev) | State |
+| GPIO14 (Forward) | GPIO15 (Reverse) | State |
 |--------------|--------------|-------|
 | LOW | HIGH | Forward |
-| LOW | LOW | Reverse |
+| HIGH | LOW | Reverse |
 | HIGH | HIGH | Neutral |
-| HIGH | LOW | Invalid (fault) |
+| LOW | LOW | Invalid (fault) |
 
 ## Components
 
@@ -116,12 +131,30 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | `multiplexer_dg408djz` | DG408DJZ 8-channel analog mux + DPDT throttle relay control |
 | `stepper_motor_uim2852` | UIM2852CA closed-loop stepper motor control API |
 | `relay_jd2912` | JD-2912 pedal bypass relay driver (via IRLZ44N MOSFET) |
-| `override_sensors` | Pedal ADC reading + F/R optocoupler debouncing |
+| `adc_12bitsar` | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper |
+| `optocoupler_pc817` | Dedicated F/R PC817 decode + debounce helper |
 | `can_twai` | CAN bus driver wrapper (shared) |
 | `can_protocol` | Message definitions and encode/decode (shared) |
-| `heartbeat` | WS2812 status LED driver (shared) |
+| `led_ws2812` | WS2812 status LED driver (shared) |
 | `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared) |
 | `control_logic` | Extracted state machine decision logic (shared, tested) |
+
+Driver-input policy (pedal re-arm + F/R gating) now lives directly in `control-esp32/main/main.cpp`
+and consumes `adc_12bitsar` + `optocoupler_pc817` as low-level hardware components.
+
+### Hardware Detection Limitations
+
+Not all components can detect physical absence at init or runtime. Components that are output-only GPIOs have no feedback path from the external hardware -- the ESP32 drives pins but receives no acknowledgment.
+
+| Component | Detects absence? | Why |
+|-----------|-----------------|-----|
+| `multiplexer_dg408djz` | No | Output-only GPIO. Init readback tests the MCU output latch, not the external IC. The DG408DJZ is a purely analog device with no feedback path. |
+| `relay_jd2912` | No | Output-only GPIO. Same readback pattern as the mux -- verifies the MCU register, not whether the relay/MOSFET is physically present. |
+| `adc_12bitsar` | No | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled. |
+| `optocoupler_pc817` | **Yes** | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. `init_fr_inputs()` rejects NEUTRAL as invalid, triggering FAULT. |
+| `stepper_motor_uim2852` | **Yes** | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT. |
+
+For the mux and relay, detecting hardware absence would require board-level changes (e.g., adding a sense/feedback line). For the pedal ADC, a plausibility range check on the idle reading could improve detection but is not yet implemented.
 
 ## Throttle Control
 
@@ -143,76 +176,83 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 | Flag | Effect |
 |------|--------|
-| `CONFIG_BYPASS_SAFETY_TARGET_STATE` | Force target_state to ACTIVE (ignore Safety target state) |
-| `CONFIG_BYPASS_SAFETY_ESTOP_FAULT` | Force Safety estop_fault_code to NONE in Control inputs/logging |
-| `CONFIG_BYPASS_FR_SENSOR` | Force F/R state to Forward (skip optocoupler reading) |
-| `CONFIG_BYPASS_PLANNER_CMD_INPUTS` | Force Planner command inputs to zero throttle/steering/braking |
-| `CONFIG_BYPASS_PLANNER_CMD_STALE_CHECK` | Disable Planner command timeout/stale checks |
-| `CONFIG_BYPASS_STEPPER_MOTORS` | Skip stepper motor init/configure/commands (no UIM2852CA needed) |
-| `CONFIG_BYPASS_PEDAL_OVERRIDE` | Ignore pedal ADC (always not pressed, always re-armed) |
-| `CONFIG_BYPASS_ENABLE_RELAY` | Skip JD-2912 pedal bypass relay energize/de-energize |
-| `CONFIG_BYPASS_MULTIPLEXER` | Skip DG408DJZ mux and throttle relay control |
+| `CONFIG_BYPASS_SAFETY_TARGET_MIRROR` | Force target_state to ACTIVE (ignore Safety target mirror) |
+| `CONFIG_BYPASS_SAFETY_ESTOP_MIRROR` | Force Safety estop_fault_code to NONE in Control inputs/logging |
+| `CONFIG_BYPASS_PLANNER_COMMAND_INPUTS` | Force Planner command inputs to zero throttle/steering/braking |
+| `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Planner command timeout/stale checks |
+| `CONFIG_BYPASS_INPUT_PEDAL_ADC` | Skip pedal ADC readings (always not pressed, always re-armed) |
+| `CONFIG_BYPASS_INPUT_FR_SENSOR` | Force F/R state to FORWARD (skip optocoupler channel reading) |
+| `CONFIG_BYPASS_ACTUATOR_MULTIPLEXER` | Skip multiplexer and throttle relay control |
+| `CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY` | Skip pedal bypass relay energize/de-energize |
+| `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING` | Skip steering stepper motor (node 5) init/configure/commands |
+| `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING` | Skip braking stepper motor (node 6) init/configure/commands |
 
 ## Debug Logging
 
 Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level):
 
-### CAN Bus
+### CAN Traffic & Planner I/O
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
-| `CONFIG_LOG_HEARTBEAT_RX` | off | Log every received Safety heartbeat, not just changes |
-| `CONFIG_LOG_PLANNER_COMMANDS` | off | Log every Planner command RX + timeout/stale warnings |
+| `CONFIG_LOG_CAN_HEARTBEAT_TX` | off | Log every periodic heartbeat TX (very verbose) |
+| `CONFIG_LOG_CAN_HEARTBEAT_RX` | off | Log every received Safety heartbeat, not just changes |
+| `CONFIG_LOG_CAN_PLANNER_COMMAND_RX` | off | Log every Planner command RX + timeout/stale warnings |
+
+### Component Health & Recovery
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `CONFIG_LOG_COMPONENT_LOST` | on | Log component LOST edge transitions |
+| `CONFIG_LOG_COMPONENT_REGAINED` | on | Log component REGAINED edge transitions |
 | `CONFIG_LOG_CAN_RECOVERY` | off | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
+| `CONFIG_LOG_RETRY_TWAI` | off | Log repeated TWAI retry attempts (startup and runtime faults) |
+| `CONFIG_LOG_RETRY_MULTIPLEXER` | off | Log multiplexer retry attempts while faulted |
+| `CONFIG_LOG_RETRY_PEDAL_RELAY` | off | Log pedal relay retry attempts while faulted |
+| `CONFIG_LOG_RETRY_PEDAL_INPUT` | off | Log pedal ADC retry attempts while faulted |
+| `CONFIG_LOG_RETRY_FR_INPUT` | off | Log F/R input retry attempts while faulted |
+| `CONFIG_LOG_RETRY_STEPPER_STEERING` | off | Log steering stepper retry attempts |
+| `CONFIG_LOG_RETRY_STEPPER_BRAKING` | off | Log braking stepper retry attempts |
+
+Retries are unbounded for failed required components, paced at 500ms intervals (no maximum attempt limit). HEARTBEAT_LED is non-critical for FAULT gating and is initialized once at startup.
 
 ### Control Logic
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_STATE_CHANGES` | off | Log control state/fault changes and transition reasons |
-| `CONFIG_LOG_SAFETY_MIRROR_CHANGES` | off | Log mirrored Safety target/fault changes seen by Control |
-| `CONFIG_LOG_STATE_TICK` | off | Log state-machine evaluation every 20ms cycle (very verbose) |
-| `CONFIG_LOG_ENABLE_SEQUENCE` | off | Log enable/disable sequence steps (start, complete, abort) |
-| `CONFIG_LOG_RECOVERY` | off | Log fault recovery attempts (re-init, success/failure) |
-| `CONFIG_LOG_THROTTLE` | off | Log throttle level changes |
-| `CONFIG_LOG_THROTTLE_TICK` | off | Log throttle current/target every 20ms cycle (very verbose) |
-| `CONFIG_LOG_STEPPER_COMMANDS` | off | Log stepper motor position commands |
-| `CONFIG_LOG_OVERRIDE` | off | Log driver override trigger events (pedal/FR) |
+| `CONFIG_LOG_CONTROL_STATE_CHANGES` | on | Log control state transitions and transition reasons |
+| `CONFIG_LOG_CONTROL_FAULT_CHANGES` | off | Log control fault code changes |
+| `CONFIG_LOG_CONTROL_STATE_TICK` | off | Log state-machine evaluation every 20ms cycle (very verbose) |
+| `CONFIG_LOG_CONTROL_ENABLE_SEQUENCE` | off | Log enable/disable sequence steps (start, complete, abort) |
+| `CONFIG_LOG_CONTROL_OVERRIDE` | off | Log driver override trigger events (pedal/F/R) |
+| `CONFIG_LOG_CONTROL_THROTTLE_CHANGES` | off | Log throttle level changes |
+| `CONFIG_LOG_CONTROL_THROTTLE_TICK` | off | Log throttle current/target every 20ms cycle (very verbose) |
+| `CONFIG_LOG_CONTROL_SAFETY_MIRROR_CHANGES` | off | Log mirrored Safety target/fault changes seen by Control |
 
-### LED (WS2812)
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `CONFIG_LOG_LED_STATE_CHANGES` | off | Log LED color/reason mode changes |
-| `CONFIG_LOG_LED_BLINKS` | off | Log every LED ON blink with color/reason (very verbose) |
-
-### Multiplexer (DG408DJZ)
+### Inputs
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_MUX_LEVEL` | off | Log mux level changes with A2/A1/A0 values |
+| `CONFIG_LOG_INPUT_PEDAL_ADC` | off | Log pedal ADC millivolt readings (extremely verbose) |
+| `CONFIG_LOG_INPUT_FR_DEBOUNCE` | off | Log F/R switch debounce transitions |
+| `CONFIG_LOG_INPUT_FR_STATE` | off | Log F/R selector state changes |
 
-### Pedal Bypass Relay (JD-2912)
-
-| Flag | Default | Effect |
-|------|---------|--------|
-| `CONFIG_LOG_PEDAL_RELAY` | **on** | Log pedal bypass relay energize/de-energize |
-
-### Override Sensors
+### Actuators
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_PEDAL_ADC` | off | Log pedal ADC millivolt readings (extremely verbose) |
-| `CONFIG_LOG_FR_DEBOUNCE` | off | Log F/R switch debounce transitions |
-| `CONFIG_LOG_FR_STATE` | **on** | Log F/R gear selector state changes |
+| `CONFIG_LOG_ACTUATOR_MUX_LEVEL` | off | Log multiplexer level changes with A2/A1/A0 values |
+| `CONFIG_LOG_ACTUATOR_PEDAL_RELAY` | off | Log pedal bypass relay energize/de-energize |
+| `CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX` | off | Log stepper position commands sent over CAN |
+| `CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX` | off | Log stepper motion commands (PA/PR/ST) |
+| `CONFIG_LOG_ACTUATOR_STEPPER_RX` | off | Log parsed stepper CAN RX frames (MS, params, ACKs) |
 
-### Stepper Motor (UIM2852)
+### HEARTBEAT_LED
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `CONFIG_LOG_STEPPER_MOTION` | off | Log stepper motion commands (PA/PR/ST) |
-| `CONFIG_LOG_STEPPER_RX` | off | Log stepper CAN RX frame details (MS, params, ACKs) |
+| `CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES` | off | Log HEARTBEAT_LED color/reason mode changes |
+| `CONFIG_LOG_HEARTBEAT_LED_BLINK_PULSES` | off | Log every HEARTBEAT_LED ON pulse with color/reason (very verbose) |
 
 ## Build
 

@@ -62,10 +62,10 @@ esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config)
 
 // Set throttle level (0-7), or -1 to disable mux output
 // Level 0 = minimum throttle, Level 7 = maximum throttle
-void multiplexer_dg408djz_set_level(int8_t level);
+esp_err_t multiplexer_dg408djz_set_level(int8_t level);
 
 // Disable mux output (EN LOW) without affecting relay state
-void multiplexer_dg408djz_disable(void);
+esp_err_t multiplexer_dg408djz_disable(void);
 
 // Get current throttle level
 // Returns -1 if disabled, 0-7 if active
@@ -77,17 +77,11 @@ int8_t multiplexer_dg408djz_get_level(void);
 
 // Enable autonomous mode: sets level to 0, then energizes relay
 // Call this when entering autonomous control state
-void multiplexer_dg408djz_enable_autonomous(void);
-
-// Disable autonomous mode: ramps down throttle, de-energizes relay, disables mux
-// Provides smooth transition back to manual control
-// NOTE: Currently unused — override uses emergency_stop for immediate cutoff.
-// Retained for future non-emergency transitions.
-void multiplexer_dg408djz_disable_autonomous(void);
+esp_err_t multiplexer_dg408djz_enable_autonomous(void);
 
 // Emergency stop: immediate mux disable + relay de-energize
 // Use for fault conditions requiring instant throttle cutoff
-void multiplexer_dg408djz_emergency_stop(void);
+esp_err_t multiplexer_dg408djz_emergency_stop(void);
 
 // Check if currently in autonomous mode (relay energized)
 bool multiplexer_dg408djz_is_autonomous(void);

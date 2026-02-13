@@ -1,6 +1,9 @@
 /**
  * @file test_stepper_protocol.c
  * @brief Unit tests for UIM2852 stepper motor CAN protocol encoding and parsing.
+ *
+ * Validates CW values, frame DL sizes, and data formats against the
+ * UIM342CA CAN Interface Reference specification.
  */
 
 #include <assert.h>
@@ -61,15 +64,11 @@ static void test_can_id_null_outputs(void) {
 
 static void test_can_id_invalid_format(void) {
     // ID with bit 8 of SID cleared should fail validation
-    // SID bits are [28:18]. Bit 8 of SID = bit 26 of can_id
     uint32_t bad_id = 0x00000001;  // SID = 0, bit 8 not set
     assert(!stepper_uim2852_parse_can_id(bad_id, NULL, NULL));
 }
 
 static void test_can_id_valid_node_range(void) {
-    // SimpleCAN encoding supports node IDs 0-31 (5 bits in SID + 2 bits in EID
-    // for the make direction, but parse only recovers bits within that range).
-    // The UIM2852 uses IDs 0-31 in practice (default node=5, steering=5, braking=6).
     for (uint8_t node = 0; node < 32; node++) {
         for (uint8_t cw_in = 0; cw_in < 0x80; cw_in += 0x10) {
             uint32_t id = stepper_uim2852_make_can_id(node, cw_in);
@@ -80,6 +79,56 @@ static void test_can_id_valid_node_range(void) {
             assert(cw_out == cw_in);
         }
     }
+}
+
+// Verify the worked example from the spec: Consumer ID=5, CW=0x95 -> CAN_ID=0x04280095
+static void test_can_id_spec_example(void) {
+    uint32_t id = stepper_uim2852_make_can_id(5, 0x95);
+    assert(id == 0x04280095);
+}
+
+// ============================================================================
+// CW constant values — verify they match the spec
+// ============================================================================
+
+static void test_cw_values_match_spec(void) {
+    assert(STEPPER_UIM2852_CW_PP == 0x01);
+    assert(STEPPER_UIM2852_CW_IC == 0x06);
+    assert(STEPPER_UIM2852_CW_IE == 0x07);
+    assert(STEPPER_UIM2852_CW_ML == 0x0B);
+    assert(STEPPER_UIM2852_CW_SN == 0x0C);
+    assert(STEPPER_UIM2852_CW_ER == 0x0F);
+    assert(STEPPER_UIM2852_CW_MT == 0x10);
+    assert(STEPPER_UIM2852_CW_MS == 0x11);
+    assert(STEPPER_UIM2852_CW_MO == 0x15);
+    assert(STEPPER_UIM2852_CW_BG == 0x16);
+    assert(STEPPER_UIM2852_CW_ST == 0x17);
+    assert(STEPPER_UIM2852_CW_MF == 0x18);
+    assert(STEPPER_UIM2852_CW_AC == 0x19);
+    assert(STEPPER_UIM2852_CW_DC == 0x1A);
+    assert(STEPPER_UIM2852_CW_SS == 0x1B);
+    assert(STEPPER_UIM2852_CW_SD == 0x1C);
+    assert(STEPPER_UIM2852_CW_JV == 0x1D);
+    assert(STEPPER_UIM2852_CW_SP == 0x1E);
+    assert(STEPPER_UIM2852_CW_PR == 0x1F);
+    assert(STEPPER_UIM2852_CW_PA == 0x20);
+    assert(STEPPER_UIM2852_CW_OG == 0x21);
+    assert(STEPPER_UIM2852_CW_MP == 0x22);
+    assert(STEPPER_UIM2852_CW_PV == 0x23);
+    assert(STEPPER_UIM2852_CW_PT == 0x24);
+    assert(STEPPER_UIM2852_CW_QP == 0x25);
+    assert(STEPPER_UIM2852_CW_QV == 0x26);
+    assert(STEPPER_UIM2852_CW_QT == 0x27);
+    assert(STEPPER_UIM2852_CW_QF == 0x29);
+    assert(STEPPER_UIM2852_CW_LM == 0x2C);
+    assert(STEPPER_UIM2852_CW_BL == 0x2D);
+    assert(STEPPER_UIM2852_CW_DV == 0x2E);
+    assert(STEPPER_UIM2852_CW_IL == 0x34);
+    assert(STEPPER_UIM2852_CW_TG == 0x35);
+    assert(STEPPER_UIM2852_CW_DI == 0x37);
+    assert(STEPPER_UIM2852_CW_QE == 0x3D);
+    assert(STEPPER_UIM2852_CW_NOTIFY == 0x5A);
+    assert(STEPPER_UIM2852_CW_SY == 0x7E);
 }
 
 // ============================================================================
@@ -163,6 +212,17 @@ static void test_build_sp(void) {
     assert(dl == 4);
 }
 
+static void test_build_ss(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ss(data, 500);
+    assert(dl == 4);
+    // 500 = 0x000001F4 LE
+    assert(data[0] == 0xF4);
+    assert(data[1] == 0x01);
+    assert(data[2] == 0x00);
+    assert(data[3] == 0x00);
+}
+
 static void test_build_ms_query(void) {
     uint8_t data[8];
     uint8_t dl = stepper_uim2852_build_ms(data, STEPPER_UIM2852_MS_FLAGS_RELPOS);
@@ -182,19 +242,22 @@ static void test_build_ms_clear(void) {
     assert(data[1] == 0);
 }
 
+// PP query: DL=1, PP set: DL=2 (u8 value)
 static void test_build_pp_query(void) {
     uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_pp_query(data, STEPPER_UIM2852_PP_MICROSTEP);
+    uint8_t dl = stepper_uim2852_build_pp_query(data, STEPPER_UIM2852_PP_BITRATE);
     assert(dl == 1);
     assert(data[0] == 5);
 }
 
-static void test_build_pp_set_roundtrip(void) {
+static void test_build_pp_set(void) {
     uint8_t data[8];
     uint8_t dl = stepper_uim2852_build_pp_set(data, 7, 42);
-    assert(dl == 5);
+    assert(dl == 2);
     assert(data[0] == 7);
+    assert(data[1] == 42);
     
+    // Parse round-trip
     uint8_t idx = 0;
     int32_t val = 0;
     assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
@@ -202,14 +265,121 @@ static void test_build_pp_set_roundtrip(void) {
     assert(val == 42);
 }
 
+// IC set: DL=3 (u16 LE value)
+static void test_build_ic_set(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ic_set(data, 6, 1);
+    assert(dl == 3);
+    assert(data[0] == 6);
+    assert(data[1] == 1);
+    assert(data[2] == 0);
+    
+    // Parse round-trip
+    uint8_t idx;
+    int32_t val;
+    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
+    assert(idx == 6);
+    assert(val == 1);
+}
+
+// IE set: DL=3 (u16 LE value)
+static void test_build_ie_set(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ie_set(data, STEPPER_UIM2852_IE_PTP_COMPLETE, 1);
+    assert(dl == 3);
+    assert(data[0] == 8);  // IE[8]
+    assert(data[1] == 1);
+    assert(data[2] == 0);
+}
+
+// MT query/set: DL=1 query, DL=3 set (u16 LE value)
+static void test_build_mt_query(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_mt_query(data, STEPPER_UIM2852_MT_MICROSTEP);
+    assert(dl == 1);
+    assert(data[0] == 0);  // MT[0]
+}
+
+static void test_build_mt_set(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_mt_set(data, STEPPER_UIM2852_MT_MICROSTEP, 16);
+    assert(dl == 3);
+    assert(data[0] == 0);
+    assert(data[1] == 16);
+    assert(data[2] == 0);
+    
+    uint8_t idx;
+    int32_t val;
+    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
+    assert(idx == 0);
+    assert(val == 16);
+}
+
+// QE set: DL=3 (u16 LE value)
+static void test_build_qe_set(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_qe_set(data, STEPPER_UIM2852_QE_STALL_TOLERANCE, 500);
+    assert(dl == 3);
+    assert(data[0] == 1);
+    // 500 = 0x01F4 LE
+    assert(data[1] == 0xF4);
+    assert(data[2] == 0x01);
+    
+    uint8_t idx;
+    int32_t val;
+    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
+    assert(idx == 1);
+    assert(val == 500);
+}
+
+// LM set: DL=5 (s32 LE value) -- unchanged
+static void test_build_lm_set(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_lm_set(data, 2, 100000);
+    assert(dl == 5);
+    
+    uint8_t idx;
+    int32_t val;
+    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
+    assert(idx == 2);
+    assert(val == 100000);
+}
+
+// Brake: MT[5], DL=3 (u16 LE value)
 static void test_build_brake(void) {
     uint8_t data[8];
     uint8_t dl = stepper_uim2852_build_brake(data, true);
-    assert(dl == 2);
+    assert(dl == 3);
     assert(data[0] == STEPPER_UIM2852_MT_BRAKE);
     assert(data[1] == 1);
+    assert(data[2] == 0);
     
     dl = stepper_uim2852_build_brake(data, false);
+    assert(dl == 3);
+    assert(data[1] == 0);
+    assert(data[2] == 0);
+}
+
+// ML: DL=0
+static void test_build_ml(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ml(data);
+    assert(dl == 0);
+}
+
+// SN: DL=0
+static void test_build_sn(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_sn(data);
+    assert(dl == 0);
+}
+
+// BL: DL=2 (u16 LE)
+static void test_build_bl(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_bl(data, 100);
+    assert(dl == 2);
+    assert(data[0] == 100);
     assert(data[1] == 0);
 }
 
@@ -218,7 +388,6 @@ static void test_build_brake(void) {
 // ============================================================================
 
 static void test_parse_ms0_full(void) {
-    // Construct a synthetic MS[0] response
     uint8_t data[8] = {0};
     data[0] = 0;  // index
     data[1] = 0x04 | 0x01;  // driver_on=1, mode=PTP(1)
@@ -295,7 +464,7 @@ static void test_parse_ms1_full(void) {
 static void test_parse_ms1_negative_speed(void) {
     uint8_t data[8] = {0};
     data[0] = 1;
-    // Speed = -200 in 24-bit signed LE: 0xFFFF38 -> d1=0x38, d2=0xFF, d3=0xFF
+    // Speed = -200 in 24-bit signed LE
     data[1] = 0x38;
     data[2] = 0xFF;
     data[3] = 0xFF;
@@ -380,18 +549,18 @@ static void test_parse_error_too_short(void) {
 
 static void test_parse_param_response_32bit(void) {
     uint8_t data[8] = {0};
-    data[0] = 5;  // index = microstep
-    // value = 16 (0x00000010 LE)
-    data[1] = 16;
-    data[2] = 0;
-    data[3] = 0;
-    data[4] = 0;
+    data[0] = 0;  // index
+    // value = 100000 (0x000186A0 LE)
+    data[1] = 0xA0;
+    data[2] = 0x86;
+    data[3] = 0x01;
+    data[4] = 0x00;
     
     uint8_t idx = 0;
     int32_t val = 0;
     assert(stepper_uim2852_parse_param_response(data, 5, &idx, &val));
-    assert(idx == 5);
-    assert(val == 16);
+    assert(idx == 0);
+    assert(val == 100000);
 }
 
 static void test_parse_param_response_16bit(void) {
@@ -437,87 +606,6 @@ static void test_parse_param_response_negative(void) {
 static void test_parse_param_too_short(void) {
     uint8_t data[1] = {0};
     assert(!stepper_uim2852_parse_param_response(data, 1, NULL, NULL));
-}
-
-// ============================================================================
-// Build/parse round-trip for set param commands
-// ============================================================================
-
-static void test_ic_set_roundtrip(void) {
-    uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_ic_set(data, 6, 1);
-    assert(dl == 5);
-    
-    uint8_t idx;
-    int32_t val;
-    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
-    assert(idx == 6);
-    assert(val == 1);
-}
-
-static void test_lm_set_roundtrip(void) {
-    uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_lm_set(data, 2, 100000);
-    assert(dl == 5);
-    
-    uint8_t idx;
-    int32_t val;
-    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
-    assert(idx == 2);
-    assert(val == 100000);
-}
-
-static void test_qe_set_roundtrip(void) {
-    uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_qe_set(data, 1, -500);
-    assert(dl == 5);
-    
-    uint8_t idx;
-    int32_t val;
-    assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
-    assert(idx == 1);
-    assert(val == -500);
-}
-
-// ============================================================================
-// Edge cases
-// ============================================================================
-
-static void test_build_pa_zero(void) {
-    uint8_t data[8];
-    stepper_uim2852_build_pa(data, 0);
-    assert(data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0);
-}
-
-static void test_build_pa_int32_min(void) {
-    uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_pa(data, INT32_MIN);
-    assert(dl == 4);
-    // INT32_MIN = 0x80000000 LE: 0x00, 0x00, 0x00, 0x80
-    assert(data[0] == 0x00);
-    assert(data[1] == 0x00);
-    assert(data[2] == 0x00);
-    assert(data[3] == 0x80);
-}
-
-static void test_build_pa_int32_max(void) {
-    uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_pa(data, INT32_MAX);
-    assert(dl == 4);
-    // INT32_MAX = 0x7FFFFFFF LE: 0xFF, 0xFF, 0xFF, 0x7F
-    assert(data[0] == 0xFF);
-    assert(data[1] == 0xFF);
-    assert(data[2] == 0xFF);
-    assert(data[3] == 0x7F);
-}
-
-static void test_og_zeroes_rest_of_buffer(void) {
-    uint8_t data[8];
-    memset(data, 0xAA, 8);
-    stepper_uim2852_build_og(data);
-    for (int i = 0; i < 8; i++) {
-        assert(data[i] == 0);
-    }
 }
 
 // ============================================================================
@@ -569,6 +657,47 @@ static void test_build_pr_positive(void) {
 }
 
 // ============================================================================
+// Edge cases
+// ============================================================================
+
+static void test_build_pa_zero(void) {
+    uint8_t data[8];
+    stepper_uim2852_build_pa(data, 0);
+    assert(data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0);
+}
+
+static void test_build_pa_int32_min(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_pa(data, INT32_MIN);
+    assert(dl == 4);
+    // INT32_MIN = 0x80000000 LE: 0x00, 0x00, 0x00, 0x80
+    assert(data[0] == 0x00);
+    assert(data[1] == 0x00);
+    assert(data[2] == 0x00);
+    assert(data[3] == 0x80);
+}
+
+static void test_build_pa_int32_max(void) {
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_pa(data, INT32_MAX);
+    assert(dl == 4);
+    // INT32_MAX = 0x7FFFFFFF LE: 0xFF, 0xFF, 0xFF, 0x7F
+    assert(data[0] == 0xFF);
+    assert(data[1] == 0xFF);
+    assert(data[2] == 0xFF);
+    assert(data[3] == 0x7F);
+}
+
+static void test_og_zeroes_rest_of_buffer(void) {
+    uint8_t data[8];
+    memset(data, 0xAA, 8);
+    stepper_uim2852_build_og(data);
+    for (int i = 0; i < 8; i++) {
+        assert(data[i] == 0);
+    }
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -582,6 +711,10 @@ int main(void) {
     TEST(test_can_id_null_outputs);
     TEST(test_can_id_invalid_format);
     TEST(test_can_id_valid_node_range);
+    TEST(test_can_id_spec_example);
+
+    // CW values
+    TEST(test_cw_values_match_spec);
 
     // CW utility
     TEST(test_cw_ack_bit);
@@ -595,11 +728,21 @@ int main(void) {
     TEST(test_build_pa_positive);
     TEST(test_build_pa_negative);
     TEST(test_build_sp);
+    TEST(test_build_ss);
     TEST(test_build_ms_query);
     TEST(test_build_ms_clear);
     TEST(test_build_pp_query);
-    TEST(test_build_pp_set_roundtrip);
+    TEST(test_build_pp_set);
+    TEST(test_build_ic_set);
+    TEST(test_build_ie_set);
+    TEST(test_build_mt_query);
+    TEST(test_build_mt_set);
+    TEST(test_build_qe_set);
+    TEST(test_build_lm_set);
     TEST(test_build_brake);
+    TEST(test_build_ml);
+    TEST(test_build_sn);
+    TEST(test_build_bl);
     TEST(test_build_ac);
     TEST(test_build_dc);
     TEST(test_build_jv);
@@ -631,11 +774,6 @@ int main(void) {
     TEST(test_parse_param_response_8bit);
     TEST(test_parse_param_response_negative);
     TEST(test_parse_param_too_short);
-
-    // Round-trip set param
-    TEST(test_ic_set_roundtrip);
-    TEST(test_lm_set_roundtrip);
-    TEST(test_qe_set_roundtrip);
 
     // Edge cases
     TEST(test_build_pa_zero);

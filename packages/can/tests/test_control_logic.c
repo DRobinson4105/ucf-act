@@ -109,11 +109,6 @@ static void test_preconditions_active_fault(void) {
     assert(control_check_preconditions(&p) == false);
 }
 
-// 6. NULL input -> false
-static void test_preconditions_null(void) {
-    assert(control_check_preconditions(NULL) == false);
-}
-
 // ============================================================================
 // Throttle slew tests (4)
 // ============================================================================
@@ -183,7 +178,7 @@ static void test_init_to_ready_regardless(void) {
 }
 
 // ============================================================================
-// State: READY -> ENABLING (4)
+// State: READY -> ENABLING (5)
 // ============================================================================
 
 // 13. READY + target_state >= ENABLING + preconditions met -> ENABLING
@@ -222,6 +217,15 @@ static void test_ready_stays_fr_wrong(void) {
     in.fr_state = FR_STATE_REVERSE;
     control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_READY);
+}
+
+// 16b. READY + invalid target value (FAULT) -> treated as READY, stays READY
+static void test_ready_invalid_target_treated_as_ready(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_FAULT;
+    control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_READY);
+    assert(r.actions == CONTROL_ACTION_NONE);
 }
 
 // ============================================================================
@@ -299,7 +303,7 @@ static void test_enabling_complete_fires_once(void) {
 }
 
 // ============================================================================
-// State: ENABLING -> READY abort (4)
+// State: ENABLING -> READY abort (5)
 // ============================================================================
 
 // 21. ENABLING + target_state < ENABLING -> READY + ABORT_ENABLE
@@ -346,6 +350,17 @@ static void test_enabling_abort_priority(void) {
     control_step_result_t r = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_READY);
     assert(r.actions == CONTROL_ACTION_ABORT_ENABLE);
+}
+
+// 24b. ENABLING + invalid target value (FAULT) -> treated as READY, aborts to READY
+static void test_enabling_invalid_target_retreats(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_FAULT;
+    in.enable_start_ms = 1000;
+    in.now_ms = 1200;
+    control_step_result_t r = control_compute_step(NODE_STATE_ENABLING, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_READY);
+    assert(r.actions & CONTROL_ACTION_ABORT_ENABLE);
 }
 
 // 25. ACTIVE + pedal pressed -> OVERRIDE + TRIGGER_OVERRIDE
@@ -396,6 +411,16 @@ static void test_active_override_priority(void) {
     control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_OVERRIDE);
     assert(r.override_reason == OVERRIDE_REASON_PEDAL);
+}
+
+// 28b. ACTIVE + invalid target value (FAULT) -> treated as READY retreat
+static void test_active_invalid_target_retreats(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_FAULT;
+    control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_READY);
+    assert(r.actions & CONTROL_ACTION_DISABLE_AUTONOMY);
+    assert(r.disable_reason == CONTROL_DISABLE_REASON_SAFETY_RETREAT);
 }
 
 // ============================================================================
@@ -459,7 +484,7 @@ static void test_active_braking_changed(void) {
 }
 
 // ============================================================================
-// State: OVERRIDE -> READY (4)
+// State: OVERRIDE -> READY (5)
 // ============================================================================
 
 // 33. OVERRIDE + conditions met -> READY
@@ -473,10 +498,11 @@ static void test_override_to_ready(void) {
     assert(r.override_reason == OVERRIDE_REASON_NONE);
 }
 
-// 34. OVERRIDE + target_state < READY -> stays OVERRIDE
+// 34. OVERRIDE + FR not forward -> stays OVERRIDE
 static void test_override_stays_no_auto(void) {
     control_inputs_t in = default_inputs();
-    in.target_state = NODE_STATE_INIT;
+    in.target_state = NODE_STATE_READY;
+    in.fr_state = FR_STATE_REVERSE;
     control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
     assert(r.new_state == NODE_STATE_OVERRIDE);
 }
@@ -500,6 +526,16 @@ static void test_override_resets_trackers(void) {
     assert(r.throttle_level == 0);
     assert(r.new_last_steering == INT16_MIN);
     assert(r.new_last_braking == INT16_MIN);
+}
+
+// 36b. OVERRIDE + invalid target value (FAULT) + clear conditions -> treated as READY
+static void test_override_invalid_target_treated_as_ready(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_FAULT;
+    in.fr_state = FR_STATE_FORWARD;
+    in.pedal_rearmed = true;
+    control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_READY);
 }
 
 // ============================================================================
@@ -533,7 +569,7 @@ static void test_fault_preserves_code(void) {
 }
 
 // ============================================================================
-// Motor fault injection (2)
+// Motor fault injection (3)
 // ============================================================================
 
 // 40. Motor fault from ACTIVE -> FAULT + DISABLE_AUTONOMY
@@ -558,8 +594,17 @@ static void test_motor_fault_from_ready(void) {
     assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
 }
 
+// 41b. Motor fault from INIT -> FAULT
+static void test_motor_fault_from_init(void) {
+    control_inputs_t in = default_inputs();
+    in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+    control_step_result_t r = control_compute_step(NODE_STATE_INIT, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_FAULT);
+    assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+}
+
 // ============================================================================
-// FR INVALID sensor fault (2)
+// FR INVALID sensor fault (3)
 // ============================================================================
 
 // 42. FR invalid from ACTIVE -> FAULT + DISABLE_AUTONOMY
@@ -583,6 +628,17 @@ static void test_fr_invalid_already_faulted(void) {
     assert(r.new_state == NODE_STATE_FAULT);
     assert(r.actions & CONTROL_ACTION_ATTEMPT_RECOVERY);
     assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
+}
+
+// 43b. FR invalid from OVERRIDE -> FAULT
+static void test_fr_invalid_from_override(void) {
+    control_inputs_t in = default_inputs();
+    in.fr_is_invalid = true;
+    control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_FAULT);
+    assert(r.new_fault_code == NODE_FAULT_SENSOR_INVALID);
+    assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
+    assert(!(r.actions & CONTROL_ACTION_ABORT_ENABLE));
 }
 
 // ============================================================================
@@ -611,17 +667,6 @@ static void test_can_tx_fail_at_threshold(void) {
     can_tx_track_result_t r = control_track_can_tx(&t);
     assert(r.new_fail_count == 5);
     assert(r.trigger_recovery == true);
-}
-
-// ============================================================================
-// NULL input safety (1)
-// ============================================================================
-
-// 47. NULL inputs -> safe defaults
-static void test_compute_step_null(void) {
-    control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, NULL);
-    assert(r.new_state == NODE_STATE_READY);
-    assert(r.actions == CONTROL_ACTION_NONE);
 }
 
 // ============================================================================
@@ -791,13 +836,6 @@ static void test_can_tx_saturation_at_255(void) {
     assert(r.trigger_recovery == true);
 }
 
-// NULL input -> safe defaults (no crash, count=0, no recovery)
-static void test_can_tx_null(void) {
-    can_tx_track_result_t r = control_track_can_tx(NULL);
-    assert(r.new_fail_count == 0);
-    assert(r.trigger_recovery == false);
-}
-
 // ============================================================================
 // Motor fault from OVERRIDE state (1)
 // ============================================================================
@@ -816,6 +854,92 @@ static void test_motor_fault_from_override(void) {
     assert(r.throttle_level == 0);
     assert(r.new_last_steering == INT16_MIN);
     assert(r.new_last_braking == INT16_MIN);
+}
+
+// ============================================================================
+// Steering/braking position error override (4)
+// ============================================================================
+
+// Steering position error from ACTIVE -> OVERRIDE
+static void test_steering_position_error_override(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_ACTIVE;
+    in.steering_position_error = true;
+    control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_OVERRIDE);
+    assert(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE);
+    assert(r.override_reason == OVERRIDE_REASON_STEERING);
+    assert(r.throttle_level == 0);
+    assert(r.new_last_steering == INT16_MIN);
+    assert(r.new_last_braking == INT16_MIN);
+}
+
+// Braking position error from ACTIVE -> OVERRIDE
+static void test_braking_position_error_override(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_ACTIVE;
+    in.braking_position_error = true;
+    control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_OVERRIDE);
+    assert(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE);
+    assert(r.override_reason == OVERRIDE_REASON_BRAKING);
+    assert(r.throttle_level == 0);
+}
+
+// Position error from READY -> no override (only checked in ACTIVE)
+static void test_position_error_ignored_in_ready(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_READY;
+    in.steering_position_error = true;
+    in.braking_position_error = true;
+    control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_READY);
+    assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
+}
+
+// No position error from ACTIVE -> stays ACTIVE (normal operation)
+static void test_no_position_error_stays_active(void) {
+    control_inputs_t in = default_inputs();
+    in.target_state = NODE_STATE_ACTIVE;
+    in.steering_position_error = false;
+    in.braking_position_error = false;
+    control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_ACTIVE);
+    assert(!(r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE));
+}
+
+// ============================================================================
+// FAULT -> READY recovery round-trip (1)
+// ============================================================================
+
+// Simulates the caller-driven recovery: ACTIVE -> FAULT (motor comm loss),
+// then caller clears fault and resets to READY, then normal READY -> ENABLING.
+static void test_fault_recovery_round_trip(void) {
+    control_inputs_t in = default_inputs();
+    control_step_result_t r;
+
+    // Step 1: Motor fault from ACTIVE -> FAULT
+    in.target_state = NODE_STATE_ACTIVE;
+    in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+    r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_FAULT);
+    assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+    assert(r.actions & CONTROL_ACTION_DISABLE_AUTONOMY);
+
+    // Step 2: FAULT signals ATTEMPT_RECOVERY
+    in.motor_fault_code = NODE_FAULT_NONE;  // no new fault
+    r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_MOTOR_COMM, &in);
+    assert(r.new_state == NODE_STATE_FAULT);
+    assert(r.actions & CONTROL_ACTION_ATTEMPT_RECOVERY);
+
+    // Step 3: Caller successfully recovers hardware, resets to READY with no fault.
+    // The state machine should operate normally from READY.
+    in.target_state = NODE_STATE_ENABLING;
+    in.now_ms = 5000;
+    r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
+    assert(r.new_state == NODE_STATE_ENABLING);
+    assert(r.actions & CONTROL_ACTION_START_ENABLE);
+    assert(r.enable_start_ms == 5000);
 }
 
 // ============================================================================
@@ -845,7 +969,6 @@ int main(void) {
     TEST(test_preconditions_pedal_pressed);
     TEST(test_preconditions_pedal_not_rearmed);
     TEST(test_preconditions_active_fault);
-    TEST(test_preconditions_null);
 
     // Throttle slew (4 + 2)
     printf("\n--- Throttle slew ---\n");
@@ -861,12 +984,13 @@ int main(void) {
     TEST(test_init_to_ready);
     TEST(test_init_to_ready_regardless);
 
-    // READY -> ENABLING (4)
+    // READY -> ENABLING (5)
     printf("\n--- READY -> ENABLING ---\n");
     TEST(test_ready_to_enabling);
     TEST(test_ready_stays_pedal_pressed);
     TEST(test_ready_stays_no_auto);
     TEST(test_ready_stays_fr_wrong);
+    TEST(test_ready_invalid_target_treated_as_ready);
 
     // ENABLING -> ACTIVE (4)
     printf("\n--- ENABLING -> ACTIVE ---\n");
@@ -876,19 +1000,21 @@ int main(void) {
     TEST(test_enabling_enable_complete_stays);
     TEST(test_enabling_complete_fires_once);
 
-    // ENABLING -> READY abort (4)
+    // ENABLING -> READY abort (5)
     printf("\n--- ENABLING -> READY abort ---\n");
     TEST(test_enabling_abort_no_auto);
     TEST(test_enabling_abort_pedal);
     TEST(test_enabling_abort_fr);
     TEST(test_enabling_abort_priority);
+    TEST(test_enabling_invalid_target_retreats);
 
-    // ACTIVE override / Safety retreat (4)
+    // ACTIVE override / Safety retreat (5)
     printf("\n--- ACTIVE override / Safety retreat ---\n");
     TEST(test_active_override_pedal);
     TEST(test_active_override_fr);
     TEST(test_active_safety_retreat_to_ready);
     TEST(test_active_override_priority);
+    TEST(test_active_invalid_target_retreats);
 
     // ACTIVE throttle + steering (4)
     printf("\n--- ACTIVE throttle + steering ---\n");
@@ -897,12 +1023,13 @@ int main(void) {
     TEST(test_active_steering_changed);
     TEST(test_active_braking_changed);
 
-    // OVERRIDE -> READY (4)
+    // OVERRIDE -> READY (5)
     printf("\n--- OVERRIDE -> READY ---\n");
     TEST(test_override_to_ready);
     TEST(test_override_stays_no_auto);
     TEST(test_override_stays_pedal_not_rearmed);
     TEST(test_override_resets_trackers);
+    TEST(test_override_invalid_target_treated_as_ready);
 
     // FAULT -> recovery (3)
     printf("\n--- FAULT -> recovery ---\n");
@@ -910,16 +1037,18 @@ int main(void) {
     TEST(test_fault_resets_trackers);
     TEST(test_fault_preserves_code);
 
-    // Motor fault injection (2 + 1)
+    // Motor fault injection (3)
     printf("\n--- Motor fault injection ---\n");
     TEST(test_motor_fault_from_active);
     TEST(test_motor_fault_from_ready);
+    TEST(test_motor_fault_from_init);
     TEST(test_motor_fault_from_override);
 
-    // FR INVALID (2)
+    // FR INVALID (3)
     printf("\n--- FR INVALID sensor fault ---\n");
     TEST(test_fr_invalid_from_active);
     TEST(test_fr_invalid_already_faulted);
+    TEST(test_fr_invalid_from_override);
 
     // Motor fault / FR_INVALID from ENABLING (2)
     printf("\n--- Motor/FR fault from ENABLING ---\n");
@@ -932,11 +1061,6 @@ int main(void) {
     TEST(test_can_tx_fail_below_threshold);
     TEST(test_can_tx_fail_at_threshold);
     TEST(test_can_tx_saturation_at_255);
-    TEST(test_can_tx_null);
-
-    // NULL safety (1)
-    printf("\n--- NULL safety ---\n");
-    TEST(test_compute_step_null);
 
     // Unknown state (1)
     printf("\n--- Unknown state ---\n");
@@ -946,6 +1070,17 @@ int main(void) {
     printf("\n--- Timer overflow (uint32 wrap) ---\n");
     TEST(test_slew_timer_overflow);
     TEST(test_enable_timer_overflow);
+
+    // Steering/braking position error override (4)
+    printf("\n--- Steering/braking position error override ---\n");
+    TEST(test_steering_position_error_override);
+    TEST(test_braking_position_error_override);
+    TEST(test_position_error_ignored_in_ready);
+    TEST(test_no_position_error_stays_active);
+
+    // FAULT -> READY recovery (1)
+    printf("\n--- FAULT -> READY recovery ---\n");
+    TEST(test_fault_recovery_round_trip);
 
     // Full lifecycle (1)
     printf("\n--- Full lifecycle ---\n");

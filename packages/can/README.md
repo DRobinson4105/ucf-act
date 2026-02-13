@@ -2,7 +2,7 @@
 
 CAN bus communication system for the autonomous golf cart, consisting of two ESP32-C6 microcontrollers and a Jetson AGX Orin (Planner).
 
-Three nodes share a unified heartbeat format, state enum, and fault code namespace over 1 Mbps CAN:
+Three nodes share a unified heartbeat format, state enum, and fault code namespace over 1 Mbps CAN. Safety commands target states with READY/ENABLING/ACTIVE, while Planner/Control report live local states (including OVERRIDE/FAULT):
 
 | Node | Role | Heartbeat ID |
 |------|------|-------------|
@@ -21,7 +21,7 @@ Three nodes share a unified heartbeat format, state enum, and fault code namespa
 
 ## Testing
 
-Host-native unit tests for the protocol libraries (no ESP-IDF required):
+Host-native unit tests for shared protocol, logic, and component code (no ESP-IDF required):
 
 ```bash
 make -C tests
@@ -31,12 +31,11 @@ See [tests/README.md](tests/README.md) for details.
 
 ## Building
 
-Requires ESP-IDF v5.5.2. Use the devcontainer for a pre-configured environment. First, choose what device to build:
+Requires ESP-IDF v5.5.x. Use the devcontainer for a pre-configured environment.
+Choose one firmware target and run commands in that directory:
 
-```bash
-cd control-esp32
-cd safety-esp32
-```
+- Control firmware: `cd control-esp32`
+- Safety firmware: `cd safety-esp32`
 
 Then, in the directory of the device:
 

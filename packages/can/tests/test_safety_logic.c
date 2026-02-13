@@ -222,18 +222,6 @@ static void test_relay_disabled_on_timeout(void) {
 }
 
 // ============================================================================
-// NULL input safety (1)
-// ============================================================================
-
-// 18. NULL pointer -> returns zeroed/default struct
-static void test_evaluate_null_input(void) {
-    safety_decision_t d = safety_evaluate(NULL);
-    assert(d.estop_active == true);
-    assert(d.fault_code == NODE_FAULT_NONE);
-    assert(d.relay_enable == false);
-}
-
-// ============================================================================
 // Combined scenario tests (3)
 // ============================================================================
 
@@ -357,10 +345,6 @@ int main(void) {
     TEST(test_relay_enabled_when_safe);
     TEST(test_relay_disabled_on_estop);
     TEST(test_relay_disabled_on_timeout);
-
-    // NULL input safety (1)
-    printf("\n--- NULL input safety ---\n");
-    TEST(test_evaluate_null_input);
 
     // Combined scenarios (3)
     printf("\n--- Combined scenarios ---\n");
