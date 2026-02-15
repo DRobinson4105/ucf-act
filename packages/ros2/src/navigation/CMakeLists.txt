@@ -57,6 +57,16 @@ ament_target_dependencies(mock_livox_pointcloud_publisher
   tf2_geometry_msgs
 )
 
+add_executable(clicked_point_path_publisher src/clicked_point_path_publisher.cpp)
+ament_target_dependencies(clicked_point_path_publisher
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
 add_executable(follow_path_client src/follow_path_client.cpp)
 ament_target_dependencies(follow_path_client
   rclcpp
@@ -69,6 +79,7 @@ install(TARGETS
   act_global_path_manager
   fake_odom_integrator
   mock_livox_pointcloud_publisher
+  clicked_point_path_publisher
   follow_path_client
   DESTINATION lib/${PROJECT_NAME}
 )
