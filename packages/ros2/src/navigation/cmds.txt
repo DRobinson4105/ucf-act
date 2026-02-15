@@ -19,3 +19,4 @@ rviz2
 
 echo /cmd_vel_nav
 run tf2_ros + echo on odom -> base_link, base_link -> livox_frame
+ros2 param set publish_tf false
