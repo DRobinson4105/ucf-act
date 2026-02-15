@@ -1,0 +1,11 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        DOCKER_TAG: v5.5
+    volumes:
+      - ..:/workspaces/can:cached
+    privileged: true
+    command: sleep infinity

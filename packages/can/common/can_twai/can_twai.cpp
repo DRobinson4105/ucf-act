@@ -1,8 +1,13 @@
+/**
+ * @file can_twai.cpp
+ * @brief CAN bus TWAI driver wrapper implementation.
+ */
 #include "can_twai.hh"
+#include "esp_log.h"
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
 // Configure TWAI peripheral: 1 Mbps, normal mode, accept all frames
 esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio) {
@@ -13,12 +18,17 @@ esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio) {
     esp_err_t err = twai_driver_install(&g_config, &t_config, &f_config);
     if (err != ESP_OK) return err;
     
-    return twai_start();
+    err = twai_start();
+    if (err != ESP_OK) {
+        twai_driver_uninstall();
+        return err;
+    }
+    return ESP_OK;
 }
 
-// =============================================================================
+// ============================================================================
 // Transmit
-// =============================================================================
+// ============================================================================
 
 // Send standard 11-bit CAN frame with fixed 8-byte payload
 esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t timeout) {
@@ -52,11 +62,78 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
     return twai_transmit(&msg, timeout);
 }
 
-// =============================================================================
+// ============================================================================
 // Receive
-// =============================================================================
+// ============================================================================
 
 // Receive next CAN frame (blocking with timeout)
 esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout) {
     return twai_receive(msg, timeout);
+}
+
+// ============================================================================
+// Bus Health
+// ============================================================================
+
+bool can_twai_bus_ok(void) {
+    twai_status_info_t status;
+    if (twai_get_status_info(&status) != ESP_OK) return false;
+    return status.state == TWAI_STATE_RUNNING;
+}
+
+esp_err_t can_twai_recover_bus_off(void) {
+    esp_err_t err = twai_initiate_recovery();
+    if (err != ESP_OK) return err;
+    
+    // Poll for recovery completion (up to 250ms)
+    for (int i = 0; i < 25; i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        twai_status_info_t status;
+        if (twai_get_status_info(&status) == ESP_OK && status.state == TWAI_STATE_STOPPED) {
+            return twai_start();
+        }
+    }
+    // Timeout — try starting anyway
+    return twai_start();
+}
+
+esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    const char *tag = (log_tag && log_tag[0] != '\0') ? log_tag : "CAN_TWAI";
+#else
+    (void)log_tag;
+#endif
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    ESP_LOGI(tag, "CAN recovery: attempting TWAI stop/start");
+#endif
+    twai_stop();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    esp_err_t err = twai_start();
+    if (err == ESP_OK) {
+#ifdef CONFIG_LOG_CAN_RECOVERY
+        ESP_LOGI(tag, "CAN recovery: stop/start succeeded");
+#endif
+        return ESP_OK;
+    }
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    ESP_LOGI(tag, "CAN recovery: stop/start failed (%s), reinstalling TWAI driver",
+             esp_err_to_name(err));
+#endif
+
+    twai_driver_uninstall();
+    vTaskDelay(pdMS_TO_TICKS(200));
+    err = can_twai_init_default(tx_gpio, rx_gpio);
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    if (err == ESP_OK) {
+        ESP_LOGI(tag, "CAN recovery: driver reinstall succeeded");
+    } else {
+        ESP_LOGI(tag, "CAN recovery: driver reinstall failed (%s)", esp_err_to_name(err));
+    }
+#endif
+
+    return err;
 }

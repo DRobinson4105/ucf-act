@@ -1,3 +1,7 @@
+/**
+ * @file push_button_hb2es544.hh
+ * @brief HB2-ES544 push-button e-stop input driver.
+ */
 #pragma once
 
 #include "driver/gpio.h"
@@ -7,13 +11,13 @@
 extern "C" {
 #endif
 
-// =============================================================================
+// ============================================================================
 // Push Button E-Stop Driver (mxuteek HB2-ES544)
-// =============================================================================
-// Reads the state of a normally-closed (NC) mushroom-style emergency stop switch.
+// ============================================================================
+// Reads the state of a normally-closed (NC) emergency stop push button switch.
 //
 // Hardware:
-//   - mxuteek HB2-ES544: 22mm NC red mushroom emergency stop push button
+//   - mxuteek HB2-ES544: 22mm NC red emergency stop push button
 //   - Rated: AC 660V 10A (using low-voltage logic level sensing)
 //   - NC switch: closed (conducting) in normal operation
 //   - When pressed/activated: switch opens, breaks circuit
@@ -23,11 +27,11 @@ extern "C" {
 //   - NC design is fail-safe: broken wire = e-stop triggered
 //   - Active state means e-stop is engaged (autonomy blocked)
 //   - Must return to inactive state before autonomy can resume
-// =============================================================================
+// ============================================================================
 
-// =============================================================================
+// ============================================================================
 // Configuration
-// =============================================================================
+// ============================================================================
 
 // push_button_hb2es544_config_t - switch input configuration
 //   gpio:            GPIO pin connected to switch
@@ -41,16 +45,16 @@ typedef struct {
     bool enable_pulldown;
 } push_button_hb2es544_config_t;
 
-// =============================================================================
+// ============================================================================
 // Initialization
-// =============================================================================
+// ============================================================================
 
-// Initialize GPIO for mushroom switch input
+// Initialize GPIO for push button switch input
 esp_err_t push_button_hb2es544_init(const push_button_hb2es544_config_t *config);
 
-// =============================================================================
+// ============================================================================
 // State Reading
-// =============================================================================
+// ============================================================================
 
 // Read current e-stop state
 // Returns true when switch is in active (e-stop engaged) state

@@ -1,10 +1,7 @@
 import os
 import argparse
-from collections import OrderedDict
 
-import gdown
 import torch
-import torch.nn as nn
 import onnx
 import yaml
 

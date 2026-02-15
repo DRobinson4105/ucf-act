@@ -1,0 +1,188 @@
+menu "Test Bypasses"
+
+    menu "Planner/Control Mirrors"
+
+        config BYPASS_PLANNER_AUTONOMY_GATE
+            bool "Bypass Planner autonomy gate: force request=true"
+            default n
+            help
+                Force Planner autonomy request true so Safety can advance
+                READY -> ENABLING without an Orin request.
+
+        config BYPASS_PLANNER_LIVENESS_CHECKS
+            bool "Bypass Planner liveness checks"
+            default n
+            help
+                Ignore Planner heartbeat timeout and Planner FAULT state.
+
+        config BYPASS_PLANNER_STATE_MIRROR
+            bool "Bypass Planner state mirror"
+            default n
+            help
+                Simulate cooperative Planner behavior by mirroring Safety target
+                state and forcing Planner enable_complete.
+
+        config BYPASS_CONTROL_LIVENESS_CHECKS
+            bool "Bypass Control liveness checks"
+            default n
+            help
+                Ignore Control heartbeat timeout and Control FAULT state.
+
+        config BYPASS_CONTROL_STATE_MIRROR
+            bool "Bypass Control state mirror"
+            default n
+            help
+                Simulate cooperative Control behavior by mirroring Safety target
+                state and forcing Control enable_complete.
+
+    endmenu
+
+    menu "Physical Inputs"
+
+        config BYPASS_INPUT_PUSH_BUTTON
+            bool "Bypass push button input: force inactive"
+            default n
+
+        config BYPASS_INPUT_RF_REMOTE
+            bool "Bypass RF remote input: force inactive"
+            default n
+
+        config BYPASS_INPUT_ULTRASONIC
+            bool "Bypass ultrasonic input: force clear and healthy"
+            default n
+
+    endmenu
+
+endmenu
+
+menu "Debug Logging"
+
+    menu "CAN Traffic"
+
+        config LOG_CAN_HEARTBEAT_TX
+            bool "Log CAN heartbeat TX: every frame"
+            default n
+            help
+                Log every successful heartbeat TX frame and every per-tick
+                TX failure. Without this option, only the first failure and
+                first recovery are logged (edge-triggered).
+
+        config LOG_CAN_HEARTBEAT_RX
+            bool "Log CAN heartbeat RX: every frame"
+            default n
+
+        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
+            bool "Log heartbeat monitor node transitions"
+            default y
+            help
+                Log when a monitored CAN heartbeat node is lost (timed out)
+                or regained (first heartbeat after timeout).
+
+    endmenu
+
+    menu "Component Health & Recovery"
+
+        config LOG_COMPONENT_HEALTH_TRANSITIONS
+            bool "Log component LOST/REGAINED transitions"
+            default y
+            help
+                Log component health edge transitions when a component becomes
+                unavailable or recovers during runtime.
+
+        config LOG_CAN_RECOVERY
+            bool "Log CAN recovery flow"
+            default n
+
+        config LOG_RETRY_TWAI
+            bool "Log TWAI retry attempts"
+            default n
+            help
+                Log each failed TWAI retry while TWAI is unavailable.
+
+        config LOG_RETRY_PUSH_BUTTON
+            bool "Log push-button retry attempts"
+            default n
+            help
+                Log each failed push-button re-initialization attempt.
+
+        config LOG_RETRY_RF_REMOTE
+            bool "Log RF-remote retry attempts"
+            default n
+            help
+                Log each failed RF-remote re-initialization attempt.
+
+        config LOG_RETRY_ULTRASONIC
+            bool "Log ultrasonic retry attempts"
+            default n
+            help
+                Log each failed ultrasonic re-initialization attempt.
+
+        config LOG_RETRY_POWER_RELAY
+            bool "Log power-relay retry attempts"
+            default n
+            help
+                Log each failed power-relay re-initialization attempt.
+
+    endmenu
+
+    menu "Safety Logic"
+
+        config LOG_SAFETY_ESTOP_INPUTS
+            bool "Log Safety e-stop inputs: every cycle"
+            default n
+
+        config LOG_SAFETY_STATE_CHANGES
+            bool "Log Safety state changes"
+            default y
+
+        config LOG_SAFETY_STATE_TICK
+            bool "Log Safety state evaluation: every cycle"
+            default n
+
+    endmenu
+
+    menu "Inputs"
+
+        config LOG_INPUT_PUSH_BUTTON
+            bool "Log push-button input state changes"
+            default n
+
+        config LOG_INPUT_RF_REMOTE
+            bool "Log RF remote input state changes"
+            default n
+
+        config LOG_INPUT_ULTRASONIC_DISTANCE
+            bool "Log ultrasonic parsed distance"
+            default n
+
+        config LOG_INPUT_ULTRASONIC_RX
+            bool "Log ultrasonic raw UART RX"
+            default n
+
+        config LOG_INPUT_ULTRASONIC_PARSE_ERRORS
+            bool "Log ultrasonic parse errors"
+            default n
+
+    endmenu
+
+    menu "Actuators"
+
+        config LOG_ACTUATOR_POWER_RELAY_STATE
+            bool "Log power relay state changes"
+            default n
+
+    endmenu
+
+    menu "HEARTBEAT_LED"
+
+        config LOG_HEARTBEAT_LED_STATE_CHANGES
+            bool "Log HEARTBEAT_LED color/reason changes"
+            default n
+
+        config LOG_HEARTBEAT_LED_BLINK_PULSES
+            bool "Log HEARTBEAT_LED ON pulses"
+            default n
+
+    endmenu
+
+endmenu
