@@ -16,7 +16,15 @@ def main(args):
     with open(args.config, 'r') as fp:
         config = yaml.safe_load(fp)
 
-    train_config = config["train"]
+    if "train_stages" in config and args.stage in config["train_stages"]:
+        if "train" in config:
+            train_config = config["train"] | config["train_stages"][args.stage]
+        else:
+            train_config = config["train_stages"][args.stage]
+    elif "train" in config:
+        train_config = config["train"]
+    else:
+        raise RuntimeError(f"{args.stage} is not a valid train stage in {args.config} and train parameters are empty, train or train_stage parameters must be set.")
 
     torch.manual_seed(config["seed"])
     np.random.seed(config["seed"])
@@ -51,6 +59,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--config", type=str, default="config/yolo.yaml")
+    parser.add_argument("--stage", type=str)
 
     args = parser.parse_args()
 

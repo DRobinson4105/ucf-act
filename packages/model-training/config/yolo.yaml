@@ -5,12 +5,23 @@ cudnn:
 
 model: yolo11n
 seed: 56
+resolution: '1280x720'
 
-train:
-  load_path: 'weights/yolo11n.pt'
-  save_path: 'weights/yolo11n_ucf.pt'
-  ultralytics_parameters:
-    data: 'data/ucf-det/ucf_det.yaml'
-    epochs: 100
-    project: 'runs/ucf_det'
-    name: yolo11n
+train_stages:
+  pretrain:
+    load_path: 'weights/yolo11n.pt'
+    save_path: 'weights/yolo11n_coco.pt'
+    ultralytics_parameters:
+      data: 'data/coco_filtered/coco_filtered.yaml'
+      epochs: 100
+      project: 'runs/coco_filtered'
+      name: yolo11n
+  
+  finetune:
+    load_path: 'weights/yolo11n_coco.pt'
+    save_path: 'weights/yolo11n_ucf.pt'
+    ultralytics_parameters:
+      data: 'data/ucf-det/ucf_det.yaml'
+      epochs: 100
+      project: 'runs/ucf_det'
+      name: yolo11n
