@@ -38,10 +38,11 @@ def main(args):
     else:
         cap = VideoCapture(args.camera_port, frame_shape=(h, w))
         last_time = time.time()
-
+        
         try:
             while True:
                 ret, frame = cap.read()
+                print(ret)
                 if not ret: break
 
                 print(f"FPS: {1 / (time.time() - last_time)}")

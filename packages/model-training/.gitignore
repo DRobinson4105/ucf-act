@@ -4,3 +4,4 @@ runs
 *.onnx
 *.engine
 *.cache
+*.ipynb

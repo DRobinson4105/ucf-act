@@ -26,11 +26,21 @@ def main(args):
     torch.manual_seed(config["seed"])
     np.random.seed(config["seed"])
 
-    if args.stage in config["train_stages"]:
-        train_config = config["train"] | config["train_stages"][args.stage]
-        val_config = config["val"] | config["train_stages"][args.stage]
+    if "train_stages" in config and args.stage in config["train_stages"]:
+        if "train" in config:
+            train_config = config["train"] | config["train_stages"][args.stage]
+        else:
+            train_config = config["train_stages"][args.stage]
+            
+        if "val" in config:
+            train_config = config["val"] | config["train_stages"][args.stage]
+        else:
+            train_config = config["train_stages"][args.stage]
+    elif "train" in config and "val" in config:
+        train_config = config["train"]
+        val_config = config["val"]
     else:
-        raise RuntimeError(f"{args.stage} is not a valid train stage in {args.config}")
+        raise RuntimeError(f"{args.stage} is not a valid train stage in {args.config} and train/val parameters are empty, train/val or train_stage parameters must be set.")
 
     if torch.cuda.is_available():
         device = torch.device("cuda")

@@ -8,7 +8,7 @@ bool Engine::loadNetwork(const std::string &trtModelPath, const std::array<float
   if (!std::filesystem::exists(trtModelPath)) {
     std::string msg = "Error, unable to read TensorRT model at path: " + trtModelPath;
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   } else {
     std::string msg = "Loading TensorRT engine file at path: " + trtModelPath;
     m_logger.info(msg);
@@ -18,14 +18,14 @@ bool Engine::loadNetwork(const std::string &trtModelPath, const std::array<float
   if (!file.is_open()) {
     std::string msg = "Error, unable to open engine file.";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   std::streamsize size = file.tellg();
   if (size <= 0) {
     std::string msg = "Error, engine file size invalid (" + std::to_string(size) + ")";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   file.seekg(0, std::ios::beg);
@@ -35,35 +35,35 @@ bool Engine::loadNetwork(const std::string &trtModelPath, const std::array<float
   if (!file.read(buffer.data(), size)) {
     std::string msg = "Error, unable to read engine file.";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   m_runtime = std::unique_ptr<nvinfer1::IRuntime>{nvinfer1::createInferRuntime(m_trt_logger)};
   if (!m_runtime) {
     std::string msg = "InferenceRuntime failed to load.";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   auto ret = cudaSetDevice(0);
   if (ret != 0) {
     std::string msg = "CUDA-capable GPU is unavailable.";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   m_engine = std::unique_ptr<nvinfer1::ICudaEngine>(m_runtime->deserializeCudaEngine(buffer.data(), buffer.size()));
   if (!m_engine) {
     std::string msg = "CudaEngine failed to load.";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   m_context = std::unique_ptr<nvinfer1::IExecutionContext>(m_engine->createExecutionContext());
   if (!m_context) {
     std::string msg = "ExecutionContext failed to load.";
     m_logger.fatal(msg);
-    throw std::runtime_error(msg);
+    return false;
   }
 
   clearGpuBuffers();
@@ -89,7 +89,7 @@ bool Engine::loadNetwork(const std::string &trtModelPath, const std::array<float
       if (m_engine->getTensorDataType(tensorName) != nvinfer1::DataType::kFLOAT) {
         std::string msg = "Input must be of type float.";
         m_logger.fatal(msg);
-        throw std::runtime_error(msg);
+        return false;
       }
 
       m_inputDims.emplace_back(tensorShape.d[1], tensorShape.d[2], tensorShape.d[3]);
@@ -107,7 +107,7 @@ bool Engine::loadNetwork(const std::string &trtModelPath, const std::array<float
     } else {
       std::string msg = "Error, IO Tensor is neither an input or output";
       m_logger.fatal(msg);
-      throw std::runtime_error(msg);
+      return false;
     }
   }
 

@@ -4,7 +4,7 @@
   y: 0
   z: 0.80
   roll: 0
-  pitch: 0.4974
+  pitch: 0.497
   yaw: 0
 
 - frame-id: base_link
@@ -15,12 +15,27 @@
   roll: 0
   pitch: 0
   yaw: 0
-
 - frame-id: base_link
-  child-frame-id: body
-  x: 1.232
-  y: 0.023
-  z: 1.415
+  child-frame-id: front_left
+  x: 1.6574
+  y: 0.5017
+  z: 0.8827
+  roll: 0
+  pitch: 0
+  yaw: 0
+- frame-id: base_link
+  child-frame-id: front_right
+  x: 1.6574
+  y: -0.5017
+  z: 0.8827
+  roll: 0
+  pitch: 0
+  yaw: 0
+- frame-id: body
+  child-frame-id: base_link
+  x: -1.232
+  y: -0.023
+  z: -1.415
   roll: 0
   pitch: 0.4974
   yaw: 0

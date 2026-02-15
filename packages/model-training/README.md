@@ -7,11 +7,16 @@
 ```bash
 mkdir data
 
+# COCO Filtered
+pip install tqdm
+python scripts/download_coco.py
+
 # UCF Segmentation
 git clone https://huggingface.co/datasets/DavidRobinson05/ucf-seg data/ucf-seg
 
 # UCF Detection
 git clone https://huggingface.co/datasets/DavidRobinson05/ucf-det data/ucf-det
+
 ```
 
 ## Environment Setup
