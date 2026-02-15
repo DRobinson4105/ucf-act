@@ -6,6 +6,7 @@
   roll: 0
   pitch: 0.4974
   yaw: 0
+
 - frame-id: base_link
   child-frame-id: gps_frame
   x: 1.4478
@@ -14,14 +15,16 @@
   roll: 0
   pitch: 0
   yaw: 0
-- frame-id: body
-  child-frame-id: base_link
-  x: -1.232
-  y: -0.023
-  z: -1.415
+
+- frame-id: base_link
+  child-frame-id: body
+  x: 1.232
+  y: 0.023
+  z: 1.415
   roll: 0
-  pitch: -0.4974
+  pitch: 0.4974
   yaw: 0
+
 - frame-id: odom
   child-frame-id: camera_init
   x: 0
@@ -30,3 +33,4 @@
   roll: 0
   pitch: 0.4974
   yaw: 0
+

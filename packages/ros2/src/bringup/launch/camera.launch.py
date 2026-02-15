@@ -17,7 +17,7 @@ def generate_launch_description():
         "side_FR",
         "side_BL",
         "side_BR",
-    ]
+    ]``
     
     params = osp.join(get_package_share_directory("bringup"), "config", "camera.yaml")
 

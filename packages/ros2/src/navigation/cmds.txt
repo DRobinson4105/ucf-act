@@ -8,3 +8,14 @@ rviz2
 - /global_path_meta
 
 
+FOR LOCAL PATH TESTING 2/15
+make sure sim time params are off!!!!
+```
+ros2 launch bringup act.launch.py
+ros2 run navigation clicked_point_path_publisher --ros-args -p global_frame:=odom -p base_frame:=base_link -p path_topic:=/global_path
+ros2 run navigation follow_path_client --ros-args -p global_path_topic:=/global_path -p action_name:=/follow_path -p controller_id:=FollowPath -p goal_checker_id:=general_goal_checker
+rviz2
+```
+
+echo /cmd_vel_nav
+run tf2_ros + echo on odom -> base_link, base_link -> livox_frame

@@ -1,9 +1,12 @@
+/**:
+  ros__parameters:
+    use_sim_time: true
+
 controller_server:
   ros__parameters:
-    use_sim_time: false
+    use_sim_time: true
     controller_frequency: 5.0
     odom_topic: /odometry/local
-    # odom_topic: /Odometry
 
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
@@ -20,24 +23,17 @@ controller_server:
       stateful: true
 
     controller_plugins: ["FollowPath"]
-
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       motion_model: "Ackermann"
-
       AckermannConstraints:
         min_turning_r: 1.8
-
       model_dt: 0.2
       time_steps: 20
-      iteration_count: 1
       batch_size: 300
 
       prune_distance: 1.7
       transform_tolerance: 0.2
-
-      temperature: 0.3
-      gamma: 0.015
 
       vx_max: 1.0
       vx_min: 0.0
@@ -49,59 +45,31 @@ controller_server:
         - PathFollowCritic
         - GoalCritic
 
-      ConstraintCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 4.0
-
       CostCritic:
         enabled: true
-        cost_power: 1
-        cost_weight: 3.0
-        critical_cost: 300.0
-        collision_cost: 1000000.0
         consider_footprint: true
-
-      PathFollowCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 6.0
-        threshold_to_consider: 1.5
-        offset_from_furthest: 5
-
-      GoalCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 1.5
 
 local_costmap:
   local_costmap:
     ros__parameters:
-      use_sim_time: false
+      use_sim_time: true
       global_frame: odom
       robot_base_frame: base_link
-
       update_frequency: 10.0
       publish_frequency: 5.0
-
       resolution: 0.05
       rolling_window: true
-
       width: 10
       height: 10
 
       footprint: "[[1.2, 0.75], [1.2, -0.75], [-1.2, -0.75], [-1.2, 0.75]]"
 
-      plugins:
-        - obstacle_layer
-        - inflation_layer
+      plugins: ["obstacle_layer", "inflation_layer"]
 
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
         observation_sources: pointcloud
-
         pointcloud:
           topic: /livox/lidar_pc2
           data_type: PointCloud2
@@ -119,8 +87,9 @@ local_costmap:
 
 lifecycle_manager:
   ros__parameters:
+    use_sim_time: true
     autostart: true
-    use_sim_time: false
     bond_timeout: 10.0
     node_names:
       - controller_server
+

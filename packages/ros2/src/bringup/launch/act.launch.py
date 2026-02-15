@@ -17,10 +17,11 @@ def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_argum
 def generate_launch_description():
     return LaunchDescription([
         include("bringup", "static_tfs.launch.py"),
-        include("bringup", "cameras.launch.py"),
-        include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
-        include("bringup", "gps.launch.py"),
-        include("fast_lio", "mapping.launch.py"),
+        #include("bringup", "cameras.launch.py"),
+        #include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
+        #include("bringup", "gps.launch.py"),
+        #include("fast_lio", "mapping.launch.py"),
         include("bringup", "localization.launch.py"),
-        include("bringup", "costmap.launch.py"),
+        #include("bringup", "costmap.launch.py"),
+        include("bringup", "nav2_controller.launch.py"),
     ])
