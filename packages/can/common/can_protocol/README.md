@@ -4,7 +4,7 @@ CAN bus protocol definitions shared between all nodes. Standard frames use 11-bi
 
 ## Architecture
 
-Three nodes share a unified state/fault enum and an identical heartbeat format (`node_heartbeat_t`). Safety ESP32 is the system state authority — it is the only node that can advance state forward (READY -> ENABLING -> ACTIVE). Any node can enter OVERRIDE or FAULT locally for immediate safety.
+Three nodes share a unified state/fault enum and an identical heartbeat format (`node_heartbeat_t`). Safety ESP32 is the system state authority and commands target state using READY/ENABLING/ACTIVE only. Planner and Control own live-state transitions and can enter OVERRIDE or FAULT locally for immediate safety.
 
 | Node | Role |
 |------|------|
@@ -52,7 +52,7 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 | Byte | Field | Type | Description |
 |------|-------|------|-------------|
 | 0 | sequence | uint8 | Rolling counter 0-255 |
-| 1 | state | uint8 | NODE_STATE_* (Safety: system target state) |
+| 1 | state | uint8 | NODE_STATE_* (Safety heartbeat commands READY/ENABLING/ACTIVE target states) |
 | 2 | fault_code | uint8 | NODE_FAULT_* (Safety: e-stop reason, 0 when safe) |
 | 3 | flags | uint8 | HEARTBEAT_FLAG_* bitmask |
 | 4-7 | reserved | - | Zero-filled |
@@ -69,7 +69,7 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 
 ## Unified Node States (NODE_STATE_*)
 
-All nodes share the same state enum. Safety commands forward transitions; nodes can enter OVERRIDE or FAULT locally.
+All nodes share the same state enum. Safety heartbeat commands READY/ENABLING/ACTIVE target states; nodes report live states and may enter OVERRIDE/FAULT locally.
 
 | Code | State | Description |
 |------|-------|-------------|
@@ -131,6 +131,7 @@ Multiple conditions can be active at once. The fault_code byte is OR'd together.
 | Bit | Flag | Description |
 |-----|------|-------------|
 | 0 | ENABLE_COMPLETE | Node finished ENABLING, ready for ACTIVE |
+| 1 | AUTONOMY_REQUEST | Planner requests autonomy enable (READY -> ENABLING gate) and keeps it asserted while autonomy should remain active (drop = halt retreat to READY) |
 
 ## F/R Switch States (FR_STATE_*)
 

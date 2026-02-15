@@ -10,7 +10,7 @@
 #include "esp_log.h"
 #include "can_twai.hh"
 
-static const char *TAG = "STEPPER_UIM2852";
+static const char *TAG = "STEPPER";
 
 // Default timeout for CAN transmit
 static const TickType_t TX_TIMEOUT = pdMS_TO_TICKS(20);
@@ -38,9 +38,12 @@ static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw,
         motor->last_command_tick = xTaskGetTickCount();
         motor->last_cw_sent = cw;
         if (motor->config.request_ack) motor->ack_pending = true;
-    } else
-        ESP_LOGW(TAG, "Node %u: TX failed for CW=0x%02X: %s", 
+    }
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+    else
+        ESP_LOGI(TAG, "Node %u: TX failed for CW=0x%02X: %s", 
             motor->config.node_id, cw, esp_err_to_name(err));
+#endif
     
     return err;
 }
@@ -60,7 +63,6 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
         motor->config = defaults;
     }
     
-    motor->initialized = true;
     motor->microstep_resolution = 16;  // Assume 16 until queried
     motor->pulses_per_rev = 3200;      // 16 * 200
     
@@ -72,9 +74,7 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
     }
     motor->query_pending_cw = 0;
     portMUX_INITIALIZE(&motor->lock);
-    
-    ESP_LOGI(TAG, "Motor initialized: node_id=%u, producer_id=%u", 
-        motor->config.node_id, motor->config.producer_id);
+    motor->initialized = true;
     
     return ESP_OK;
 }
@@ -82,19 +82,23 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
 esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor) {
     if (!motor || !motor->initialized) return ESP_ERR_INVALID_STATE;
     
+    // Query micro-stepping resolution from MT[0] (motor driver parameters)
     int32_t microstep = 0;
-    esp_err_t err = stepper_motor_uim2852_query_param(motor, STEPPER_UIM2852_CW_PP, 
-                                                       STEPPER_UIM2852_PP_MICROSTEP, &microstep);
+    esp_err_t err = stepper_motor_uim2852_query_param(motor, STEPPER_UIM2852_CW_MT, 
+                                                       STEPPER_UIM2852_MT_MICROSTEP, &microstep);
     
-    if (err == ESP_OK && microstep > 0) {
-        motor->microstep_resolution = (uint8_t)microstep;
-        motor->pulses_per_rev = microstep * 200;
-        ESP_LOGI(TAG, "Node %u: microstep=%d, pulses_per_rev=%ld",
-            motor->config.node_id, motor->microstep_resolution, 
-            (long)motor->pulses_per_rev);
-    } else
-        ESP_LOGW(TAG, "Node %u: Failed to query microstep, using default 16",
-            motor->config.node_id);
+    if (err != ESP_OK || microstep <= 0) {
+        return (err == ESP_OK) ? ESP_ERR_INVALID_RESPONSE : err;
+    }
+
+    motor->microstep_resolution = (uint8_t)microstep;
+    motor->pulses_per_rev = microstep * 200;
+    
+    // Enable PTP positioning complete notification (IE[8]=1)
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ie_set(data, STEPPER_UIM2852_IE_PTP_COMPLETE, 1);
+    err = send_instruction(motor, STEPPER_UIM2852_CW_IE, data, dl);
+    if (err != ESP_OK) return err;
     
     // Set default motion parameters
     err = stepper_motor_uim2852_set_speed(motor, motor->config.default_speed);
@@ -107,8 +111,7 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor) {
     if (err != ESP_OK) return err;
     
     // Set emergency stop deceleration
-    uint8_t data[8];
-    uint8_t dl = stepper_uim2852_build_sd(data, motor->config.stop_decel);
+    dl = stepper_uim2852_build_sd(data, motor->config.stop_decel);
     err = send_instruction(motor, STEPPER_UIM2852_CW_SD, data, dl);
     
     return err;
@@ -125,7 +128,9 @@ esp_err_t stepper_motor_uim2852_enable(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_MO, data, dl);
     if (err == ESP_OK) {
         motor->driver_enabled = true;
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Motor enabled", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -138,7 +143,9 @@ esp_err_t stepper_motor_uim2852_disable(stepper_motor_uim2852_t *motor) {
     if (err == ESP_OK) {
         motor->driver_enabled = false;
         motor->motion_in_progress = false;
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Motor disabled", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -150,7 +157,9 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_ST, data, dl);
     if (err == ESP_OK) {
         motor->motion_in_progress = false;
-        ESP_LOGD(TAG, "Node %u: Stop commanded", motor->config.node_id);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
+        ESP_LOGI(TAG, "Node %u: Stop commanded", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -164,9 +173,13 @@ esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
     if (emergency_decel < motor->config.stop_decel) emergency_decel = UINT32_MAX; // overflow guard
     dl = stepper_uim2852_build_sd(data, emergency_decel);
     esp_err_t sd_err = send_instruction(motor, STEPPER_UIM2852_CW_SD, data, dl);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
     if (sd_err != ESP_OK) {
-        ESP_LOGW(TAG, "Node %u: Emergency SD failed: %s", motor->config.node_id, esp_err_to_name(sd_err));
+        ESP_LOGI(TAG, "Node %u: Emergency SD failed: %s", motor->config.node_id, esp_err_to_name(sd_err));
     }
+#else
+    (void)sd_err;
+#endif
     
     // Issue stop command
     dl = stepper_uim2852_build_st(data);
@@ -174,7 +187,9 @@ esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
     
     if (err == ESP_OK) {
         motor->motion_in_progress = false;
-        ESP_LOGW(TAG, "Node %u: Emergency stop!", motor->config.node_id);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+        ESP_LOGI(TAG, "Node %u: Emergency stop!", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -220,7 +235,10 @@ esp_err_t stepper_motor_uim2852_go_absolute(stepper_motor_uim2852_t *motor, int3
     
     if (err == ESP_OK) {
         motor->motion_in_progress = true;
-        ESP_LOGD(TAG, "Node %u: Moving to PA=%ld", motor->config.node_id, (long)position);
+        motor->target_position = position;
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
+        ESP_LOGI(TAG, "Node %u: Moving to PA=%ld", motor->config.node_id, (long)position);
+#endif
     }
     return err;
 }
@@ -244,7 +262,9 @@ esp_err_t stepper_motor_uim2852_go_relative(stepper_motor_uim2852_t *motor, int3
     
     if (err == ESP_OK) {
         motor->motion_in_progress = true;
-        ESP_LOGD(TAG, "Node %u: Moving PR=%ld", motor->config.node_id, (long)displacement);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
+        ESP_LOGI(TAG, "Node %u: Moving PR=%ld", motor->config.node_id, (long)displacement);
+#endif
     }
     return err;
 }
@@ -256,7 +276,9 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_OG, data, dl);
     if (err == ESP_OK) {
         motor->absolute_position = 0;
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Origin set", motor->config.node_id);
+#endif
     }
     return err;
 }
@@ -324,22 +346,26 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                         motor->motion_in_progress = false;
                     taskEXIT_CRITICAL(&motor->lock);
                     
-                    ESP_LOGD(TAG, "Node %u: MS[0] drv=%d stop=%d inpos=%d stall=%d",
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+                    ESP_LOGI(TAG, "Node %u: MS[0] drv=%d stop=%d inpos=%d stall=%d",
                         motor->config.node_id,
                         motor->status.driver_on,
                         motor->status.stopped,
                         motor->status.in_position,
                         motor->status.stall_detected);
+#endif
                 } else if (index == STEPPER_UIM2852_MS_SPEED_ABSPOS) {
                     taskENTER_CRITICAL(&motor->lock);
                     stepper_uim2852_parse_ms1(data, dl, &motor->current_speed, 
                         &motor->absolute_position);
                     taskEXIT_CRITICAL(&motor->lock);
                     
-                    ESP_LOGD(TAG, "Node %u: MS[1] speed=%ld pos=%ld",
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+                    ESP_LOGI(TAG, "Node %u: MS[1] speed=%ld pos=%ld",
                         motor->config.node_id,
                         (long)motor->current_speed,
                         (long)motor->absolute_position);
+#endif
                 }
             }
             break;
@@ -358,17 +384,24 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                         motor->status.in_position = true;
                         motor->absolute_position = notif.position;
                         taskEXIT_CRITICAL(&motor->lock);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
                         ESP_LOGI(TAG, "Node %u: PTP complete at pos=%ld",
                             motor->config.node_id, (long)notif.position);
+#endif
                     } else if (notif.type == STEPPER_UIM2852_ALARM_STALL) {
                         taskENTER_CRITICAL(&motor->lock);
                         motor->status.stall_detected = true;
                         motor->motion_in_progress = false;
                         taskEXIT_CRITICAL(&motor->lock);
-                        ESP_LOGW(TAG, "Node %u: STALL DETECTED!", motor->config.node_id);
-                    } else if (notif.is_alarm)
-                        ESP_LOGW(TAG, "Node %u: Alarm 0x%02X", 
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+                        ESP_LOGI(TAG, "Node %u: STALL DETECTED!", motor->config.node_id);
+#endif
+                    }
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+                    else if (notif.is_alarm)
+                        ESP_LOGI(TAG, "Node %u: Alarm 0x%02X", 
                             motor->config.node_id, notif.type);
+#endif
                     
                     // Call per-motor notification callback if set
                     if (motor->notify_callback) motor->notify_callback(motor, &notif);
@@ -400,6 +433,7 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
         case STEPPER_UIM2852_CW_PP:
         case STEPPER_UIM2852_CW_IC:
         case STEPPER_UIM2852_CW_IE:
+        case STEPPER_UIM2852_CW_MT:
         case STEPPER_UIM2852_CW_LM:
         case STEPPER_UIM2852_CW_QE:
             // Parameter response — unblock query_param if this matches the pending query
@@ -417,15 +451,19 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
                     motor->query_pending_cw = 0;
                     taskEXIT_CRITICAL(&motor->lock);
                     xSemaphoreGive(motor->query_sem);
-                    ESP_LOGD(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+                    ESP_LOGI(TAG, "Node %u: Param CW=0x%02X[%u] = %ld",
                         motor->config.node_id, cw_base, data[0], (long)val);
+#endif
                 }
             }
             break;
             
         default:
             // ACK for other commands
-            ESP_LOGD(TAG, "Node %u: ACK for CW=0x%02X", motor->config.node_id, cw_base);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+            ESP_LOGI(TAG, "Node %u: ACK for CW=0x%02X", motor->config.node_id, cw_base);
+#endif
             break;
     }
     
@@ -481,8 +519,10 @@ esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint
         taskENTER_CRITICAL(&motor->lock);
         motor->query_pending_cw = 0;
         taskEXIT_CRITICAL(&motor->lock);
-        ESP_LOGW(TAG, "Node %u: query_param CW=0x%02X[%u] timed out",
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+        ESP_LOGI(TAG, "Node %u: query_param CW=0x%02X[%u] timed out",
             motor->config.node_id, cw, index);
+#endif
         return ESP_ERR_TIMEOUT;
     }
     
@@ -497,11 +537,29 @@ esp_err_t stepper_motor_uim2852_set_param(stepper_motor_uim2852_t *motor, uint8_
     uint8_t data[8] = {0};
     data[0] = index;
     
-    // Pack 32-bit value in little-endian
-    data[1] = (uint8_t)(value & 0xFF);
-    data[2] = (uint8_t)((value >> 8) & 0xFF);
-    data[3] = (uint8_t)((value >> 16) & 0xFF);
-    data[4] = (uint8_t)((value >> 24) & 0xFF);
+    // Determine DL based on CW type per spec:
+    //   PP: DL=2 (u8 value)
+    //   IC, IE, MT, QE: DL=3 (u16 LE value)
+    //   LM: DL=5 (s32 LE value)
+    uint8_t cw_base = stepper_uim2852_cw_base(cw);
+    uint8_t dl;
     
-    return send_instruction(motor, cw, data, 5);
+    if (cw_base == STEPPER_UIM2852_CW_PP) {
+        data[1] = (uint8_t)(value & 0xFF);
+        dl = 2;
+    } else if (cw_base == STEPPER_UIM2852_CW_IC || cw_base == STEPPER_UIM2852_CW_IE ||
+               cw_base == STEPPER_UIM2852_CW_MT || cw_base == STEPPER_UIM2852_CW_QE) {
+        data[1] = (uint8_t)(value & 0xFF);
+        data[2] = (uint8_t)((value >> 8) & 0xFF);
+        dl = 3;
+    } else {
+        // LM and other 32-bit params
+        data[1] = (uint8_t)(value & 0xFF);
+        data[2] = (uint8_t)((value >> 8) & 0xFF);
+        data[3] = (uint8_t)((value >> 16) & 0xFF);
+        data[4] = (uint8_t)((value >> 24) & 0xFF);
+        dl = 5;
+    }
+    
+    return send_instruction(motor, cw, data, dl);
 }

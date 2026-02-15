@@ -31,7 +31,6 @@ extern "C" {
 //
 // Safety:
 //   - Provides wireless "dead man's switch" capability
-//   - Loss of signal should be treated as e-stop (fail-safe)
 //   - Range-limited to keep operator in visual contact with vehicle
 // ============================================================================
 

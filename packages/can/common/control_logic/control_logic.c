@@ -8,11 +8,24 @@
 
 #include <limits.h>
 
+static uint8_t sanitize_target_state(uint8_t target_state) {
+    switch (target_state) {
+        case NODE_STATE_READY:
+        case NODE_STATE_ENABLING:
+        case NODE_STATE_ACTIVE:
+            return target_state;
+        default:
+            // Safety target commands only use READY/ENABLING/ACTIVE.
+            // Treat all other values as READY (safe retreat).
+            return NODE_STATE_READY;
+    }
+}
+
 bool control_check_preconditions(const precondition_inputs_t *inputs) {
     if (!inputs) return false;
 
     // Must be in Forward
-    if (inputs->fr_state != CONTROL_FR_FORWARD) return false;
+    if (inputs->fr_state != FR_STATE_FORWARD) return false;
 
     // Pedal must NOT be pressed
     if (inputs->pedal_pressed) return false;
@@ -44,7 +57,7 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
         // Clamp to valid throttle range [0, 7]
         if (r.new_level < 0) r.new_level = 0;
         if (r.new_level > 7) r.new_level = 7;
-        r.changed = true;
+        r.changed = (r.new_level != inputs->current);
     }
 
     return r;
@@ -56,6 +69,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         .new_state = current_state,
         .new_fault_code = current_fault,
         .override_reason = OVERRIDE_REASON_NONE,
+        .disable_reason = CONTROL_DISABLE_REASON_NONE,
         .heartbeat_flags = 0,
         .actions = CONTROL_ACTION_NONE,
         .throttle_level = 0,
@@ -71,19 +85,22 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
 
     if (!inputs) return r;
 
+    uint8_t target_state = sanitize_target_state(inputs->target_state);
+
     // Carry forward dedup trackers and timing by default
     r.new_last_steering = inputs->last_steering_sent;
     r.new_last_braking = inputs->last_braking_sent;
     r.throttle_level = inputs->throttle_current;
     r.throttle_change_ms = inputs->last_throttle_change_ms;
     r.enable_start_ms = inputs->enable_start_ms;
+    r.enable_work_done = inputs->enable_work_done;
 
     // Check for motor fault from CAN RX task (one-shot)
     if (inputs->motor_fault_code != NODE_FAULT_NONE &&
         current_fault == NODE_FAULT_NONE) {
         if (current_state == NODE_STATE_ACTIVE) {
-            r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
-            r.override_reason = OVERRIDE_REASON_NONE;
+            r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+            r.disable_reason = CONTROL_DISABLE_REASON_MOTOR_FAULT;
         } else if (current_state == NODE_STATE_ENABLING) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
         }
@@ -98,8 +115,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
     // Check for F/R INVALID sensor reading
     if (inputs->fr_is_invalid && current_fault != NODE_FAULT_SENSOR_INVALID) {
         if (current_state == NODE_STATE_ACTIVE) {
-            r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
-            r.override_reason = OVERRIDE_REASON_FR_CHANGED;
+            r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+            r.disable_reason = CONTROL_DISABLE_REASON_SENSOR_INVALID;
         } else if (current_state == NODE_STATE_ENABLING) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
         }
@@ -118,7 +135,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
 
         case NODE_STATE_READY: {
             // Safety commands us to start enabling?
-            if (inputs->target_state >= NODE_STATE_ENABLING) {
+            if (target_state >= NODE_STATE_ENABLING) {
                 precondition_inputs_t pre = {
                     .fr_state = inputs->fr_state,
                     .pedal_pressed = inputs->pedal_pressed,
@@ -129,6 +146,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                     r.new_state = NODE_STATE_ENABLING;
                     r.actions |= CONTROL_ACTION_START_ENABLE;
                     r.enable_start_ms = inputs->now_ms;
+                    r.enable_work_done = false;
                     r.throttle_level = 0;
                     r.throttle_change_ms = inputs->now_ms;
                 }
@@ -138,31 +156,37 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
 
         case NODE_STATE_ENABLING: {
             // Safety retreated? Abort enable.
-            if (inputs->target_state < NODE_STATE_ENABLING) {
+            if (target_state < NODE_STATE_ENABLING) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.enable_work_done = false;
                 break;
             }
             // Pedal pressed during enable? Abort.
             if (inputs->pedal_pressed) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.enable_work_done = false;
                 break;
             }
             // FR no longer forward? Abort.
-            if (inputs->fr_state != CONTROL_FR_FORWARD) {
+            if (inputs->fr_state != FR_STATE_FORWARD) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.enable_work_done = false;
                 break;
             }
 
             // Check if enable work is done (timer expired)
             if ((inputs->now_ms - inputs->enable_start_ms) >= inputs->enable_sequence_ms) {
-                // Enable hardware is ready
-                r.actions |= CONTROL_ACTION_COMPLETE_ENABLE;
+                // Only fire COMPLETE_ENABLE action once per enable sequence
+                if (!inputs->enable_work_done) {
+                    r.actions |= CONTROL_ACTION_COMPLETE_ENABLE;
+                }
+                r.enable_work_done = true;
 
                 // If Safety already says ACTIVE, go directly to ACTIVE
-                if (inputs->target_state >= NODE_STATE_ACTIVE) {
+                if (target_state >= NODE_STATE_ACTIVE) {
                     r.new_state = NODE_STATE_ACTIVE;
                     r.override_reason = OVERRIDE_REASON_NONE;
                 } else {
@@ -177,11 +201,13 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         }
 
         case NODE_STATE_ACTIVE: {
-            // Safety retreated? Disable.
-            if (inputs->target_state < NODE_STATE_ACTIVE) {
-                r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
-                r.override_reason = OVERRIDE_REASON_NONE;
-                r.new_state = NODE_STATE_OVERRIDE;
+            // Safety retreated? Disable actuators and return to READY.
+            // This is NOT an override (human intervention) — Safety commanded
+            // the retreat, so we go directly to READY rather than OVERRIDE.
+            if (target_state < NODE_STATE_ACTIVE) {
+                r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+                r.disable_reason = CONTROL_DISABLE_REASON_SAFETY_RETREAT;
+                r.new_state = NODE_STATE_READY;
                 r.throttle_level = 0;
                 r.new_last_steering = INT16_MIN;
                 r.new_last_braking = INT16_MIN;
@@ -197,9 +223,29 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                 r.new_last_braking = INT16_MIN;
                 break;
             }
-            if (inputs->fr_state != CONTROL_FR_FORWARD) {
+            if (inputs->fr_state != FR_STATE_FORWARD) {
                 r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
                 r.override_reason = OVERRIDE_REASON_FR_CHANGED;
+                r.new_state = NODE_STATE_OVERRIDE;
+                r.throttle_level = 0;
+                r.new_last_steering = INT16_MIN;
+                r.new_last_braking = INT16_MIN;
+                break;
+            }
+            // Steering position error (external force on steering column)
+            if (inputs->steering_position_error) {
+                r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
+                r.override_reason = OVERRIDE_REASON_STEERING;
+                r.new_state = NODE_STATE_OVERRIDE;
+                r.throttle_level = 0;
+                r.new_last_steering = INT16_MIN;
+                r.new_last_braking = INT16_MIN;
+                break;
+            }
+            // Braking position error (external force on brake pedal)
+            if (inputs->braking_position_error) {
+                r.actions |= CONTROL_ACTION_TRIGGER_OVERRIDE;
+                r.override_reason = OVERRIDE_REASON_BRAKING;
                 r.new_state = NODE_STATE_OVERRIDE;
                 r.throttle_level = 0;
                 r.new_last_steering = INT16_MIN;
@@ -243,8 +289,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
 
             // Recover to READY when conditions clear
             // Safety will re-advance us through the state machine
-            if (inputs->target_state >= NODE_STATE_READY &&
-                inputs->fr_state == CONTROL_FR_FORWARD &&
+            if (target_state >= NODE_STATE_READY &&
+                inputs->fr_state == FR_STATE_FORWARD &&
                 inputs->pedal_rearmed) {
                 r.new_state = NODE_STATE_READY;
                 r.override_reason = OVERRIDE_REASON_NONE;

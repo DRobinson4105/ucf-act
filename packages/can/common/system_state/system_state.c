@@ -15,9 +15,12 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs) {
     if (!inputs) return r;
 
     uint8_t current = inputs->current_target;
+    bool autonomy_halt = ((current == NODE_STATE_ENABLING || current == NODE_STATE_ACTIVE) &&
+                          !inputs->autonomy_hold);
 
     // ----------------------------------------------------------------
     // Safety check: any negative condition forces retreat to READY
+    // (including Planner autonomy-halt while ENABLING/ACTIVE)
     // ----------------------------------------------------------------
     if (inputs->estop_active ||
         !inputs->planner_alive ||
@@ -25,7 +28,8 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs) {
         inputs->planner_state == NODE_STATE_FAULT ||
         inputs->control_state == NODE_STATE_FAULT ||
         inputs->planner_state == NODE_STATE_OVERRIDE ||
-        inputs->control_state == NODE_STATE_OVERRIDE) {
+        inputs->control_state == NODE_STATE_OVERRIDE ||
+        autonomy_halt) {
 
         r.new_target = NODE_STATE_READY;
         r.target_changed = (current != NODE_STATE_READY);
@@ -43,9 +47,11 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs) {
             break;
 
         case NODE_STATE_READY:
-            // Advance to ENABLING when both nodes are READY
+            // Advance to ENABLING when both nodes are READY and
+            // Planner/Orin has requested autonomy enable
             if (inputs->planner_state == NODE_STATE_READY &&
-                inputs->control_state == NODE_STATE_READY) {
+                inputs->control_state == NODE_STATE_READY &&
+                inputs->autonomy_request) {
                 r.new_target = NODE_STATE_ENABLING;
                 r.target_changed = true;
             } else {

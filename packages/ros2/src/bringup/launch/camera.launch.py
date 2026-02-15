@@ -2,7 +2,7 @@ import os.path as osp
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, TextSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -27,17 +27,11 @@ def generate_launch_description():
         Node(
             package="usb_cam",
             executable="usb_cam_node_exe",
-            namespace=[
-              camera,
-              TextSubstitution(text="_cam")
-            ],
+            namespace=camera,
             name="usb_cam",
             parameters=[params, {
                 "video_device": device,
-                "frame_id": [
-                  camera,
-                  TextSubstitution(text="_cam")
-                ],
+                "frame_id": camera,
             }],
             output="screen",
         )

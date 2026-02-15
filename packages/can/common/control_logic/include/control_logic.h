@@ -22,20 +22,11 @@ extern "C" {
 #endif
 
 // ============================================================================
-// Forward/Reverse state (mirrors override_sensors enum)
-// ============================================================================
-
-#define CONTROL_FR_NEUTRAL  0
-#define CONTROL_FR_FORWARD  1
-#define CONTROL_FR_REVERSE  2
-#define CONTROL_FR_INVALID  3
-
-// ============================================================================
 // Enable Preconditions
 // ============================================================================
 
 typedef struct {
-    uint8_t fr_state;           // CONTROL_FR_* value
+    uint8_t fr_state;           // FR_STATE_* from can_protocol.hh
     bool pedal_pressed;         // true if pedal above threshold
     bool pedal_rearmed;         // true if pedal below threshold for 500ms
     uint8_t fault_code;         // NODE_FAULT_* from can_protocol.hh
@@ -88,7 +79,14 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 #define CONTROL_ACTION_ABORT_ENABLE     0x0004  // Cancel enable (relay off, mux disable)
 #define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008  // Emergency disable all actuators
 #define CONTROL_ACTION_ATTEMPT_RECOVERY 0x0010  // Try fault recovery
-#define CONTROL_ACTION_APPLY_THROTTLE   0x0020  // Update DG408 mux to new throttle level
+#define CONTROL_ACTION_APPLY_THROTTLE   0x0020  // Update DG408DJZ mux to new throttle level
+#define CONTROL_ACTION_DISABLE_AUTONOMY 0x0040  // Disable actuators (non-override retreat/fault)
+
+// Reasons for CONTROL_ACTION_DISABLE_AUTONOMY.
+#define CONTROL_DISABLE_REASON_NONE           0x00
+#define CONTROL_DISABLE_REASON_SAFETY_RETREAT 0x01
+#define CONTROL_DISABLE_REASON_MOTOR_FAULT    0x02
+#define CONTROL_DISABLE_REASON_SENSOR_INVALID 0x03
 
 typedef struct {
     // Safety system command
@@ -101,15 +99,20 @@ typedef struct {
     uint8_t motor_fault_code;           // one-shot from CAN RX (NODE_FAULT_*)
 
     // Sensor state
-    uint8_t fr_state;                   // CONTROL_FR_*
+    uint8_t fr_state;                   // FR_STATE_*
     bool pedal_pressed;
     bool pedal_rearmed;
     bool fr_is_invalid;                 // true if FR reads as INVALID
+
+    // Stepper position error (computed by caller from motor feedback)
+    bool steering_position_error;       // true if steering position diverged beyond threshold
+    bool braking_position_error;        // true if braking position diverged beyond threshold
 
     // Timing
     uint32_t now_ms;
     uint32_t enable_start_ms;           // when enable sequence began
     uint32_t enable_sequence_ms;        // required hold time to complete enable
+    bool enable_work_done;              // true after COMPLETE_ENABLE has fired once
 
     // Throttle slew
     int8_t throttle_current;
@@ -126,6 +129,7 @@ typedef struct {
     uint8_t new_state;              // NODE_STATE_* from can_protocol.hh
     uint8_t new_fault_code;         // NODE_FAULT_* (0 = none)
     uint8_t override_reason;        // OVERRIDE_REASON_* (set when triggering override)
+    uint8_t disable_reason;         // CONTROL_DISABLE_REASON_* (non-override disable)
 
     // Heartbeat flags to send
     uint8_t heartbeat_flags;        // HEARTBEAT_FLAG_* to include in next heartbeat
@@ -147,6 +151,7 @@ typedef struct {
 
     // Recovery tracking
     uint32_t enable_start_ms;       // updated enable start time
+    bool enable_work_done;          // true after COMPLETE_ENABLE has fired once
 } control_step_result_t;
 
 /**
@@ -155,11 +160,14 @@ typedef struct {
  * Pure function: reads current state + inputs, produces next state + action list.
  * The caller executes the hardware side effects indicated by the actions bitmask.
  *
- * Control reacts to Safety's target_state:
- *   - target_state >= ENABLING && preconditions met -> begin ENABLING
- *   - enable work done -> set enable_complete flag, stay ENABLING
- *   - target_state == ACTIVE -> transition to ACTIVE
- *   - target_state < current -> retreat (override/disable)
+ * Control reacts to Safety's target_state (READY/ENABLING/ACTIVE).
+ * Any other target value is treated as READY for a safe retreat.
+ *
+ * Live-state behavior:
+ *   - INIT -> READY -> ENABLING -> ACTIVE
+ *   - ACTIVE -> OVERRIDE -> READY
+ *   - Any live state can enter FAULT
+ *   - FAULT returns to READY when faults clear (handled by caller health checks)
  *
  * @param current_state  Current NODE_STATE_* value
  * @param current_fault  Current fault code

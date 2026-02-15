@@ -35,6 +35,7 @@ extern "C" {
 
 #define HEARTBEAT_MONITOR_MAX_NODES   8    // Maximum nodes per monitor
 #define HEARTBEAT_MONITOR_TAG_MAX_LEN 32   // Maximum length of monitor tag
+#define HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN 16  // Maximum tracked node name length
 
 // ============================================================================
 // Data Structures
@@ -49,7 +50,7 @@ extern "C" {
 //   active:        true if node is registered
 //   alive:         true if node is responding within timeout
 typedef struct {
-    const char *name;
+    char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN];
     TickType_t timeout_ticks;
     TickType_t last_seen;
     uint8_t last_sequence;
@@ -71,7 +72,7 @@ typedef struct {
 } heartbeat_monitor_t;
 
 // heartbeat_monitor_config_t - initialization configuration
-//   name: Base name for monitor (e.g., "SAFETY" -> "SAFETY_HB_MONITOR")
+//   name: Optional base name for monitor tag (e.g., "SAFETY" -> "SAFETY_HB")
 typedef struct {
     const char *name;
 } heartbeat_monitor_config_t;

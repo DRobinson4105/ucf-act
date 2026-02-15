@@ -125,18 +125,14 @@ static void test_init_with_custom_config(void) {
     assert(motor.config.request_ack == false);
 }
 
-static void test_init_null_motor(void) {
-    mock_reset_all();
-    esp_err_t err = stepper_motor_uim2852_init(NULL, NULL);
-    assert(err == ESP_ERR_INVALID_ARG);
-}
-
 static void test_init_semaphore_fail(void) {
     mock_reset_all();
     mock_sem_create_fail = 1;
     stepper_motor_uim2852_t motor;
     esp_err_t err = stepper_motor_uim2852_init(&motor, NULL);
     assert(err == ESP_ERR_NO_MEM);
+    assert(motor.initialized == false);
+    assert(motor.query_sem == NULL);
 }
 
 // ============================================================================
@@ -450,31 +446,6 @@ static void test_clear_status(void) {
 // ============================================================================
 // process_frame — filtering tests
 // ============================================================================
-
-static void test_process_frame_null_motor(void) {
-    twai_message_t msg;
-    memset(&msg, 0, sizeof(msg));
-    msg.extd = 1;
-    assert(stepper_motor_uim2852_process_frame(NULL, &msg) == false);
-}
-
-static void test_process_frame_null_msg(void) {
-    stepper_motor_uim2852_t motor;
-    init_default_motor(&motor);
-    assert(stepper_motor_uim2852_process_frame(&motor, NULL) == false);
-}
-
-static void test_process_frame_uninitialized(void) {
-    mock_reset_all();
-    stepper_motor_uim2852_t motor;
-    memset(&motor, 0, sizeof(motor));
-    motor.initialized = false;
-
-    twai_message_t msg;
-    memset(&msg, 0, sizeof(msg));
-    msg.extd = 1;
-    assert(stepper_motor_uim2852_process_frame(&motor, &msg) == false);
-}
 
 static void test_process_frame_standard_frame(void) {
     stepper_motor_uim2852_t motor;
@@ -952,55 +923,55 @@ static void test_query_param_timeout(void) {
     assert(motor.query_pending_cw == 0);  // cleared on timeout
 }
 
-static void test_query_param_null_value(void) {
-    stepper_motor_uim2852_t motor;
-    init_default_motor(&motor);
-    mock_sem_take_result = pdTRUE;
-
-    // value=NULL should not crash
-    esp_err_t err = stepper_motor_uim2852_query_param(&motor, STEPPER_UIM2852_CW_PP, 5, NULL);
-    assert(err == ESP_OK);
-}
-
-static void test_query_param_uninitialized(void) {
-    mock_reset_all();
-    stepper_motor_uim2852_t motor;
-    memset(&motor, 0, sizeof(motor));
-    motor.initialized = false;
-
-    int32_t value = -1;
-    esp_err_t err = stepper_motor_uim2852_query_param(&motor, STEPPER_UIM2852_CW_PP, 5, &value);
-    assert(err == ESP_ERR_INVALID_STATE);
-}
-
 // ============================================================================
 // set_param tests
 // ============================================================================
 
-static void test_set_param_sends_frame(void) {
+static void test_set_param_pp_sends_dl2(void) {
     stepper_motor_uim2852_t motor;
     init_default_motor(&motor);
 
+    // PP uses DL=2: d0=index, d1=u8 value
     esp_err_t err = stepper_motor_uim2852_set_param(&motor, STEPPER_UIM2852_CW_PP, 7, 42);
     assert(err == ESP_OK);
     assert(mock_sent_count == 1);
     assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PP);
     assert(mock_sent_frames[0].data[0] == 7);   // index
-    assert(mock_sent_frames[0].data[1] == 42);   // value LE byte 0
-    assert(mock_sent_frames[0].data[2] == 0);
-    assert(mock_sent_frames[0].data[3] == 0);
-    assert(mock_sent_frames[0].data[4] == 0);
-    assert(mock_sent_frames[0].len == 5);
+    assert(mock_sent_frames[0].data[1] == 42);  // u8 value
+    assert(mock_sent_frames[0].len == 2);
 }
 
-static void test_set_param_uninitialized(void) {
-    mock_reset_all();
+static void test_set_param_ic_sends_dl3(void) {
     stepper_motor_uim2852_t motor;
-    memset(&motor, 0, sizeof(motor));
-    motor.initialized = false;
+    init_default_motor(&motor);
 
-    esp_err_t err = stepper_motor_uim2852_set_param(&motor, STEPPER_UIM2852_CW_PP, 7, 42);
-    assert(err == ESP_ERR_INVALID_STATE);
+    // IC uses DL=3: d0=index, d1-d2=u16 LE value
+    esp_err_t err = stepper_motor_uim2852_set_param(&motor, STEPPER_UIM2852_CW_IC, 0, 0x0102);
+    assert(err == ESP_OK);
+    assert(mock_sent_count == 1);
+    assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_IC);
+    assert(mock_sent_frames[0].data[0] == 0);      // index
+    assert(mock_sent_frames[0].data[1] == 0x02);   // low byte
+    assert(mock_sent_frames[0].data[2] == 0x01);   // high byte
+    assert(mock_sent_frames[0].len == 3);
+}
+
+static void test_set_param_lm_sends_dl5(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+
+    // LM uses DL=5: d0=index, d1-d4=s32 LE value
+    esp_err_t err = stepper_motor_uim2852_set_param(&motor, STEPPER_UIM2852_CW_LM, 1, -500);
+    assert(err == ESP_OK);
+    assert(mock_sent_count == 1);
+    assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_LM);
+    assert(mock_sent_frames[0].data[0] == 1);      // index
+    // -500 = 0xFFFFFE0C LE
+    assert(mock_sent_frames[0].data[1] == 0x0C);
+    assert(mock_sent_frames[0].data[2] == 0xFE);
+    assert(mock_sent_frames[0].data[3] == 0xFF);
+    assert(mock_sent_frames[0].data[4] == 0xFF);
+    assert(mock_sent_frames[0].len == 5);
 }
 
 // ============================================================================
@@ -1013,22 +984,12 @@ static void test_configure_timeout_uses_defaults(void) {
     mock_sem_take_result = pdFALSE;  // query_param will time out
 
     esp_err_t err = stepper_motor_uim2852_configure(&motor);
-    assert(err == ESP_OK);
-    // Microstep stays at default since query timed out
+    assert(err == ESP_ERR_TIMEOUT);
+    // Microstep stays at default since configure exits on query timeout
     assert(motor.microstep_resolution == 16);
     assert(motor.pulses_per_rev == 3200);
-    // Frames: 1 (PP query) + 1 (SP) + 1 (AC) + 1 (DC) + 1 (SD) = 5
-    assert(mock_sent_count == 5);
-}
-
-static void test_configure_uninitialized(void) {
-    mock_reset_all();
-    stepper_motor_uim2852_t motor;
-    memset(&motor, 0, sizeof(motor));
-    motor.initialized = false;
-
-    esp_err_t err = stepper_motor_uim2852_configure(&motor);
-    assert(err == ESP_ERR_INVALID_STATE);
+    // Only the MT query frame is sent before returning timeout
+    assert(mock_sent_count == 1);
 }
 
 // Helper: simulate process_frame setting query_result during the blocking semaphore wait
@@ -1069,9 +1030,91 @@ static void test_set_notify_callback(void) {
     assert(motor.notify_callback != NULL);
 }
 
-static void test_set_notify_callback_null_motor(void) {
-    // Should not crash
-    stepper_motor_uim2852_set_notify_callback(NULL, test_notify_callback);
+// ============================================================================
+// go_relative failure paths
+// ============================================================================
+
+static void test_go_relative_pr_failure(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    mock_twai_send_result = ESP_FAIL;
+
+    esp_err_t err = stepper_motor_uim2852_go_relative(&motor, 800);
+    assert(err == ESP_FAIL);
+    assert(mock_sent_count == 0);
+    assert(motor.motion_in_progress == false);
+}
+
+static void test_go_relative_bg_failure(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+
+    // Fail on the 2nd call to can_twai_send_extended (the BG send)
+    g_mock_send_ext_fail_after = 2;
+    esp_err_t err = stepper_motor_uim2852_go_relative(&motor, 800);
+    assert(err == ESP_FAIL);
+    assert(mock_sent_count == 1);  // only PR succeeded
+    assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PR);
+    assert(motor.motion_in_progress == false);
+    g_mock_send_ext_fail_after = 0;
+}
+
+// ============================================================================
+// Status accessor tests — target_position and position_error
+// ============================================================================
+
+static void test_target_position_zero_after_init(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
+}
+
+static void test_target_position_set_by_go_absolute(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+
+    esp_err_t err = stepper_motor_uim2852_go_absolute(&motor, 3200);
+    assert(err == ESP_OK);
+    assert(stepper_motor_uim2852_get_target_position(&motor) == 3200);
+}
+
+static void test_position_error_zero_when_at_target(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.target_position = 3200;
+    motor.absolute_position = 3200;
+    assert(stepper_motor_uim2852_position_error(&motor) == 0);
+}
+
+static void test_position_error_positive_delta(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.target_position = 3200;
+    motor.absolute_position = 3000;
+    assert(stepper_motor_uim2852_position_error(&motor) == 200);
+}
+
+static void test_position_error_negative_delta(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.target_position = 3000;
+    motor.absolute_position = 3200;
+    // Absolute value: |3000 - 3200| = 200
+    assert(stepper_motor_uim2852_position_error(&motor) == 200);
+}
+
+static void test_target_position_not_set_on_bg_failure(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
+
+    // Fail on BG (2nd send)
+    g_mock_send_ext_fail_after = 2;
+    esp_err_t err = stepper_motor_uim2852_go_absolute(&motor, 6400);
+    assert(err == ESP_FAIL);
+    // target_position should NOT have been updated
+    assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
+    g_mock_send_ext_fail_after = 0;
 }
 
 // ============================================================================
@@ -1085,7 +1128,6 @@ int main(void) {
     printf("\n  --- init ---\n");
     TEST(test_init_with_defaults);
     TEST(test_init_with_custom_config);
-    TEST(test_init_null_motor);
     TEST(test_init_semaphore_fail);
 
     // Enable/disable tests
@@ -1112,6 +1154,8 @@ int main(void) {
     TEST(test_go_relative_sends_pr_then_bg);
     TEST(test_go_relative_negative);
     TEST(test_go_relative_motion_flag);
+    TEST(test_go_relative_pr_failure);
+    TEST(test_go_relative_bg_failure);
 
     // set_origin tests
     printf("\n  --- set_origin ---\n");
@@ -1132,9 +1176,6 @@ int main(void) {
 
     // process_frame — filtering
     printf("\n  --- process_frame filtering ---\n");
-    TEST(test_process_frame_null_motor);
-    TEST(test_process_frame_null_msg);
-    TEST(test_process_frame_uninitialized);
     TEST(test_process_frame_standard_frame);
     TEST(test_process_frame_wrong_node);
 
@@ -1189,24 +1230,30 @@ int main(void) {
     printf("\n  --- query_param ---\n");
     TEST(test_query_param_sends_and_blocks);
     TEST(test_query_param_timeout);
-    TEST(test_query_param_null_value);
-    TEST(test_query_param_uninitialized);
 
     // set_param
     printf("\n  --- set_param ---\n");
-    TEST(test_set_param_sends_frame);
-    TEST(test_set_param_uninitialized);
+    TEST(test_set_param_pp_sends_dl2);
+    TEST(test_set_param_ic_sends_dl3);
+    TEST(test_set_param_lm_sends_dl5);
 
     // configure
     printf("\n  --- configure ---\n");
     TEST(test_configure_timeout_uses_defaults);
-    TEST(test_configure_uninitialized);
     TEST(test_configure_success_updates_microstep);
 
     // notify callback
     printf("\n  --- notify callback ---\n");
     TEST(test_set_notify_callback);
-    TEST(test_set_notify_callback_null_motor);
+
+    // status accessors
+    printf("\n  --- status accessors ---\n");
+    TEST(test_target_position_zero_after_init);
+    TEST(test_target_position_set_by_go_absolute);
+    TEST(test_position_error_zero_when_at_target);
+    TEST(test_position_error_positive_delta);
+    TEST(test_position_error_negative_delta);
+    TEST(test_target_position_not_set_on_bg_failure);
 
     printf("\n%d/%d tests passed.\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

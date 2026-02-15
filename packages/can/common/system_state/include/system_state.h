@@ -2,10 +2,10 @@
  * @file system_state.h
  * @brief Pure decision logic for Safety ESP32 system state machine.
  *
- * The Safety ESP32 is the system state authority — it is the only node that
- * can advance state forward (READY -> ENABLING -> ACTIVE). Any node can
- * enter OVERRIDE or FAULT locally for immediate safety; Safety reacts by
- * pulling the target state back to READY.
+ * The Safety ESP32 is the system target-state authority — it advances only
+ * READY -> ENABLING -> ACTIVE. Any node can report OVERRIDE or FAULT as a
+ * local live state for immediate safety; Safety reacts by pulling target back
+ * to READY.
  *
  * This module is a pure function library with no hardware dependencies,
  * allowing comprehensive unit testing on the host.
@@ -41,6 +41,13 @@ typedef struct {
     // Enable completion flags (from heartbeat flags field)
     bool planner_enable_complete;
     bool control_enable_complete;
+
+    // Planner/Orin autonomy-enable request gate (from Planner heartbeat flags)
+    bool autonomy_request;
+
+    // Planner/Orin autonomy hold level (from Planner heartbeat flags level).
+    // If this drops while target is ENABLING or ACTIVE, Safety retreats target to READY.
+    bool autonomy_hold;
 } system_state_inputs_t;
 
 // ============================================================================
@@ -66,9 +73,11 @@ typedef struct {
  * what the new target state should be.
  *
  * Transitions:
- *   - READY -> ENABLING: both nodes READY, no e-stop, both alive
+ *   - READY -> ENABLING: both nodes READY, no e-stop, both alive,
+ *                        Planner autonomy request asserted
  *   - ENABLING -> ACTIVE: both nodes ENABLING, both enable_complete, no e-stop
- *   - ANY -> READY: e-stop active, node fault, node override, node timeout
+ *   - ENABLING/ACTIVE -> READY: Planner autonomy hold dropped (halt command)
+ *   - ANY target -> READY: e-stop active, node fault, node override, node timeout
  *   - INIT -> READY: always (Safety starts in INIT, advances to READY once)
  *
  * @param inputs  All state machine inputs

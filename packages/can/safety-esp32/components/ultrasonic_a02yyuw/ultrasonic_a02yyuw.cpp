@@ -15,7 +15,7 @@
 
 namespace {
 
-static const char *TAG = "ULTRASONIC_A02YYUW";
+static const char *TAG = "ULTRASONIC";
 
 // ============================================================================
 // Configuration
@@ -35,6 +35,8 @@ static portMUX_TYPE s_ultrasonic_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint16_t s_last_distance_mm = 0;
 static TickType_t s_last_update_tick = 0;
 static bool s_has_measurement = false;
+static TaskHandle_t s_rx_task = nullptr;
+static bool s_uart_installed = false;
 
 // Internal copy of config - ensures background task always has a valid pointer
 // regardless of how the caller allocated the original config struct
@@ -96,22 +98,19 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
     const ultrasonic_a02yyuw_config_t *config = static_cast<const ultrasonic_a02yyuw_config_t *>(arg);
     uint8_t buffer[UART_BUFFER_SIZE];
     uint16_t distance_mm = 0;
-    uint32_t no_data_count = 0;
-    uint32_t bad_parse_count = 0;
 
+#ifdef CONFIG_LOG_INPUT_ULTRASONIC_RX
     ESP_LOGI(TAG, "UART RX task started (UART%d, TX=GPIO%d, RX=GPIO%d, %d baud)",
              config->uart_num, config->tx_gpio, config->rx_gpio, config->baud_rate);
+#endif
 
     while (true) {
         int read_len = uart_read_bytes(config->uart_num, buffer, sizeof(buffer), UART_READ_TIMEOUT);
         
         if (read_len > 0) {
-            // Reset no-data counter when we receive bytes
-            no_data_count = 0;
-            
-            // Log raw bytes for debugging (first 8 bytes max)
+#ifdef CONFIG_LOG_INPUT_ULTRASONIC_RX
             if (read_len <= 8) {
-                ESP_LOGD(TAG, "RX %d bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+                ESP_LOGI(TAG, "RX %d bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
                          read_len,
                          read_len > 0 ? buffer[0] : 0,
                          read_len > 1 ? buffer[1] : 0,
@@ -122,28 +121,23 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
                          read_len > 6 ? buffer[6] : 0,
                          read_len > 7 ? buffer[7] : 0);
             } else {
-                ESP_LOGD(TAG, "RX %d bytes (showing first 8): %02X %02X %02X %02X %02X %02X %02X %02X ...",
+                ESP_LOGI(TAG, "RX %d bytes (showing first 8): %02X %02X %02X %02X %02X %02X %02X %02X ...",
                          read_len, buffer[0], buffer[1], buffer[2], buffer[3],
                          buffer[4], buffer[5], buffer[6], buffer[7]);
             }
-            
+#endif
+
             if (ultrasonic_a02yyuw_parse_stream(buffer, read_len, &distance_mm)) {
                 ultrasonic_a02yyuw_update_distance(distance_mm);
-                ESP_LOGD(TAG, "Distance: %u mm", distance_mm);
-                bad_parse_count = 0;
-            } else {
-                bad_parse_count++;
-                if (bad_parse_count % 10 == 1) {
-                    ESP_LOGD(TAG, "Parse failed (count=%lu) - looking for 0xFF header", bad_parse_count);
-                }
+#ifdef CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE
+                ESP_LOGI(TAG, "Distance: %u mm", distance_mm);
+#endif
             }
-        } else {
-            no_data_count++;
-            // Log warning every 5 seconds (50 * 100ms timeout)
-            if (no_data_count == 1 || no_data_count % 50 == 0) {
-                ESP_LOGW(TAG, "No data received (count=%lu) - check wiring: SensorTX→GPIO%d",
-                         no_data_count, config->rx_gpio);
+#ifdef CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS
+            else {
+                ESP_LOGI(TAG, "Parse failed - no valid 0xFF frame in %d bytes", read_len);
             }
+#endif
         }
     }
 }
@@ -157,10 +151,7 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
 esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
-    ESP_LOGI(TAG, "Initializing A02YYUW ultrasonic sensor");
-    ESP_LOGI(TAG, "  UART%d, TX=GPIO%d (to sensor RX), RX=GPIO%d (from sensor TX)",
-             config->uart_num, config->tx_gpio, config->rx_gpio);
-    ESP_LOGI(TAG, "  Baud rate: %d", config->baud_rate);
+    ultrasonic_a02yyuw_deinit();
 
     uart_config_t uart_config = {
         .baud_rate = config->baud_rate,
@@ -175,10 +166,12 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
 
     esp_err_t err = uart_driver_install(config->uart_num, UART_BUFFER_SIZE, UART_BUFFER_SIZE, 0, nullptr, 0);
     if (err != ESP_OK) return err;
+    s_uart_installed = true;
 
     err = uart_param_config(config->uart_num, &uart_config);
     if (err != ESP_OK) {
         uart_driver_delete(config->uart_num);
+        s_uart_installed = false;
         return err;
     }
 
@@ -189,6 +182,7 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
                        UART_PIN_NO_CHANGE);
     if (err != ESP_OK) {
         uart_driver_delete(config->uart_num);
+        s_uart_installed = false;
         return err;
     }
 
@@ -196,10 +190,44 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     s_config = *config;
 
     // Start background task to continuously read sensor (uses internal config copy)
-    xTaskCreate(ultrasonic_a02yyuw_uart_rx_task, "ultrasonic_a02yyuw_rx", RX_TASK_STACK, (void *)&s_config, RX_TASK_PRIO, nullptr);
-    
-    ESP_LOGI(TAG, "Initialization complete - waiting for sensor data");
+    BaseType_t task_ok = xTaskCreate(ultrasonic_a02yyuw_uart_rx_task,
+                                     "ultrasonic_a02yyuw_rx",
+                                     RX_TASK_STACK,
+                                     (void *)&s_config,
+                                     RX_TASK_PRIO,
+                                     &s_rx_task);
+    if (task_ok != pdPASS) {
+        uart_driver_delete(config->uart_num);
+        s_uart_installed = false;
+        s_rx_task = nullptr;
+        return ESP_FAIL;
+    }
+
+    taskENTER_CRITICAL(&s_ultrasonic_lock);
+    s_has_measurement = false;
+    s_last_distance_mm = 0;
+    s_last_update_tick = 0;
+    taskEXIT_CRITICAL(&s_ultrasonic_lock);
+
     return ESP_OK;
+}
+
+void ultrasonic_a02yyuw_deinit(void) {
+    if (s_rx_task) {
+        vTaskDelete(s_rx_task);
+        s_rx_task = nullptr;
+    }
+
+    if (s_uart_installed) {
+        (void)uart_driver_delete(s_config.uart_num);
+        s_uart_installed = false;
+    }
+
+    taskENTER_CRITICAL(&s_ultrasonic_lock);
+    s_has_measurement = false;
+    s_last_distance_mm = 0;
+    s_last_update_tick = 0;
+    taskEXIT_CRITICAL(&s_ultrasonic_lock);
 }
 
 // ============================================================================

@@ -1,6 +1,6 @@
 idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
-    REQUIRES can_twai can_protocol heartbeat throttle_mux stepper_motor_uim2852 enable_relay override_sensors control_logic
+    REQUIRES can_twai can_protocol led_ws2812 multiplexer_dg408djz stepper_motor_uim2852 relay_jd2912 adc_12bitsar optocoupler_pc817 control_logic
     PRIV_REQUIRES esp_timer
 )

@@ -4,13 +4,29 @@
   y: 0
   z: 0.80
   roll: 0
-  pitch: 0.4974
+  pitch: 0.497
   yaw: 0
 - frame-id: base_link
   child-frame-id: gps_frame
   x: 1.4478
   y: 0.4699
   z: 1.4224
+  roll: 0
+  pitch: 0
+  yaw: 0
+- frame-id: base_link
+  child-frame-id: front_left
+  x: 1.6574
+  y: 0.5017
+  z: 0.8827
+  roll: 0
+  pitch: 0
+  yaw: 0
+- frame-id: base_link
+  child-frame-id: front_right
+  x: 1.6574
+  y: -0.5017
+  z: 0.8827
   roll: 0
   pitch: 0
   yaw: 0

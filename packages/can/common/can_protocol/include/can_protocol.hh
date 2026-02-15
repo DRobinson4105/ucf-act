@@ -3,9 +3,9 @@
  * @brief Shared CAN bus protocol definitions for Safety, Control, and Planner nodes.
  *
  * All nodes share a unified state and fault code enum. Safety ESP32 acts as the
- * system state authority — it is the only node that can advance state forward
- * (READY -> ENABLING -> ACTIVE). Any node can enter OVERRIDE or FAULT locally
- * for immediate safety.
+ * system state authority — it commands target state using only READY/ENABLING/ACTIVE.
+ * Planner and Control own their live states and can enter OVERRIDE or FAULT locally
+ * for immediate safety; local FAULT clears back to READY when faults clear.
  *
  * Every node sends an identical heartbeat format (node_heartbeat_t) at 100ms.
  * Safety's "state" field carries the system target state; its "fault_code" field
@@ -52,9 +52,9 @@ extern "C" {
 // ============================================================================
 // Unified Node States (NODE_STATE_*)
 // ============================================================================
-// All nodes share the same state enum. Safety commands forward transitions.
-// Nodes can enter OVERRIDE or FAULT locally for immediate safety.
-// For Safety's heartbeat, 'state' carries the system target state.
+// All nodes share the same state enum.
+// Safety heartbeat uses READY/ENABLING/ACTIVE as commanded target states.
+// Nodes report live state and may use OVERRIDE/FAULT locally for immediate safety.
 
 #define NODE_STATE_INIT              0   // Booting, not ready
 #define NODE_STATE_READY             1   // Running, idle — waiting for Safety to advance
@@ -111,7 +111,8 @@ extern "C" {
 // Heartbeat Flags
 // ============================================================================
 
-#define HEARTBEAT_FLAG_ENABLE_COMPLETE  0x01  // Node finished ENABLING, ready for ACTIVE
+#define HEARTBEAT_FLAG_ENABLE_COMPLETE   0x01  // Node finished ENABLING, ready for ACTIVE
+#define HEARTBEAT_FLAG_AUTONOMY_REQUEST  0x02  // Planner requests/holds autonomy (enable gate + halt on drop)
 
 // ============================================================================
 // Node Heartbeat (0x100, 0x110, 0x120)
@@ -121,6 +122,9 @@ extern "C" {
 // byte 1: state (NODE_STATE_* — for Safety: system target state)
 // byte 2: fault_code (NODE_FAULT_* — for Safety: e-stop reason, 0 when advancing)
 // byte 3: flags (HEARTBEAT_FLAG_*)
+//         - HEARTBEAT_FLAG_ENABLE_COMPLETE: node finished ENABLING
+//         - HEARTBEAT_FLAG_AUTONOMY_REQUEST: Planner/Orin requests autonomy enable and
+//           must stay asserted while autonomy should remain enabled
 // byte 4-7: reserved
 
 typedef struct {
@@ -165,6 +169,8 @@ typedef struct {
 #define OVERRIDE_REASON_NONE         0x00
 #define OVERRIDE_REASON_PEDAL        0x01
 #define OVERRIDE_REASON_FR_CHANGED   0x02
+#define OVERRIDE_REASON_STEERING     0x03
+#define OVERRIDE_REASON_BRAKING      0x04
 
 // ============================================================================
 // Stale Command Detection

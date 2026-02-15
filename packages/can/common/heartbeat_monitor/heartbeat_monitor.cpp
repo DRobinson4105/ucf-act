@@ -16,14 +16,17 @@
 // ============================================================================
 
 void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_config_t *config) {
-    if (!mon || !config || !config->name) return;
+    if (!mon) return;
 
-    snprintf(mon->tag, sizeof(mon->tag), "%s_HB_MONITOR", config->name);
+    if (config && config->name && config->name[0] != '\0')
+        snprintf(mon->tag, sizeof(mon->tag), "%s", config->name);
+    else
+        snprintf(mon->tag, sizeof(mon->tag), "HEARTBEAT");
+
     memset(mon->nodes, 0, sizeof(mon->nodes));
     mon->node_count = 0;
     portMUX_INITIALIZE(&mon->lock);
 
-    ESP_LOGI(mon->tag, "Heartbeat monitor initialized");
 }
 
 // ============================================================================
@@ -32,9 +35,10 @@ void heartbeat_monitor_init(heartbeat_monitor_t *mon, const heartbeat_monitor_co
 
 // Register a CAN node to monitor - returns node_id for future reference
 int heartbeat_monitor_register(heartbeat_monitor_t *mon,
-                                const char *name,
-                                uint32_t timeout_ms) {
+                                 const char *name,
+                                 uint32_t timeout_ms) {
     if (!mon) return -1;
+    const char *effective_name = (name && name[0] != '\0') ? name : "unknown";
 
     taskENTER_CRITICAL(&mon->lock);
     if (mon->node_count >= HEARTBEAT_MONITOR_MAX_NODES) {
@@ -42,7 +46,8 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon,
         return -1;
     }
     int node_id = mon->node_count++;
-    mon->nodes[node_id].name = name ? name : "unknown";
+    strncpy(mon->nodes[node_id].name, effective_name, sizeof(mon->nodes[node_id].name) - 1);
+    mon->nodes[node_id].name[sizeof(mon->nodes[node_id].name) - 1] = '\0';
     mon->nodes[node_id].timeout_ticks = pdMS_TO_TICKS(timeout_ms);
     mon->nodes[node_id].last_seen = 0;
     mon->nodes[node_id].last_sequence = 0;
@@ -51,7 +56,6 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon,
     mon->nodes[node_id].alive = false;  // Not alive until first heartbeat received
     taskEXIT_CRITICAL(&mon->lock);
 
-    ESP_LOGI(mon->tag, "Registered %s (timeout %lu ms)", name, (unsigned long)timeout_ms);
     return node_id;
 }
 
@@ -69,6 +73,7 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon,
     TickType_t now = xTaskGetTickCount();
     bool was_alive;
     bool ever_seen;
+    char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN] = {0};
 
     taskENTER_CRITICAL(&mon->lock);
     if (!mon->nodes[node_id].active) {
@@ -82,14 +87,20 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon,
     mon->nodes[node_id].last_sequence = sequence;
     mon->nodes[node_id].last_state = state;
     mon->nodes[node_id].alive = true;
-    const char *name = mon->nodes[node_id].name;
+    strncpy(name, mon->nodes[node_id].name, sizeof(name) - 1);
+    name[sizeof(name) - 1] = '\0';
     taskEXIT_CRITICAL(&mon->lock);
 
-    // Log state transitions for debugging
+    // Log lost/regained transitions independently from frame RX logs.
+#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
     if (!was_alive) {
-        if (!ever_seen) ESP_LOGI(mon->tag, "%s ALIVE", name);
-        else ESP_LOGI(mon->tag, "%s regained", name);
+        if (ever_seen) ESP_LOGI(mon->tag, "%s regained", name);
     }
+#else
+    (void)was_alive;
+    (void)ever_seen;
+    (void)name;
+#endif
 }
 
 // Check all nodes for timeout - call periodically (e.g., every 50-100ms)
@@ -101,7 +112,10 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
     // Buffer timeout events inside the critical section, log outside.
     // This avoids releasing/re-acquiring the lock mid-loop which could
     // allow another task to mutate node_count or node state.
-    struct { char name[16]; unsigned long elapsed_ms; } timeouts[HEARTBEAT_MONITOR_MAX_NODES];
+    struct {
+        char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN];
+        unsigned long elapsed_ms;
+    } timeouts[HEARTBEAT_MONITOR_MAX_NODES];
     int timeout_count = 0;
 
     taskENTER_CRITICAL(&mon->lock);
@@ -126,10 +140,14 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
     taskEXIT_CRITICAL(&mon->lock);
 
     // Log outside critical section
+#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
     for (int i = 0; i < timeout_count; i++) {
-        ESP_LOGW(mon->tag, "%s lost (no response for %lu ms)",
+        ESP_LOGI(mon->tag, "%s lost (no response for %lu ms)",
                  timeouts[i].name, timeouts[i].elapsed_ms);
     }
+#else
+    (void)timeout_count;
+#endif
 }
 
 // ============================================================================
@@ -196,10 +214,15 @@ uint8_t heartbeat_monitor_get_timeout_mask(heartbeat_monitor_t *mon) {
 void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
     if (!mon) return;
 
+#ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
     ESP_LOGI(mon->tag, "--- Node Status ---");
 
     // Snapshot all node data inside a single critical section, log outside.
-    struct { char name[16]; bool alive; TickType_t last_seen; } snaps[HEARTBEAT_MONITOR_MAX_NODES];
+    struct {
+        char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN];
+        bool alive;
+        TickType_t last_seen;
+    } snaps[HEARTBEAT_MONITOR_MAX_NODES];
     int snap_count = 0;
 
     taskENTER_CRITICAL(&mon->lock);
@@ -221,11 +244,11 @@ void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
             ESP_LOGI(mon->tag, "  [OK]  %s", snaps[i].name);
             alive_count++;
         } else if (snaps[i].last_seen == 0) {
-            ESP_LOGW(mon->tag, "  [--]  %s (never seen)", snaps[i].name);
+            ESP_LOGI(mon->tag, "  [--]  %s (never seen)", snaps[i].name);
             never_seen_count++;
         } else {
             TickType_t elapsed = now - snaps[i].last_seen;
-            ESP_LOGW(mon->tag, "  [!!]  %s (dead, last seen %lu ms ago)",
+            ESP_LOGI(mon->tag, "  [!!]  %s (dead, last seen %lu ms ago)",
                      snaps[i].name, (unsigned long)(elapsed * portTICK_PERIOD_MS));
             dead_count++;
         }
@@ -233,4 +256,5 @@ void heartbeat_monitor_log_status(heartbeat_monitor_t *mon) {
 
     ESP_LOGI(mon->tag, "Summary: %d alive, %d dead, %d never seen",
              alive_count, dead_count, never_seen_count);
+#endif
 }
