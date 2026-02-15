@@ -5,15 +5,19 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(message_filters REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(tf2_eigen REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -21,16 +25,6 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
-
-rosidl_generate_interfaces(
-  ${PROJECT_NAME}
-  "msg/Array.msg"
-  "msg/Array2D.msg"
-  "msg/Array3D.msg"
-  DEPENDENCIES std_msgs
-)
-
-ament_export_dependencies(rosidl_default_runtime)
 
 add_library(
   trt_engine SHARED
@@ -53,33 +47,50 @@ target_link_libraries(
   nvinfer
   nvinfer_plugin
   nvonnxparser
-  rclcpp::rclcpp
 )
 
-add_executable(segmentation_node src/segmentation_node.cpp)
+add_executable(seg_node src/seg_node.cpp)
 
 target_link_libraries(
-  segmentation_node PRIVATE
+  seg_node
   trt_engine
-  rclcpp::rclcpp
-  sensor_msgs::sensor_msgs__rosidl_typesupport_cpp
-  std_msgs::std_msgs__rosidl_typesupport_cpp
-  cv_bridge::cv_bridge
 )
 
-rosidl_get_typesupport_target(
-  cpp_typesupport_target
-  ${PROJECT_NAME}
-  "rosidl_typesupport_cpp"
+target_include_directories(
+  seg_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(
-  segmentation_node PRIVATE
-  ${cpp_typesupport_target}
+ament_target_dependencies(seg_node
+  rclcpp
+  cv_bridge
+  sensor_msgs
+  OpenCV
+)
+
+add_executable(seg_cloud_node src/seg_cloud_node.cpp)
+
+target_include_directories(
+  seg_cloud_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(seg_cloud_node
+  rclcpp
+  sensor_msgs
+  std_msgs
+  message_filters
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  Eigen3
+  tf2_eigen
 )
 
 install(
-  TARGETS segmentation_node
+  TARGETS seg_node seg_cloud_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

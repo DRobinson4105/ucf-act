@@ -15,13 +15,9 @@ def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_argum
     )
 
 def generate_launch_description():
-    return LaunchDescription([
-        include("bringup", "static_tfs.launch.py"),
-        include("bringup", "cameras.launch.py"),
-        include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
-        include("bringup", "gps.launch.py"),
-        include("fast_lio", "mapping.launch.py"),
-        include("bringup", "localization.launch.py"),
-        include("bringup", "costmap.launch.py"),
-        include("perception", "seg_all.launch.py"),
+  return LaunchDescription([
+    include("perception", "seg.launch.py", launch_arguments={"camera": "front_left"}),
+    include("perception", "seg_cloud.launch.py", launch_arguments={"camera": "front_left"}),
+    include("perception", "seg.launch.py", launch_arguments={"camera": "front_right"}),
+    include("perception", "seg_cloud.launch.py", launch_arguments={"camera": "front_right"}),
   ])

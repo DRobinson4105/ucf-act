@@ -2,12 +2,12 @@ import os.path as osp
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, TextSubstitution
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    params = osp.join(get_package_share_directory("perception"), "config", "segmentation.yaml")
+    params = osp.join(get_package_share_directory("perception"), "config", "seg.yaml")
     model_path = osp.join(get_package_share_directory("perception"), "models", "seg.engine")
     
     camera = LaunchConfiguration("camera")
@@ -24,12 +24,9 @@ def generate_launch_description():
         DeclareLaunchArgument("camera", choices=cameras),
         Node(
             package="perception",
-            executable="segmentation_node",
+            executable="seg_node",
             name="seg_node",
-            namespace=[
-              camera,
-              TextSubstitution(text="_cam")
-            ],
+            namespace=camera,
             parameters=[
               params,
               { "trt_model_path": model_path }

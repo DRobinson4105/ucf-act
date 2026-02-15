@@ -126,3 +126,6 @@ chmod +x ./scripts/build.sh
 
 echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 echo "source ${ACT_ROS_WS}/install/setup.bash" >> ~/.bashrc
+echo 'if [[ -f "${ACT_ROS_WS}/scripts/setup.sh" ]]; then
+    source "${ACT_ROS_WS}/scripts/setup.sh"
+fi' >> ~/.bashrc

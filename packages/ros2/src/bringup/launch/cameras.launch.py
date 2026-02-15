@@ -6,8 +6,8 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     symlinks = [
-        "platform-3610000.usb-usb-0:4.3:1.0-video-index0",
-        "platform-3610000.usb-usb-0:4.4:1.0-video-index0",
+        "platform-3610000.usb-usb-0:4.2.1.1:1.0-video-index0",
+        "platform-3610000.usb-usb-0:4.2.1.2:1.0-video-index0",
         "platform-141a0000.pcie-pci-0005:01:00.1-usb-0:1:1.0-video-index0",
         "platform-141a0000.pcie-pci-0005:01:00.3-usb-0:1:1.0-video-index0",
         "platform-141a0000.pcie-pci-0005:01:00.5-usb-0:1:1.0-video-index0",
@@ -30,11 +30,11 @@ def generate_launch_description():
     nodes = [Node(
         package="usb_cam",
         executable="usb_cam_node_exe",
-        namespace=camera + "_cam",
+        namespace=camera,
         name="usb_cam",
         parameters=[params, {
             "video_device": device,
-            "frame_id": camera + "_cam",
+            "frame_id": camera,
         }],
         output="screen",
     ) for camera, device in zip(cameras, devices)]
