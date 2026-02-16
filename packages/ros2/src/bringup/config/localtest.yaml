@@ -81,19 +81,19 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      use_sim_time: false
       global_frame: odom
       robot_base_frame: base_link
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      resolution: 0.05
       rolling_window: true
       width: 100
       height: 100
-      resolution: 0.05
-      update_frequency: 10.0
-      publish_frequency: 5.0
 
       plugins: ["stvl_layer", "inflation_layer"]
-      footprint: "[[1.2, 0.75], [1.2, -0.75], [-1.2, -0.75], [-1.2, 0.75]]"
-
+      
+      footprint: "[[1.9304, 0.5842]], [[1.9304, -0.5842]], [[-0.8382, -0.5842]], [[-0.8382, 0.5842]]"
+      
       stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
         enabled: true
@@ -112,17 +112,18 @@ local_costmap:
         observation_sources: pointcloud
 
         pointcloud:
-          sensor_frame: livox_frame
-          data_type: PointCloud2
-          topic: /livox/lidar_pc2
+          topic: "/livox/lidar_pc2"
+          sensor_frame: "livox_frame"
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+          data_type: "PointCloud2"
+          transport_type: "raw"
+          min_obstacle_height: 0.30
+          max_obstacle_height: 2.0
+          inf_is_valid: false
           marking: true
           clearing: true
           obstacle_range: 50.0
-          min_obstacle_height: 0.75
-          max_obstacle_height: 2.0
-          expected_update_rate: 0.0
-          observation_persistence: 0.0 
-          inf_is_valid: false
           filter: "voxel"
           voxel_min_points: 1
           clear_after_reading: true
@@ -131,17 +132,53 @@ local_costmap:
           vertical_fov_angle: 3.14159
           horizontal_fov_angle: 0.0
           decay_acceleration: 15.0
-          model_type: 1
+        
+        front_left_seg:
+          topic: "/front_left/seg_pc2"
+          sensor_frame: "front_left"
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+          data_type: "PointCloud2"
+          transport_type: "raw"
+          inf_is_valid: false
+          marking: true
+          clearing: true
+          obstacle_range: 50.0
+          filter: "voxel"
+          voxel_min_points: 1
+          clear_after_reading: true
+          vertical_fov_angle: 3.14159
+          horizontal_fov_angle: 0.0
+          decay_acceleration: 15.0
+
+        front_right_seg:
+          topic: "/front_right/seg_pc2"
+          sensor_frame: "front_right"
+          observation_persistence: 0.0
+          expected_update_rate: 0.0
+          data_type: "PointCloud2"
+          transport_type: "raw"
+          inf_is_valid: false
+          marking: true
+          clearing: true
+          obstacle_range: 50.0
+          filter: "voxel"
+          voxel_min_points: 1
+          clear_after_reading: true
+          vertical_fov_angle: 3.14159
+          horizontal_fov_angle: 0.0
+          decay_acceleration: 15.0
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.25
+        inflation_radius: 0.76
         cost_scaling_factor: 3.0
 
 lifecycle_manager:
   ros__parameters:
+    use_sim_time: true
     autostart: true
-    use_sim_time: false
     bond_timeout: 10.0
     node_names:
       - controller_server
+

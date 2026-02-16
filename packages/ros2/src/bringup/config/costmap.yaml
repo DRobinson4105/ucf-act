@@ -29,17 +29,18 @@
       observation_sources: pointcloud
 
       pointcloud:
-        sensor_frame: livox_frame
-        data_type: PointCloud2
-        topic: /livox/lidar_pc2
+        topic: "/livox/lidar_pc2"
+        sensor_frame: "livox_frame"
+        observation_persistence: 0.0
+        expected_update_rate: 0.0
+        data_type: "PointCloud2"
+        transport_type: "raw"
+        min_obstacle_height: 0.30
+        max_obstacle_height: 2.0
+        inf_is_valid: false
         marking: true
         clearing: true
         obstacle_range: 50.0
-        min_obstacle_height: 0.75
-        max_obstacle_height: 2.0
-        expected_update_rate: 0.0
-        observation_persistence: 0.0
-        inf_is_valid: false
         filter: "voxel"
         voxel_min_points: 1
         clear_after_reading: true
@@ -48,7 +49,42 @@
         vertical_fov_angle: 3.14159
         horizontal_fov_angle: 0.0
         decay_acceleration: 15.0
-        model_type: 1
+      
+      front_left_seg:
+        topic: "/front_left/seg_pc2"
+        sensor_frame: "front_left"
+        observation_persistence: 0.0
+        expected_update_rate: 0.0
+        data_type: "PointCloud2"
+        transport_type: "raw"
+        inf_is_valid: false
+        marking: true
+        clearing: true
+        obstacle_range: 50.0
+        filter: "voxel"
+        voxel_min_points: 1
+        clear_after_reading: true
+        vertical_fov_angle: 3.14159
+        horizontal_fov_angle: 0.0
+        decay_acceleration: 15.0
+
+      front_right_seg:
+        topic: "/front_right/seg_pc2"
+        sensor_frame: "front_right"
+        observation_persistence: 0.0
+        expected_update_rate: 0.0
+        data_type: "PointCloud2"
+        transport_type: "raw"
+        inf_is_valid: false
+        marking: true
+        clearing: true
+        obstacle_range: 50.0
+        filter: "voxel"
+        voxel_min_points: 1
+        clear_after_reading: true
+        vertical_fov_angle: 3.14159
+        horizontal_fov_angle: 0.0
+        decay_acceleration: 15.0
 
     inflation_layer:
       plugin: "nav2_costmap_2d::InflationLayer"
