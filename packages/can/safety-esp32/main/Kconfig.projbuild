@@ -71,13 +71,6 @@ menu "Debug Logging"
             bool "Log CAN heartbeat RX: every frame"
             default n
 
-        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
-            bool "Log heartbeat monitor node transitions"
-            default y
-            help
-                Log when a monitored CAN heartbeat node is lost (timed out)
-                or regained (first heartbeat after timeout).
-
     endmenu
 
     menu "Component Health & Recovery"
@@ -92,6 +85,16 @@ menu "Debug Logging"
         config LOG_CAN_RECOVERY
             bool "Log CAN recovery flow"
             default n
+            help
+                Log CAN recovery events: stop/start cycles, full driver reinstall,
+                bus-off recovery, and TX failure counters.
+
+        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
+            bool "Log heartbeat monitor lost/regained transitions"
+            default y
+            help
+                Log when a monitored heartbeat node is lost (timed out)
+                or regained (first heartbeat after timeout).
 
         config LOG_RETRY_TWAI
             bool "Log TWAI retry attempts"

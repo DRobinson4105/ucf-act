@@ -17,6 +17,13 @@ menu "Test Bypasses"
                 Ignore Safety e-stop fault code and force estop_fault_code=NONE
                 in Control task inputs and logs.
 
+        config BYPASS_SAFETY_LIVENESS_CHECKS
+            bool "Bypass Safety liveness check: ignore timeout"
+            default n
+            help
+                Ignore Safety heartbeat timeout. Use when testing Control
+                without a Safety ESP32 on the bus.
+
     endmenu
 
     menu "Planner Inputs"
@@ -89,7 +96,7 @@ endmenu
 
 menu "Debug Logging"
 
-    menu "CAN Traffic & Planner I/O"
+    menu "CAN Traffic"
 
         config LOG_CAN_HEARTBEAT_TX
             bool "Log CAN heartbeat TX: every frame"
@@ -166,6 +173,13 @@ menu "Debug Logging"
             default n
             help
                 Log each failed braking-stepper health recovery attempt.
+
+        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
+            bool "Log heartbeat monitor lost/regained transitions"
+            default y
+            help
+                Log when a monitored heartbeat node is lost (timed out)
+                or regained (first heartbeat after timeout).
 
     endmenu
 

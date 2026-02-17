@@ -12,6 +12,8 @@
 #include "driver/gpio.h"
 #include "driver/twai.h"
 
+#include "esp_heap_caps.h"
+
 #include "can_protocol.hh"
 #include "can_twai.hh"
 #include "led_ws2812.hh"
@@ -21,6 +23,7 @@
 #include "adc_12bitsar.hh"
 #include "optocoupler_pc817.hh"
 #include "control_logic.h"
+#include "heartbeat_monitor.hh"
 
 
 
@@ -47,9 +50,9 @@ static const char *TAG_RX __attribute__((unused)) = "CONTROL_RX";
 //   Control loop (middle) - run state + actuator decisions deterministically
 //   Heartbeat (lowest)    - periodic status, less latency-sensitive
 
-constexpr int CAN_RX_TASK_STACK = 4096;
-constexpr int CONTROL_TASK_STACK = 4096;
-constexpr int HEARTBEAT_TASK_STACK = 4096;
+constexpr int CAN_RX_TASK_STACK = 8192;
+constexpr int CONTROL_TASK_STACK = 8192;
+constexpr int HEARTBEAT_TASK_STACK = 8192;
 constexpr UBaseType_t CAN_RX_TASK_PRIO = 7;
 constexpr UBaseType_t CONTROL_TASK_PRIO = 6;
 constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
@@ -234,6 +237,9 @@ static bool g_relay_ready = false;
 static bool g_stepper_steering_ready = false;
 static bool g_stepper_braking_ready = false;
 
+// CAN RX task handle — used to verify quiesce during recovery.
+static TaskHandle_t g_can_rx_task_handle = nullptr;
+
 // Spinlock for CAN TX tracking / recovery (used by control_task + heartbeat_task)
 static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -241,6 +247,10 @@ static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
 // Retries are infinite (no cap) but paced at RETRY_INTERVAL_MS to avoid
 // hammering init calls on every control loop tick.
 static uint32_t g_last_retry_ms = 0;
+
+// Heartbeat monitor: detect Safety heartbeat timeout on Control.
+static heartbeat_monitor_t g_hb_monitor;
+static int g_node_safety = -1;
 
 // ============================================================================
 // Stepper Motor Instances (UIM2852CA)
@@ -306,6 +316,7 @@ static void mark_component_lost(bool *ready, const char *name, const char *detai
 }
 
 static void update_driver_inputs(uint32_t now_ms) {
+#ifndef CONFIG_BYPASS_INPUT_PEDAL_ADC
     if (g_pedal_input_ready) {
         uint16_t pedal_mv = 0;
         esp_err_t pedal_err = adc_12bitsar_read_mv_checked(&pedal_mv);
@@ -335,6 +346,7 @@ static void update_driver_inputs(uint32_t now_ms) {
             }
         }
     }
+#endif
 
     if (g_fr_inputs_ready)
         optocoupler_pc817_update(now_ms);
@@ -572,9 +584,9 @@ static const char *fault_detail_string(uint8_t fault_code, fr_state_t fr_state, 
 static void log_component_lost(const char *name, const char *detail) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
     if (detail && detail[0] != '\0') {
-        ESP_LOGE(TAG_INIT, "%s: LOST: %s", name, detail);
+        ESP_LOGE(TAG, "%s: LOST: %s", name, detail);
     } else {
-        ESP_LOGE(TAG_INIT, "%s: LOST", name);
+        ESP_LOGE(TAG, "%s: LOST", name);
     }
 #else
     (void)name;
@@ -584,7 +596,7 @@ static void log_component_lost(const char *name, const char *detail) {
 
 static void log_component_regained(const char *name) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
-    ESP_LOGI(TAG_INIT, "%s: REGAINED", name);
+    ESP_LOGI(TAG, "%s: REGAINED", name);
 #else
     (void)name;
 #endif
@@ -603,7 +615,7 @@ static void handle_mux_runtime_error(esp_err_t err, const char *detail) {
     mark_component_lost(&g_mux_ready, "MULTIPLEXER", detail);
 }
 
-static void handle_relay_runtime_error(esp_err_t err, const char *detail) {
+[[maybe_unused]] static void handle_relay_runtime_error(esp_err_t err, const char *detail) {
     if (err == ESP_OK) return;
     mark_component_lost(&g_relay_ready, "PEDAL_RELAY", detail);
 }
@@ -617,12 +629,26 @@ static void update_control_state_from_component_health(void) {
 
     if (g_control_state == NODE_STATE_FAULT) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
-        ESP_LOGI(TAG_INIT, "SYSTEM: RECOVERED: all required components healthy");
+        ESP_LOGI(TAG, "SYSTEM: RECOVERED: all required components healthy");
 #endif
         g_fault_code = NODE_FAULT_NONE;
         g_control_state = NODE_STATE_READY;
     }
 }
+
+// Wait for can_rx_task (and any in-flight send_control_heartbeat) to exit
+// TWAI API calls. Must be called AFTER setting g_twai_ready = false.
+// can_rx_task's twai_receive() has a CAN_RX_TIMEOUT (10ms) bound, so a
+// 20ms delay guarantees it has returned and entered its idle sleep.
+// send_control_heartbeat() checks g_twai_ready at the top, so after this
+// delay no task is calling twai_transmit() or twai_receive().
+static void quiesce_can_rx() {
+    vTaskDelay(pdMS_TO_TICKS(20));
+}
+
+// Rate-limit retry failure logs: log on 1st attempt, then every RETRY_LOG_EVERY_N
+// attempts. At RETRY_INTERVAL_MS = 500ms, N=20 gives ~10 second intervals.
+static const uint16_t RETRY_LOG_EVERY_N = 20;
 
 static void retry_failed_components(void) {
     // Pace retries at RETRY_INTERVAL_MS to avoid hammering init calls every
@@ -632,29 +658,88 @@ static void retry_failed_components(void) {
     g_last_retry_ms = now_ms;
 
     if (!g_twai_ready) {
-        esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, TAG_INIT);
-        bool recovered = (err == ESP_OK);
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
+        // Skip if another task is already performing CAN recovery.
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        bool skip = g_can_recovery_in_progress;
+        if (!skip) g_can_recovery_in_progress = true;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
+        if (skip) return;
+
+        // g_twai_ready is already false; quiesce before touching driver.
+        quiesce_can_rx();
+
+        // Suppress internal can_twai_recover_with_reinit() logs unless
+        // CONFIG_LOG_CAN_RECOVERY is enabled; then rate-limit to 1st + every Nth.
+#ifdef CONFIG_LOG_CAN_RECOVERY
+        const char *verbose_tag = (s_retry_count == 0 ||
+            ((s_retry_count + 1) % RETRY_LOG_EVERY_N) == 0) ? TAG : nullptr;
+#else
+        const char *verbose_tag = nullptr;
+#endif
+        esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, verbose_tag);
+        bool recovered = false;
+        if (err == ESP_OK) {
+            // Active probe: send one heartbeat frame to verify bus is truly connected.
+            // After reinit the driver starts RUNNING with zero error counters, so a
+            // passive bus_ok() check always passes. Sending a real frame forces TEC
+            // accumulation on a disconnected bus (TEC += ~8 per failed TX).
+            uint8_t probe_data[8] = {0};
+            node_heartbeat_t probe_hb = {
+                .sequence = 0,
+                .state = g_control_state,
+                .fault_code = g_fault_code,
+                .flags = g_heartbeat_flags,
+            };
+            can_encode_heartbeat(probe_data, &probe_hb);
+            (void)can_twai_send(CAN_ID_CONTROL_HEARTBEAT, probe_data, pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(50));
+            twai_status_info_t probe_status;
+            recovered = (twai_get_status_info(&probe_status) == ESP_OK &&
+                         probe_status.state == TWAI_STATE_RUNNING &&
+                         probe_status.tx_error_counter == 0);
+        }
 #ifdef CONFIG_LOG_RETRY_TWAI
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "TWAI retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "TWAI retry failed (%u attempts): %s",
+                             s_retry_count, esp_err_to_name(err));
+                } else {
+                    ESP_LOGW(TAG, "TWAI retry failed (%u attempts): bus unstable after reinit",
+                             s_retry_count);
+                }
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
+            g_twai_ready = true;
             log_component_regained("TWAI");
         }
-        g_twai_ready = recovered;
+
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        g_can_recovery_in_progress = false;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
     }
 
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     if (!g_mux_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = multiplexer_dg408djz_init(&g_mux_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_MULTIPLEXER
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "MULTIPLEXER retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "MULTIPLEXER retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("MULTIPLEXER (driver-level)");
         }
         g_mux_ready = recovered;
@@ -663,15 +748,21 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
     if (!g_relay_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = relay_jd2912_init(&g_relay_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_PEDAL_RELAY
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "PEDAL_RELAY retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "PEDAL_RELAY retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
-            log_component_regained("PEDAL_RELAY REGAINED (driver-level)");
+            s_retry_count = 0;
+            log_component_regained("PEDAL_RELAY (driver-level)");
         }
         g_relay_ready = recovered;
     }
@@ -679,14 +770,20 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_PEDAL_ADC
     if (!g_pedal_input_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = init_pedal_input();
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_PEDAL_INPUT
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "PEDAL_INPUT retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "PEDAL_INPUT retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("PEDAL_INPUT");
         }
         g_pedal_input_ready = recovered;
@@ -695,14 +792,22 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_FR_SENSOR
     if (!g_fr_inputs_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = init_fr_inputs();
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_FR_INPUT
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "FR_INPUT retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "FR_INPUT_FORWARD retry failed (%u attempts): %s (input_gpio=%d)",
+                         s_retry_count, esp_err_to_name(err), g_fr_pc817_cfg.forward_gpio);
+                ESP_LOGW(TAG, "FR_INPUT_REVERSE retry failed (%u attempts): %s (input_gpio=%d)",
+                         s_retry_count, esp_err_to_name(err), g_fr_pc817_cfg.reverse_gpio);
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("FR_INPUT");
         }
         g_fr_inputs_ready = recovered;
@@ -711,14 +816,20 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
     if (!g_stepper_steering_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_STEPPER_STEERING
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "STEPPER_STEERING retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "STEPPER_STEERING retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("STEPPER_STEERING");
         }
         g_stepper_steering_ready = recovered;
@@ -727,14 +838,20 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
     if (!g_stepper_braking_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_STEPPER_BRAKING
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "STEPPER_BRAKING retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "STEPPER_BRAKING retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("STEPPER_BRAKING");
         }
         g_stepper_braking_ready = recovered;
@@ -779,42 +896,16 @@ static void update_control_led_mode() {
     led_ws2812_set_manual_color(red, green, blue, reason);
 }
 
-// ============================================================================
-// CAN Recovery Helper
-// ============================================================================
-
-// Attempt to recover CAN bus communication.
-// Returns true on success, false on failure (no reset).
-static bool attempt_can_recovery() {
-    bool was_ready = g_twai_ready;
-#ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGI(TAG, "Attempting CAN recovery (stop/start, then re-init if needed)");
-#endif
-    esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, TAG);
-        if (err == ESP_OK) {
-            g_twai_ready = true;
-            if (!was_ready) {
-                log_component_regained("TWAI");
-            }
-#ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGI(TAG, "CAN recovery succeeded");
-#endif
-        g_recovery.can_tx_fail_count = 0;
-        return true;
-    }
-
-    mark_component_lost(&g_twai_ready, "TWAI", "CAN recovery failed");
-
-#ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGE(TAG, "CAN recovery FAILED: %s (will retry)", esp_err_to_name(err));
-#endif
-    return false;
-}
-
-// Track CAN TX result. On consecutive failures, trigger recovery.
+// Track CAN TX result. On consecutive failures, mark TWAI lost.
 // Protected by g_can_tx_lock to prevent concurrent recovery from control_task + heartbeat_task.
+//
+// IMPORTANT: can_twai_bus_ok() and ESP_LOG* must NOT be called inside
+// taskENTER_CRITICAL sections. On single-core ESP32-C6, critical sections
+// disable interrupts; calling into the TWAI driver or newlib fprintf with
+// interrupts disabled causes abort() in lock_acquire_generic.
 static void track_can_tx(esp_err_t err) {
     bool trigger_recovery = false;
+    bool check_bus = false;
 
     taskENTER_CRITICAL(&g_can_tx_lock);
     can_tx_track_inputs_t t = {
@@ -825,29 +916,33 @@ static void track_can_tx(esp_err_t err) {
     can_tx_track_result_t r = control_track_can_tx(&t);
     g_recovery.can_tx_fail_count = r.new_fail_count;
     if (r.trigger_recovery) {
-        bool bus_ok = can_twai_bus_ok();
         g_recovery.can_tx_fail_count = 0;  // reset regardless
+        check_bus = true;
+    }
+    taskEXIT_CRITICAL(&g_can_tx_lock);
+
+    // Bus check and logging happen outside the critical section so that
+    // twai_get_status_info() and ESP_LOG (which use locks/semaphores)
+    // are called with interrupts enabled.
+    if (check_bus) {
+        bool bus_ok = can_twai_bus_ok();
         if (!bus_ok) {
+            taskENTER_CRITICAL(&g_can_tx_lock);
             if (!g_can_recovery_in_progress) {
                 g_can_recovery_in_progress = true;
                 trigger_recovery = true;
             }
-        } else {
-#ifdef CONFIG_LOG_CAN_RECOVERY
-            ESP_LOGI(TAG, "CAN TX failed %d times (bus OK, no partner?)",
-                     CAN_TX_CONSEC_FAIL_THRESHOLD);
-#endif
+            taskEXIT_CRITICAL(&g_can_tx_lock);
         }
+        // else: bus OK but TX still failing — no partner on bus, nothing to do.
     }
-    taskEXIT_CRITICAL(&g_can_tx_lock);
 
     if (trigger_recovery) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
-                 CAN_TX_CONSEC_FAIL_THRESHOLD);
+        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures", CAN_TX_CONSEC_FAIL_THRESHOLD);
 #endif
         mark_component_lost(&g_twai_ready, "TWAI", "runtime bus unhealthy after tx failures");
-        (void)attempt_can_recovery();
+        // Recovery handled by retry_failed_components() at 500ms pace.
         taskENTER_CRITICAL(&g_can_tx_lock);
         g_can_recovery_in_progress = false;
         taskEXIT_CRITICAL(&g_can_tx_lock);
@@ -861,6 +956,19 @@ static void track_can_tx(esp_err_t err) {
 // Send the control heartbeat on CAN. Called from heartbeat_task (periodic)
 // and from control_task on state change (immediate).
 static void send_control_heartbeat(void) {
+    // Skip TX while driver is down or being recovered. Avoids calling
+    // twai_transmit() on a torn-down driver, which can abort/crash.
+    if (!g_twai_ready) return;
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    // Heap integrity diagnostic — detect corruption early (before ESP_LOG triggers abort).
+    // heap_caps_check_integrity_all returns true if heap is intact.
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "HEAP CORRUPTION detected in send_control_heartbeat! free=%lu",
+                 (unsigned long)esp_get_free_heap_size());
+    }
+#endif
+
     uint8_t hb_data[8] = {0};
 
     taskENTER_CRITICAL(&g_hb_seq_lock);
@@ -1076,6 +1184,13 @@ void can_rx_task(void *param) {
     twai_message_t msg{};
 
     while (true) {
+        // Skip TWAI API calls while driver is down or being recovered.
+        // Sleeping 100ms (not 5ms) prevents this priority-7 task from
+        // starving lower-priority tasks when the bus is unavailable.
+        if (!g_twai_ready) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         if (can_twai_receive(&msg, CAN_RX_TIMEOUT) != ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
@@ -1168,6 +1283,8 @@ void can_rx_task(void *param) {
             g_cmd.target_state = new_target;
             g_cmd.estop_fault_code = fault_code;
             taskEXIT_CRITICAL(&g_cmd_lock);
+
+            heartbeat_monitor_update(&g_hb_monitor, g_node_safety, hb.sequence, new_target);
             
             led_ws2812_mark_activity(now);
 
@@ -1266,6 +1383,16 @@ void control_task(void *param) {
         cmd_local.steering_cmd = 0;
         cmd_local.braking_cmd = 0;
 #endif
+
+        // Check Safety heartbeat timeout — retreat to READY if Safety is gone.
+        heartbeat_monitor_check_timeouts(&g_hb_monitor);
+        bool safety_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_safety);
+#ifdef CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS
+        safety_alive = true;
+#endif
+        if (!safety_alive) {
+            cmd_local.target_state = NODE_STATE_READY;  // retreat to safe state
+        }
 
         // Check Planner command freshness - zero throttle if stale
 #ifndef CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS
@@ -1573,34 +1700,6 @@ void heartbeat_task(void *param) {
         // Send heartbeat (periodic 100ms)
         send_control_heartbeat();
 
-        // Check CAN bus health — recovery must happen OUTSIDE critical section
-        // because can_twai_recover_bus_off() calls vTaskDelay() internally.
-        taskENTER_CRITICAL(&g_can_tx_lock);
-        bool bus_unhealthy = !can_twai_bus_ok();
-        bool trigger_recovery = bus_unhealthy && !g_can_recovery_in_progress;
-        if (trigger_recovery) g_can_recovery_in_progress = true;
-        taskEXIT_CRITICAL(&g_can_tx_lock);
-        if (trigger_recovery) {
-#ifdef CONFIG_LOG_CAN_RECOVERY
-            ESP_LOGI(TAG, "CAN bus unhealthy, attempting recovery");
-#endif
-            esp_err_t err = can_twai_recover_bus_off();
-            if (err == ESP_OK) {
-                if (!g_twai_ready) {
-                    log_component_regained("TWAI");
-                }
-                g_twai_ready = true;
-            } else {
-                mark_component_lost(&g_twai_ready, "TWAI", "bus-off recovery failed");
-#ifdef CONFIG_LOG_CAN_RECOVERY
-                ESP_LOGE(TAG, "CAN bus-off recovery failed: %s", esp_err_to_name(err));
-#endif
-            }
-            taskENTER_CRITICAL(&g_can_tx_lock);
-            g_can_recovery_in_progress = false;
-            taskEXIT_CRITICAL(&g_can_tx_lock);
-        }
-
         vTaskDelay(HEARTBEAT_SEND_INTERVAL);
     }
 }
@@ -1627,8 +1726,13 @@ void main_task(void *param) {
         led_ws2812_set_manual_color(LED_LEVEL, LED_ORANGE_GREEN, 0, "state_init");
     }
 
+    // Initialize heartbeat monitor to detect Safety heartbeat timeout.
+    heartbeat_monitor_config_t hb_cfg = { .name = "CONTROL" };
+    heartbeat_monitor_init(&g_hb_monitor, &hb_cfg);
+    g_node_safety = heartbeat_monitor_register(&g_hb_monitor, "Safety", HEARTBEAT_TIMEOUT_MS);
+
     // Start CAN RX first so stepper init checks can receive responses.
-    if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, nullptr) != pdPASS) {
+    if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, &g_can_rx_task_handle) != pdPASS) {
         ESP_LOGE(TAG_INIT, "Failed to create CAN RX task, restarting");
         esp_restart();
     }
@@ -1714,7 +1818,7 @@ void main_task(void *param) {
 }
 
 extern "C" void app_main(void) {
-    if (xTaskCreate(main_task, "main_task", 4096, nullptr, 5, nullptr) != pdPASS) {
+    if (xTaskCreate(main_task, "main_task", 8192, nullptr, 5, nullptr) != pdPASS) {
         ESP_LOGE("CONTROL_INIT", "Failed to create main_task, restarting");
         esp_restart();
     }

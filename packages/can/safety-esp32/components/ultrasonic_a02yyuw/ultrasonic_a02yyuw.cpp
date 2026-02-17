@@ -15,7 +15,7 @@
 
 namespace {
 
-static const char *TAG = "ULTRASONIC";
+[[maybe_unused]] static const char *TAG = "ULTRASONIC";
 
 // ============================================================================
 // Configuration

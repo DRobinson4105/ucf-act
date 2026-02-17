@@ -142,7 +142,7 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
     // Log outside critical section
 #ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
     for (int i = 0; i < timeout_count; i++) {
-        ESP_LOGI(mon->tag, "%s lost (no response for %lu ms)",
+        ESP_LOGE(mon->tag, "%s lost (no response for %lu ms)",
                  timeouts[i].name, timeouts[i].elapsed_ms);
     }
 #else

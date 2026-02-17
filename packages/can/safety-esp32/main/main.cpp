@@ -11,6 +11,8 @@
 #include "driver/gpio.h"
 #include "driver/twai.h"
 
+#include "esp_heap_caps.h"
+
 #include "can_protocol.hh"
 #include "can_twai.hh"
 #include "led_ws2812.hh"
@@ -55,9 +57,9 @@ static const char *TAG_RX __attribute__((unused)) = "SAFETY_RX";
 // Task Configuration
 // ============================================================================
 
-constexpr int CAN_RX_TASK_STACK = 4096;
-constexpr int SAFETY_TASK_STACK = 4096;
-constexpr int HEARTBEAT_TASK_STACK = 4096;
+constexpr int CAN_RX_TASK_STACK = 8192;
+constexpr int SAFETY_TASK_STACK = 8192;
+constexpr int HEARTBEAT_TASK_STACK = 8192;
 constexpr UBaseType_t CAN_RX_TASK_PRIO = 7;
 constexpr UBaseType_t SAFETY_TASK_PRIO = 6;
 constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
@@ -86,6 +88,11 @@ constexpr uint8_t ESTOP_DISENGAGE_COUNT = 3;
 // before changing health state. Prevents flap around timeout boundary.
 // At 50ms loop cadence, 3 samples = 150ms hysteresis window.
 constexpr uint8_t ULTRASONIC_HEALTH_HYSTERESIS = 3;
+
+// Startup grace period for ultrasonic edge logging. Suppresses LOST/REGAINED
+// transitions while the sensor's UART RX task establishes its first valid
+// measurement. Matches the driver's SENSOR_HEALTH_TIMEOUT (500ms).
+constexpr TickType_t ULTRASONIC_LOG_GRACE_TICKS = pdMS_TO_TICKS(500);
 
 // ============================================================================
 // GPIO Pin Assignments
@@ -156,8 +163,12 @@ static bool g_ultrasonic_init_ok = false;
 static bool g_ultrasonic_health_prev = false;
 static bool g_ultrasonic_health_seen = false;
 static uint8_t g_ultrasonic_health_counter = 0;  // hysteresis counter
+static TickType_t g_ultrasonic_init_tick = 0;    // for startup grace period
 static bool g_relay_init_ok = false;
 static bool g_twai_ready = false;
+
+// CAN RX task handle — used to verify quiesce during recovery.
+static TaskHandle_t g_can_rx_task_handle = nullptr;
 
 // Debounce counters for push-button and RF disengage (engage is immediate).
 static uint8_t g_push_button_clear_count = 0;
@@ -264,9 +275,9 @@ static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool 
 static void log_component_lost(const char *name, const char *detail) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
     if (detail && detail[0] != '\0') {
-        ESP_LOGE(TAG_INIT, "%s: LOST: %s", name, detail);
+        ESP_LOGE(TAG, "%s: LOST: %s", name, detail);
     } else {
-        ESP_LOGE(TAG_INIT, "%s: LOST", name);
+        ESP_LOGE(TAG, "%s: LOST", name);
     }
 #else
     (void)name;
@@ -276,7 +287,7 @@ static void log_component_lost(const char *name, const char *detail) {
 
 static void log_component_regained(const char *name) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
-    ESP_LOGI(TAG_INIT, "%s: REGAINED", name);
+    ESP_LOGI(TAG, "%s: REGAINED", name);
 #else
     (void)name;
 #endif
@@ -290,6 +301,30 @@ static void mark_component_lost(bool *ready, const char *name, const char *detai
     *ready = false;
 }
 
+// ============================================================================
+// Recovery State
+// ============================================================================
+
+static uint8_t g_can_tx_fail_count = 0;
+static bool g_can_recovery_in_progress = false;
+
+// Spinlock for CAN TX tracking / recovery (used by safety_task + heartbeat_task)
+static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
+
+// Wait for can_rx_task (and any in-flight send_safety_heartbeat) to exit
+// TWAI API calls. Must be called AFTER setting g_twai_ready = false.
+// can_rx_task's twai_receive() has a CAN_RX_TIMEOUT (10ms) bound, so a
+// 20ms delay guarantees it has returned and entered its idle sleep.
+// send_safety_heartbeat() checks g_twai_ready at the top, so after this
+// delay no task is calling twai_transmit() or twai_receive().
+static void quiesce_can_rx() {
+    vTaskDelay(pdMS_TO_TICKS(20));
+}
+
+// Rate-limit retry failure logs: log on 1st attempt, then every RETRY_LOG_EVERY_N
+// attempts. At RETRY_INTERVAL_MS = 500ms, N=20 gives ~10 second intervals.
+static const uint16_t RETRY_LOG_EVERY_N = 20;
+
 static void retry_failed_components(void) {
     // Pace retries at RETRY_INTERVAL_MS to avoid hammering init calls every
     // safety loop tick. Retries remain infinite (no cap).
@@ -299,14 +334,20 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_PUSH_BUTTON
     if (!g_push_button_init_ok) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = push_button_hb2es544_init(&g_push_button_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_PUSH_BUTTON
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "PUSH_BUTTON retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "PUSH_BUTTON retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             g_push_button_init_ok = true;
             log_component_regained("PUSH_BUTTON");
         }
@@ -315,14 +356,20 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_RF_REMOTE
     if (!g_rf_remote_init_ok) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = rf_remote_ev1527_init(&g_rf_remote_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_RF_REMOTE
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "RF_REMOTE retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "RF_REMOTE retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             g_rf_remote_init_ok = true;
             log_component_regained("RF_REMOTE");
         }
@@ -330,14 +377,20 @@ static void retry_failed_components(void) {
 #endif
 
     if (!g_relay_init_ok) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = relay_srd05vdc_init(&g_relay_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_POWER_RELAY
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "RELAY retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "RELAY retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             g_relay_init_ok = true;
             log_component_regained("RELAY (driver-level)");
         }
@@ -345,33 +398,93 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_ULTRASONIC
     if (!g_ultrasonic_init_ok) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = ultrasonic_a02yyuw_init(&g_ultrasonic_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_ULTRASONIC
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "ULTRASONIC retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "ULTRASONIC retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             g_ultrasonic_init_ok = true;
             g_ultrasonic_health_prev = false;
             g_ultrasonic_health_seen = false;
+            g_ultrasonic_init_tick = xTaskGetTickCount();
         }
     }
 #endif
 
     if (!g_twai_ready) {
-        esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, TAG_INIT);
-        bool recovered = (err == ESP_OK);
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
+        // Skip if another task is already performing CAN recovery.
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        bool skip = g_can_recovery_in_progress;
+        if (!skip) g_can_recovery_in_progress = true;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
+        if (skip) return;
+
+        // g_twai_ready is already false; quiesce before touching driver.
+        quiesce_can_rx();
+
+        // Suppress internal can_twai_recover_with_reinit() logs unless
+        // CONFIG_LOG_CAN_RECOVERY is enabled; then rate-limit to 1st + every Nth.
+#ifdef CONFIG_LOG_CAN_RECOVERY
+        const char *verbose_tag = (s_retry_count == 0 ||
+            ((s_retry_count + 1) % RETRY_LOG_EVERY_N) == 0) ? TAG : nullptr;
+#else
+        const char *verbose_tag = nullptr;
+#endif
+        esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, verbose_tag);
+        bool recovered = false;
+        if (err == ESP_OK) {
+            // Active probe: send one heartbeat frame to verify bus is truly connected.
+            // After reinit the driver starts RUNNING with zero error counters, so a
+            // passive bus_ok() check always passes. Sending a real frame forces TEC
+            // accumulation on a disconnected bus (TEC += ~8 per failed TX).
+            uint8_t probe_data[8] = {0};
+            node_heartbeat_t probe_hb = {
+                .sequence = 0,
+                .state = g_target_state,
+                .fault_code = g_estop_fault_code,
+                .flags = 0,
+            };
+            can_encode_heartbeat(probe_data, &probe_hb);
+            (void)can_twai_send(CAN_ID_SAFETY_HEARTBEAT, probe_data, pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(50));
+            twai_status_info_t probe_status;
+            recovered = (twai_get_status_info(&probe_status) == ESP_OK &&
+                         probe_status.state == TWAI_STATE_RUNNING &&
+                         probe_status.tx_error_counter == 0);
+        }
 #ifdef CONFIG_LOG_RETRY_TWAI
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "TWAI retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "TWAI retry failed (%u attempts): %s",
+                             s_retry_count, esp_err_to_name(err));
+                } else {
+                    ESP_LOGW(TAG, "TWAI retry failed (%u attempts): bus unstable after reinit",
+                             s_retry_count);
+                }
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             g_twai_ready = true;
             log_component_regained("TWAI");
         }
+
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        g_can_recovery_in_progress = false;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
     }
 }
 
@@ -414,51 +527,16 @@ static void update_safety_led_mode() {
     led_ws2812_set_manual_color(red, green, blue, reason);
 }
 
-// ============================================================================
-// Recovery State
-// ============================================================================
-
-static uint8_t g_can_tx_fail_count = 0;
-static bool g_can_recovery_in_progress = false;
-
-// Spinlock for CAN TX tracking / recovery (used by safety_task + heartbeat_task)
-static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
-
-// ============================================================================
-// CAN Recovery Helper
-// ============================================================================
-
-// Attempt to recover CAN bus communication.
-// Returns true on success, false on failure (no reset).
-static bool attempt_can_recovery() {
-    bool was_ready = g_twai_ready;
-#ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGI(TAG, "Attempting CAN recovery (stop/start, then re-init if needed)");
-#endif
-    esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, TAG);
-    if (err == ESP_OK) {
-        g_twai_ready = true;
-        if (!was_ready) {
-            log_component_regained("TWAI");
-        }
-#ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGI(TAG, "CAN recovery succeeded");
-#endif
-        g_can_tx_fail_count = 0;
-        return true;
-    }
-
-    mark_component_lost(&g_twai_ready, "TWAI", "CAN recovery failed");
-#ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGE(TAG, "CAN recovery FAILED: %s (will retry)", esp_err_to_name(err));
-#endif
-    return false;
-}
-
-// Track CAN TX result. On consecutive failures, trigger recovery.
+// Track CAN TX result. On consecutive failures, mark TWAI lost.
 // Protected by g_can_tx_lock to prevent concurrent recovery from safety_task + heartbeat_task.
+//
+// IMPORTANT: can_twai_bus_ok() and ESP_LOG* must NOT be called inside
+// taskENTER_CRITICAL sections. On single-core ESP32-C6, critical sections
+// disable interrupts; calling into the TWAI driver or newlib fprintf with
+// interrupts disabled causes abort() in lock_acquire_generic.
 static void track_can_tx(esp_err_t err) {
     bool trigger_recovery = false;
+    bool check_bus = false;
 
     taskENTER_CRITICAL(&g_can_tx_lock);
     if (err == ESP_OK) {
@@ -468,29 +546,33 @@ static void track_can_tx(esp_err_t err) {
     }
     g_can_tx_fail_count++;
     if (g_can_tx_fail_count >= CAN_TX_FAIL_THRESHOLD) {
-        bool bus_ok = can_twai_bus_ok();
         g_can_tx_fail_count = 0;  // reset regardless
+        check_bus = true;
+    }
+    taskEXIT_CRITICAL(&g_can_tx_lock);
+
+    // Bus check and logging happen outside the critical section so that
+    // twai_get_status_info() and ESP_LOG (which use locks/semaphores)
+    // are called with interrupts enabled.
+    if (check_bus) {
+        bool bus_ok = can_twai_bus_ok();
         if (!bus_ok) {
+            taskENTER_CRITICAL(&g_can_tx_lock);
             if (!g_can_recovery_in_progress) {
                 g_can_recovery_in_progress = true;
                 trigger_recovery = true;
             }
-        } else {
-#ifdef CONFIG_LOG_CAN_RECOVERY
-            ESP_LOGI(TAG, "CAN TX failed %d times (bus OK, no partner?)",
-                     CAN_TX_FAIL_THRESHOLD);
-#endif
+            taskEXIT_CRITICAL(&g_can_tx_lock);
         }
+        // else: bus OK but TX still failing — no partner on bus, nothing to do.
     }
-    taskEXIT_CRITICAL(&g_can_tx_lock);
 
     if (trigger_recovery) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
-                 CAN_TX_FAIL_THRESHOLD);
+        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures", CAN_TX_FAIL_THRESHOLD);
 #endif
         mark_component_lost(&g_twai_ready, "TWAI", "runtime bus unhealthy after tx failures");
-        (void)attempt_can_recovery();
+        // Recovery handled by retry_failed_components() at 500ms pace.
         taskENTER_CRITICAL(&g_can_tx_lock);
         g_can_recovery_in_progress = false;
         taskEXIT_CRITICAL(&g_can_tx_lock);
@@ -504,6 +586,19 @@ static void track_can_tx(esp_err_t err) {
 // Send the safety heartbeat on CAN. Called from safety_task on state change
 // and from heartbeat_task on the 100ms periodic timer.
 static void send_safety_heartbeat(bool log_as_change) {
+    // Skip TX while driver is down or being recovered. Avoids calling
+    // twai_transmit() on a torn-down driver, which can abort/crash.
+    if (!g_twai_ready) return;
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    // Heap integrity diagnostic — detect corruption early (before ESP_LOG triggers abort).
+    // heap_caps_check_integrity_all returns true if heap is intact.
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "HEAP CORRUPTION detected in send_safety_heartbeat! free=%lu",
+                 (unsigned long)esp_get_free_heap_size());
+    }
+#endif
+
     uint8_t data[8] = {0};
     taskENTER_CRITICAL(&g_safety_hb_seq_lock);
     uint8_t seq = g_safety_hb_seq;
@@ -554,6 +649,13 @@ void can_rx_task(void *param) {
     (void)param;
     twai_message_t msg{};
     while (true) {
+        // Skip TWAI API calls while driver is down or being recovered.
+        // Sleeping 100ms (not 5ms) prevents this priority-7 task from
+        // starving lower-priority tasks when the bus is unavailable.
+        if (!g_twai_ready) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         if (can_twai_receive(&msg, CAN_RX_TIMEOUT) != ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
@@ -743,15 +845,26 @@ void safety_task(void *param) {
         // Ultrasonic health edge logging uses the hysteresis-filtered value.
         // Transition tracking is maintained by the hysteresis block above;
         // we only log here when the filtered state actually changes.
+        //
+        // A startup grace period (ULTRASONIC_LOG_GRACE_TICKS) suppresses
+        // LOST/REGAINED logging while the sensor's UART RX task establishes
+        // its first valid measurement. Without this, the sensor always
+        // appears briefly unhealthy at boot (no data yet) then immediately
+        // recovers, producing a spurious LOST -> REGAINED pair.
 #ifndef CONFIG_BYPASS_INPUT_ULTRASONIC
         {
             static bool s_ultrasonic_log_prev = false;
             static bool s_ultrasonic_log_seen = false;
             if (g_ultrasonic_init_ok) {
-                if (!s_ultrasonic_log_seen) {
-                    // Baseline assumes healthy when init succeeded to avoid
-                    // spurious "REGAINED" from the boot-time sensor startup delay.
-                    s_ultrasonic_log_prev = g_ultrasonic_init_ok ? true : filtered_ultrasonic_healthy;
+                TickType_t since_init = xTaskGetTickCount() - g_ultrasonic_init_tick;
+                if (since_init < ULTRASONIC_LOG_GRACE_TICKS) {
+                    // Grace period: don't log, but track state so the
+                    // baseline is correct when the window expires.
+                    s_ultrasonic_log_prev = filtered_ultrasonic_healthy;
+                    s_ultrasonic_log_seen = true;
+                } else if (!s_ultrasonic_log_seen) {
+                    // First sample after grace: accept as baseline, no log.
+                    s_ultrasonic_log_prev = filtered_ultrasonic_healthy;
                     s_ultrasonic_log_seen = true;
                 } else if (filtered_ultrasonic_healthy != s_ultrasonic_log_prev) {
                     if (filtered_ultrasonic_healthy) {
@@ -967,34 +1080,6 @@ void heartbeat_task(void *param) {
         // Send Safety heartbeat (periodic)
         send_safety_heartbeat(false);
 
-        // Check CAN bus health — recovery must happen OUTSIDE critical section
-        // because can_twai_recover_bus_off() calls vTaskDelay() internally.
-        taskENTER_CRITICAL(&g_can_tx_lock);
-        bool bus_unhealthy = !can_twai_bus_ok();
-        bool trigger_recovery = bus_unhealthy && !g_can_recovery_in_progress;
-        if (trigger_recovery) g_can_recovery_in_progress = true;
-        taskEXIT_CRITICAL(&g_can_tx_lock);
-        if (trigger_recovery) {
-#ifdef CONFIG_LOG_CAN_RECOVERY
-            ESP_LOGI(TAG, "CAN bus unhealthy, attempting recovery");
-#endif
-            esp_err_t err = can_twai_recover_bus_off();
-            if (err == ESP_OK) {
-                if (!g_twai_ready) {
-                    log_component_regained("TWAI");
-                }
-                g_twai_ready = true;
-            } else {
-                mark_component_lost(&g_twai_ready, "TWAI", "bus-off recovery failed");
-#ifdef CONFIG_LOG_CAN_RECOVERY
-                ESP_LOGE(TAG, "CAN bus-off recovery failed: %s", esp_err_to_name(err));
-#endif
-            }
-            taskENTER_CRITICAL(&g_can_tx_lock);
-            g_can_recovery_in_progress = false;
-            taskEXIT_CRITICAL(&g_can_tx_lock);
-        }
-
         vTaskDelay(HEARTBEAT_SEND_INTERVAL);
     }
 }
@@ -1085,6 +1170,7 @@ void main_task(void *param) {
     g_ultrasonic_init_ok = (err == ESP_OK);
     g_ultrasonic_health_prev = false;
     g_ultrasonic_health_seen = false;
+    g_ultrasonic_init_tick = xTaskGetTickCount();
     if (err != ESP_OK) {
         ESP_LOGE(TAG_INIT, "Ultrasonic init failed: %s (will retry in background)",
                  esp_err_to_name(err));
@@ -1129,7 +1215,7 @@ void main_task(void *param) {
     log_startup_device_status(g_twai_ready, g_relay_init_ok, heartbeat_ready);
 
     // Start CAN RX task first so heartbeat frames can be received during init wait
-    if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, nullptr) != pdPASS) {
+    if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, &g_can_rx_task_handle) != pdPASS) {
         ESP_LOGE(TAG_INIT, "Failed to create CAN RX task, restarting");
         esp_restart();
     }
@@ -1166,6 +1252,9 @@ void main_task(void *param) {
     }
 #endif
 
+    ESP_LOGI(TAG_INIT, "State: INIT -> READY (target=%s)",
+             node_state_to_string(g_target_state));
+
     // Start remaining tasks
     if (xTaskCreate(safety_task, "safety", SAFETY_TASK_STACK, nullptr, SAFETY_TASK_PRIO, nullptr) != pdPASS) {
         ESP_LOGE(TAG_INIT, "Failed to create safety task, restarting");
@@ -1182,7 +1271,7 @@ void main_task(void *param) {
 }
 
 extern "C" void app_main(void) {
-    if (xTaskCreate(main_task, "main_task", 4096, nullptr, 5, nullptr) != pdPASS) {
+    if (xTaskCreate(main_task, "main_task", 8192, nullptr, 5, nullptr) != pdPASS) {
         ESP_LOGE("SAFETY_INIT", "Failed to create main_task, restarting");
         esp_restart();
     }

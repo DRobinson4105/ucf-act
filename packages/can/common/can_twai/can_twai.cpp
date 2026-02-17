@@ -99,13 +99,14 @@ esp_err_t can_twai_recover_bus_off(void) {
 
 esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
-    const char *tag = (log_tag && log_tag[0] != '\0') ? log_tag : "CAN_TWAI";
+    // NULL log_tag = suppress internal logs (caller handles its own logging).
+    const char *tag = log_tag;
 #else
     (void)log_tag;
 #endif
 
 #ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGI(tag, "CAN recovery: attempting TWAI stop/start");
+    if (tag) ESP_LOGI(tag, "CAN recovery: attempting TWAI stop/start");
 #endif
     twai_stop();
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -113,14 +114,14 @@ esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, c
     esp_err_t err = twai_start();
     if (err == ESP_OK) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGI(tag, "CAN recovery: stop/start succeeded");
+        if (tag) ESP_LOGI(tag, "CAN recovery: stop/start succeeded");
 #endif
         return ESP_OK;
     }
 
 #ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGI(tag, "CAN recovery: stop/start failed (%s), reinstalling TWAI driver",
-             esp_err_to_name(err));
+    if (tag) ESP_LOGI(tag, "CAN recovery: stop/start failed (%s), reinstalling TWAI driver",
+                      esp_err_to_name(err));
 #endif
 
     twai_driver_uninstall();
@@ -129,9 +130,9 @@ esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, c
 
 #ifdef CONFIG_LOG_CAN_RECOVERY
     if (err == ESP_OK) {
-        ESP_LOGI(tag, "CAN recovery: driver reinstall succeeded");
+        if (tag) ESP_LOGI(tag, "CAN recovery: driver reinstall succeeded");
     } else {
-        ESP_LOGI(tag, "CAN recovery: driver reinstall failed (%s)", esp_err_to_name(err));
+        if (tag) ESP_LOGI(tag, "CAN recovery: driver reinstall failed (%s)", esp_err_to_name(err));
     }
 #endif
 
