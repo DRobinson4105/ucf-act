@@ -137,9 +137,11 @@ static int g_node_control = -1;
 // Node state tracking (set by CAN RX task, read by safety_task)
 // These are volatile single-byte reads — atomically safe on ESP32.
 static volatile uint8_t g_planner_state = NODE_STATE_INIT;
+static volatile uint8_t g_planner_fault_code = NODE_FAULT_NONE;
 static volatile uint8_t g_planner_flags = 0;
 
 static volatile uint8_t g_control_node_state = NODE_STATE_INIT;
+static volatile uint8_t g_control_fault_code = NODE_FAULT_NONE;
 static volatile uint8_t g_control_flags = 0;
 
 // System target state (Safety is the authority)
@@ -197,7 +199,7 @@ static uint32_t get_time_ms() {
 
 static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbeat_ready) {
     if (twai_ready) {
-        ESP_LOGI(TAG_INIT, "TWAI: OK: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
+        ESP_LOGI(TAG_INIT, "TWAI: CONFIGURED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
     } else {
         ESP_LOGE(TAG_INIT, "TWAI: FAILED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
     }
@@ -210,7 +212,7 @@ static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool 
 #else
     if (g_push_button_init_ok)
         ESP_LOGI(TAG_INIT,
-                 "PUSH_BUTTON: OK: input_gpio=%d active_level=%s",
+                 "PUSH_BUTTON: CONFIGURED: input_gpio=%d active_level=%s",
                  g_push_button_cfg.gpio,
                  g_push_button_cfg.active_level ? "HIGH" : "LOW");
     else
@@ -225,7 +227,7 @@ static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool 
 #else
     if (g_rf_remote_init_ok)
         ESP_LOGI(TAG_INIT,
-                 "RF_REMOTE: OK: input_gpio=%d active_level=%s",
+                 "RF_REMOTE: CONFIGURED: input_gpio=%d active_level=%s",
                  g_rf_remote_cfg.gpio,
                  g_rf_remote_cfg.active_level ? "HIGH" : "LOW");
     else
@@ -241,7 +243,7 @@ static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool 
 #else
     if (g_ultrasonic_init_ok)
         ESP_LOGI(TAG_INIT,
-                 "ULTRASONIC: OK: uart=%d tx_gpio=%d rx_gpio=%d baud=%d",
+                 "ULTRASONIC: CONFIGURED: uart=%d tx_gpio=%d rx_gpio=%d baud=%d",
                  g_ultrasonic_cfg.uart_num,
                  g_ultrasonic_cfg.tx_gpio,
                  g_ultrasonic_cfg.rx_gpio,
@@ -252,7 +254,7 @@ static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool 
 
     if (relay_init_ok)
         ESP_LOGI(TAG_INIT,
-                 "RELAY: OK: gpio=%d active_level=%s start=DISABLED",
+                 "RELAY: CONFIGURED: gpio=%d active_level=%s start=DISABLED",
                  g_relay_cfg.gpio,
                  g_relay_cfg.active_high ? "HIGH" : "LOW");
     else
@@ -267,7 +269,7 @@ static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool 
 #endif
 
     if (heartbeat_ready)
-        ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: OK: gpio=%d state=init", HEARTBEAT_LED_GPIO);
+        ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: CONFIGURED: gpio=%d state=init", HEARTBEAT_LED_GPIO);
     else
         ESP_LOGW(TAG_INIT, "HEARTBEAT_LED: UNAVAILABLE: gpio=%d (non-critical)", HEARTBEAT_LED_GPIO);
 }
@@ -479,7 +481,6 @@ static void retry_failed_components(void) {
         if (recovered) {
             s_retry_count = 0;
             g_twai_ready = true;
-            log_component_regained("TWAI");
         }
 
         taskENTER_CRITICAL(&g_can_tx_lock);
@@ -571,7 +572,7 @@ static void track_can_tx(esp_err_t err) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
         ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures", CAN_TX_FAIL_THRESHOLD);
 #endif
-        mark_component_lost(&g_twai_ready, "TWAI", "runtime bus unhealthy after tx failures");
+        g_twai_ready = false;
         // Recovery handled by retry_failed_components() at 500ms pace.
         taskENTER_CRITICAL(&g_can_tx_lock);
         g_can_recovery_in_progress = false;
@@ -670,6 +671,7 @@ void can_rx_task(void *param) {
             heartbeat_monitor_update(&g_hb_monitor, g_node_planner, hb.sequence, hb.state);
 
             g_planner_state = hb.state;
+            g_planner_fault_code = hb.fault_code;
             g_planner_flags = hb.flags;
 
 #ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
@@ -699,6 +701,7 @@ void can_rx_task(void *param) {
             heartbeat_monitor_update(&g_hb_monitor, g_node_control, hb.sequence, hb.state);
 
             g_control_node_state = hb.state;
+            g_control_fault_code = hb.fault_code;
             g_control_flags = hb.flags;
 
 #ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
@@ -892,7 +895,7 @@ void safety_task(void *param) {
         safety_decision_t decision = safety_evaluate(&inputs);
 
         // Missing critical output/transport components force fail-safe behavior.
-        if (!g_relay_init_ok || !g_twai_ready) {
+        if (!g_relay_init_ok) {
             decision.estop_active = true;
             decision.fault_code = NODE_FAULT_GENERAL;
             decision.relay_enable = false;
@@ -1027,6 +1030,14 @@ void safety_task(void *param) {
                      node_state_to_string(g_target_state),
                      node_state_to_string(ss_out.new_target),
                      reason);
+
+            // Log node fault detail when retreat is caused by a specific node
+            if (ss_out.new_target == NODE_STATE_READY && decision.fault_code != NODE_FAULT_NONE) {
+                if (decision.fault_code & NODE_FAULT_ESTOP_CONTROL)
+                    ESP_LOGI(TAG, "  Control fault: %s", node_fault_to_string(g_control_fault_code));
+                if (decision.fault_code & NODE_FAULT_ESTOP_PLANNER)
+                    ESP_LOGI(TAG, "  Planner fault: %s", node_fault_to_string(g_planner_fault_code));
+            }
         }
 #endif
 

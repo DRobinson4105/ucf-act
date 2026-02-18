@@ -215,7 +215,7 @@ menu "Debug Logging"
 
         config LOG_CONTROL_SAFETY_MIRROR_CHANGES
             bool "Log mirrored Safety target/fault changes"
-            default n
+            default y
 
     endmenu
 

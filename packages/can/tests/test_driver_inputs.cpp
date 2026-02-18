@@ -31,30 +31,30 @@ static adc_12bitsar_config_t default_pedal_cfg(void) {
 
 static optocoupler_pc817_config_t default_fr_cfg(void) {
     optocoupler_pc817_config_t cfg = {
-        .forward_gpio = 14,
-        .reverse_gpio = 15,
+        .forward_gpio = 22,
+        .reverse_gpio = 23,
     };
     return cfg;
 }
 
 static void set_fr_forward(void) {
-    mock_gpio_levels[14] = 0;  // forward active
-    mock_gpio_levels[15] = 1;  // reverse inactive
+    mock_gpio_levels[22] = 0;  // forward active
+    mock_gpio_levels[23] = 1;  // reverse inactive
 }
 
 static void set_fr_reverse(void) {
-    mock_gpio_levels[14] = 1;  // forward inactive
-    mock_gpio_levels[15] = 0;  // reverse active
+    mock_gpio_levels[22] = 0;  // forward (anti-arc) active
+    mock_gpio_levels[23] = 0;  // reverse (buzzer) active — both ON = Reverse
 }
 
 static void set_fr_neutral(void) {
-    mock_gpio_levels[14] = 1;  // forward inactive
-    mock_gpio_levels[15] = 1;  // reverse inactive
+    mock_gpio_levels[22] = 1;  // forward inactive
+    mock_gpio_levels[23] = 1;  // reverse inactive
 }
 
 static void set_fr_invalid(void) {
-    mock_gpio_levels[14] = 0;  // forward active
-    mock_gpio_levels[15] = 0;  // reverse active
+    mock_gpio_levels[22] = 1;  // forward (anti-arc) inactive
+    mock_gpio_levels[23] = 0;  // reverse (buzzer) active — buzzer without anti-arc = wiring fault
 }
 
 static void test_adc_12bitsar_raw_conversion_without_calibration(void) {

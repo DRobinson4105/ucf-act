@@ -103,8 +103,8 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | 8 | Status LED | Output | WS2812 RGB LED |
 | 9 | Throttle Relay | Output | AEDIKO relay module (NO=autonomous) |
 | 10 | Enable MOSFET | Output | IRLZ44N gate (10k pull-down), bypasses pedal microswitch |
-| 14 | F/R Forward | Input | PC817 optocoupler, pull-up, active LOW |
-| 15 | F/R Reverse | Input | PC817 optocoupler, pull-up, active LOW |
+| 22 | F/R Forward | Input | PC817 optocoupler, pull-up, active LOW |
+| 23 | F/R Reverse | Input | PC817 optocoupler, pull-up, active LOW |
 
 ### LED Behavior
 
@@ -117,12 +117,61 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 ### F/R Optocoupler Logic
 
-| GPIO14 (Forward) | GPIO15 (Reverse) | State |
-|--------------|--------------|-------|
-| LOW | HIGH | Forward |
-| HIGH | LOW | Reverse |
-| HIGH | HIGH | Neutral |
-| LOW | LOW | Invalid (fault) |
+The F/R decode is wired for a **1999 Club Car DS 48V** forward/reverse switch assembly. The switch has three microswitches; two are used for direction sensing:
+
+| Microswitch | GPIO | Active When |
+|-------------|------|-------------|
+| Anti-arcing | 22 (forward_gpio) | Forward **and** Reverse (opens solenoid coil during transition) |
+| Reverse buzzer | 23 (reverse_gpio) | Reverse only (activates backup buzzer) |
+
+State decode (PC817 optocouplers, active LOW with internal pull-up):
+
+| GPIO 22 (Anti-arc) | GPIO 23 (Buzzer) | State | Meaning |
+|---------------------|-------------------|-------|---------|
+| LOW | HIGH | Forward | Anti-arc ON, buzzer OFF |
+| LOW | LOW | Reverse | Both ON |
+| HIGH | HIGH | Neutral | Neither ON (handle in center detent) |
+| HIGH | LOW | Invalid (fault) | Buzzer without anti-arc = wiring fault |
+
+#### Optocoupler Wiring
+
+Each PC817 provides galvanic isolation between the cart's 48V signal circuits and the ESP32:
+
+```
+Cart 48V side (pins 1-2)         ESP32 side (pins 3-4)
+                                  
+  Microswitch ──┐                 3.3V ──[internal pull-up]──┬── GPIO
+                │                                            │
+  48V ──[4.7k]──┤── Pin 1 (anode)          Pin 4 (collector)┘
+                │
+                └── Pin 2 (cathode) ── Cart GND    Pin 3 (emitter) ── ESP32 GND
+```
+
+- **48V operation:** 4.7k ohm current-limiting resistor on pin 1
+- **3.3V bench testing:** 330 ohm resistor per optocoupler, separate jumper wires
+- Cart GND and ESP32 GND must **NOT** be connected (galvanic isolation is the point)
+- Microswitch closed → LED on → phototransistor conducts → GPIO pulled LOW (active)
+- Microswitch open → LED off → phototransistor off → GPIO pulled HIGH by internal pull-up
+
+#### Bench Testing Without the Cart
+
+To simulate F/R states at 3.3V, connect each PC817 LED (pins 1-2) through a 330 ohm resistor to 3.3V:
+
+| State | Anti-arc (GPIO 22) | Buzzer (GPIO 23) |
+|-------|--------------------|-------------------|
+| Forward | Apply 3.3V (LED on → GPIO LOW) | Leave disconnected (GPIO HIGH) |
+| Reverse | Apply 3.3V (LED on → GPIO LOW) | Apply 3.3V (LED on → GPIO LOW) |
+| Neutral | Leave disconnected (GPIO HIGH) | Leave disconnected (GPIO HIGH) |
+
+#### Microswitch Identification
+
+The third microswitch (half-speed/reverse limiter) is not used for direction sensing. To identify which microswitch is which on the physical switch assembly:
+
+1. **Anti-arcing:** Clicks ON when moving from Neutral to Forward OR Reverse
+2. **Reverse buzzer:** Clicks ON only when moving to Reverse
+3. **Half-speed:** Clicks ON only when moving to Reverse (wired to controller speed circuit, not used here)
+
+The anti-arcing and reverse buzzer switches can be distinguished by toggling between Forward and Reverse: the anti-arcing switch stays ON for both, while the buzzer switch toggles.
 
 ## Components
 
@@ -227,7 +276,7 @@ Retries are unbounded for failed required components, paced at 500ms intervals (
 | `CONFIG_LOG_CONTROL_OVERRIDE` | off | Log driver override trigger events (pedal/F/R) |
 | `CONFIG_LOG_CONTROL_THROTTLE_CHANGES` | off | Log throttle level changes |
 | `CONFIG_LOG_CONTROL_THROTTLE_TICK` | off | Log throttle current/target every 20ms cycle (very verbose) |
-| `CONFIG_LOG_CONTROL_SAFETY_MIRROR_CHANGES` | off | Log mirrored Safety target/fault changes seen by Control |
+| `CONFIG_LOG_CONTROL_SAFETY_MIRROR_CHANGES` | on | Log mirrored Safety target/fault changes seen by Control |
 
 ### Inputs
 

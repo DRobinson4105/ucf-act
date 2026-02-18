@@ -112,8 +112,8 @@ constexpr gpio_num_t ENABLE_MOSFET_GPIO = GPIO_NUM_10;   // IRLZ44N gate for JD-
 constexpr adc_channel_t PEDAL_ADC_CHANNEL = ADC_CHANNEL_0;  // GPIO 0
 
 // F/R PC817 channels - detect gear selector contacts
-constexpr gpio_num_t FR_FORWARD_GPIO = GPIO_NUM_14;  // forward contact optocoupler
-constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_15;  // reverse contact optocoupler
+constexpr gpio_num_t FR_FORWARD_GPIO = GPIO_NUM_22;  // forward contact optocoupler
+constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23;  // reverse contact optocoupler
 
 // Status LED (WS2812)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
@@ -376,7 +376,7 @@ static void log_startup_device_status(bool twai_ready,
                                       bool stepper_braking_ready,
                                       bool heartbeat_ready) {
     if (twai_ready)
-        ESP_LOGI(TAG_INIT, "TWAI: OK: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
+        ESP_LOGI(TAG_INIT, "TWAI: CONFIGURED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
     else
         ESP_LOGE(TAG_INIT, "TWAI: FAILED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
 
@@ -387,7 +387,7 @@ static void log_startup_device_status(bool twai_ready,
 #else
     if (mux_ready) {
         ESP_LOGI(TAG_INIT,
-                 "MULTIPLEXER: OK: a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d relay_gpio=%d start=MANUAL",
+                 "MULTIPLEXER: CONFIGURED: a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d relay_gpio=%d start=MANUAL",
                  g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en, g_mux_cfg.relay);
     } else {
         ESP_LOGE(TAG_INIT,
@@ -403,7 +403,7 @@ static void log_startup_device_status(bool twai_ready,
 #else
     if (relay_ready) {
         ESP_LOGI(TAG_INIT,
-                 "PEDAL_RELAY: OK: gpio=%d active_level=%s start=DE-ENERGIZED",
+                 "PEDAL_RELAY: CONFIGURED: gpio=%d active_level=%s start=DE-ENERGIZED",
                  g_relay_cfg.gpio, g_relay_cfg.active_high ? "HIGH" : "LOW");
     } else {
         ESP_LOGE(TAG_INIT,
@@ -419,7 +419,7 @@ static void log_startup_device_status(bool twai_ready,
 #else
     if (pedal_ready) {
         ESP_LOGI(TAG_INIT,
-                 "PEDAL_INPUT: OK: adc_channel=ADC%d_CH%d adc_mode=%s threshold_mv=%u initial_mv=%u",
+                 "PEDAL_INPUT: CONFIGURED: adc_channel=ADC%d_CH%d adc_mode=%s threshold_mv=%u initial_mv=%u",
                  g_pedal_adc_cfg.adc_unit + 1,
                  g_pedal_adc_cfg.adc_channel,
                  adc_12bitsar_is_calibrated() ? "curve_fit" : "raw",
@@ -491,7 +491,7 @@ static void log_startup_device_status(bool twai_ready,
 #endif
 
     if (heartbeat_ready)
-        ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: OK: gpio=%d state=init", HEARTBEAT_LED_GPIO);
+        ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: CONFIGURED: gpio=%d state=init", HEARTBEAT_LED_GPIO);
     else
         ESP_LOGW(TAG_INIT, "HEARTBEAT_LED: UNAVAILABLE: gpio=%d (non-critical)", HEARTBEAT_LED_GPIO);
 }
@@ -511,7 +511,6 @@ static void log_startup_device_status(bool twai_ready,
 
 static bool all_required_components_ready(void) {
     bool ready = true;
-    if (!g_twai_ready) ready = false;
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     if (!g_mux_ready) ready = false;
 #endif
@@ -534,7 +533,6 @@ static bool all_required_components_ready(void) {
 }
 
 static uint8_t primary_fault_from_component_health(void) {
-    if (!g_twai_ready) return NODE_FAULT_CAN_TX;
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     if (!g_mux_ready) return NODE_FAULT_THROTTLE_INIT;
 #endif
@@ -551,6 +549,16 @@ static uint8_t primary_fault_from_component_health(void) {
     if (!g_stepper_braking_ready) return NODE_FAULT_MOTOR_COMM;
 #endif
     return NODE_FAULT_NONE;
+}
+
+static const char *fr_state_to_string(fr_state_t state) {
+    switch (state) {
+        case FR_STATE_FORWARD: return "forward";
+        case FR_STATE_REVERSE: return "reverse";
+        case FR_STATE_NEUTRAL: return "neutral";
+        case FR_STATE_INVALID: return "wiring_fault";
+        default:               return "unknown";
+    }
 }
 
 static const char *sensor_fault_detail_string(fr_state_t fr_state, bool has_fr_sample) {
@@ -628,9 +636,6 @@ static void update_control_state_from_component_health(void) {
     }
 
     if (g_control_state == NODE_STATE_FAULT) {
-#ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
-        ESP_LOGI(TAG, "SYSTEM: RECOVERED: all required components healthy");
-#endif
         g_fault_code = NODE_FAULT_NONE;
         g_control_state = NODE_STATE_READY;
     }
@@ -716,7 +721,6 @@ static void retry_failed_components(void) {
         if (recovered) {
             s_retry_count = 0;
             g_twai_ready = true;
-            log_component_regained("TWAI");
         }
 
         taskENTER_CRITICAL(&g_can_tx_lock);
@@ -808,7 +812,10 @@ static void retry_failed_components(void) {
 #endif
         if (recovered) {
             s_retry_count = 0;
-            log_component_regained("FR_INPUT");
+            fr_state_t recovered_state = optocoupler_pc817_get_state();
+            char fr_regained[48];
+            snprintf(fr_regained, sizeof(fr_regained), "FR_INPUT (fr=%s)", fr_state_to_string(recovered_state));
+            log_component_regained(fr_regained);
         }
         g_fr_inputs_ready = recovered;
     }
@@ -941,7 +948,7 @@ static void track_can_tx(esp_err_t err) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
         ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures", CAN_TX_CONSEC_FAIL_THRESHOLD);
 #endif
-        mark_component_lost(&g_twai_ready, "TWAI", "runtime bus unhealthy after tx failures");
+        g_twai_ready = false;
         // Recovery handled by retry_failed_components() at 500ms pace.
         taskENTER_CRITICAL(&g_can_tx_lock);
         g_can_recovery_in_progress = false;
@@ -1601,7 +1608,9 @@ void control_task(void *param) {
             mark_component_lost(&g_relay_ready, "PEDAL_RELAY", "runtime init fault");
         }
         if (step.new_fault_code == NODE_FAULT_SENSOR_INVALID && g_fr_inputs_ready) {
-            mark_component_lost(&g_fr_inputs_ready, "FR_INPUT", "runtime sensor invalid");
+            char fr_detail[64];
+            snprintf(fr_detail, sizeof(fr_detail), "runtime sensor invalid (fr=%s)", fr_state_to_string(fr_state));
+            mark_component_lost(&g_fr_inputs_ready, "FR_INPUT", fr_detail);
         }
         if (step.new_fault_code == NODE_FAULT_MOTOR_COMM) {
             mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "runtime motor communication fault");
@@ -1624,24 +1633,40 @@ void control_task(void *param) {
         // Log control-local transitions only
 #ifdef CONFIG_LOG_CONTROL_STATE_CHANGES
         if (g_control_state != prev_state) {
-            const char *reason = "none";
-            if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE)
-                reason = override_reason_to_string(step.override_reason);
-            else if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY)
-                reason = disable_reason_to_string(step.disable_reason);
-            else if (step.actions & CONTROL_ACTION_START_ENABLE)
-                reason = "start_enable";
-            else if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
-                reason = "enable_complete";
-            else if (step.actions & CONTROL_ACTION_ABORT_ENABLE)
-                reason = "abort_enable";
-            else if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY)
-                reason = "attempt_recovery";
+            if (g_control_state == NODE_STATE_FAULT) {
+                const char *detail = fault_detail_string(g_fault_code, fr_state, true);
+                if (detail) {
+                    ESP_LOGI(TAG, "State: %s -> FAULT (fault=%s detail=%s)",
+                             node_state_to_string(prev_state),
+                             node_fault_to_string(g_fault_code), detail);
+                } else {
+                    ESP_LOGI(TAG, "State: %s -> FAULT (fault=%s)",
+                             node_state_to_string(prev_state),
+                             node_fault_to_string(g_fault_code));
+                }
+            } else if (prev_state == NODE_STATE_FAULT) {
+                ESP_LOGI(TAG, "State: FAULT -> %s (reason=recovery)",
+                         node_state_to_string(g_control_state));
+            } else {
+                const char *reason = "none";
+                if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE)
+                    reason = override_reason_to_string(step.override_reason);
+                else if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY)
+                    reason = disable_reason_to_string(step.disable_reason);
+                else if (step.actions & CONTROL_ACTION_START_ENABLE)
+                    reason = "start_enable";
+                else if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
+                    reason = "enable_complete";
+                else if (step.actions & CONTROL_ACTION_ABORT_ENABLE)
+                    reason = "abort_enable";
+                else if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY)
+                    reason = "attempt_recovery";
 
-            ESP_LOGI(TAG, "State: %s -> %s (reason=%s)",
-                     node_state_to_string(prev_state),
-                     node_state_to_string(g_control_state),
-                     reason);
+                ESP_LOGI(TAG, "State: %s -> %s (reason=%s)",
+                         node_state_to_string(prev_state),
+                         node_state_to_string(g_control_state),
+                         reason);
+            }
         }
         prev_state = g_control_state;
 #endif
@@ -1799,9 +1824,8 @@ void main_task(void *param) {
                      node_fault_to_string(g_fault_code));
         }
     } else {
-        // Set state to READY so control_task starts in READY (not INIT).
-        // control_task owns all subsequent state transition logging.
         g_control_state = NODE_STATE_READY;
+        ESP_LOGI(TAG_INIT, "State: INIT -> READY");
     }
 
     if (xTaskCreate(control_task, "control", CONTROL_TASK_STACK, nullptr, CONTROL_TASK_PRIO, nullptr) != pdPASS) {
