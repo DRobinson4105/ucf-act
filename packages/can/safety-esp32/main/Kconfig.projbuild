@@ -1,3 +1,13 @@
+config PRODUCTION_BUILD
+    bool "Production build (disallow test bypasses)"
+    default n
+    help
+        Enable this for production/vehicle deployment builds.
+        If any BYPASS_* option is enabled alongside this flag,
+        the firmware will fail to compile with a clear error.
+        This prevents accidental deployment of bench-test firmware
+        onto the vehicle.
+
 menu "Test Bypasses"
 
     menu "Planner/Control Mirrors"
@@ -7,7 +17,7 @@ menu "Test Bypasses"
             default n
             help
                 Force Planner autonomy request true so Safety can advance
-                READY -> ENABLING without an Orin request.
+                READY -> ENABLE without an Orin request.
 
         config BYPASS_PLANNER_LIVENESS_CHECKS
             bool "Bypass Planner liveness checks"
@@ -37,19 +47,25 @@ menu "Test Bypasses"
 
     endmenu
 
-    menu "Physical Inputs"
+    menu "Sensor Inputs"
 
         config BYPASS_INPUT_PUSH_BUTTON
             bool "Bypass push button input: force inactive"
             default n
+            help
+                Force push button e-stop reading to inactive (not pressed).
 
         config BYPASS_INPUT_RF_REMOTE
             bool "Bypass RF remote input: force inactive"
             default n
+            help
+                Force RF remote e-stop reading to inactive (not engaged).
 
         config BYPASS_INPUT_ULTRASONIC
             bool "Bypass ultrasonic input: force clear and healthy"
             default n
+            help
+                Force ultrasonic sensor to report no obstacle and healthy status.
 
     endmenu
 
@@ -70,6 +86,11 @@ menu "Debug Logging"
         config LOG_CAN_HEARTBEAT_RX
             bool "Log CAN heartbeat RX: every frame"
             default n
+            help
+                Log every received Planner and Control heartbeat with sequence,
+                state, fault code, and flags. Very verbose (up to 20 msgs/sec
+                with both nodes). For edge-triggered node state/fault change
+                logs, use the separate options under Safety Logic instead.
 
     endmenu
 
@@ -82,13 +103,6 @@ menu "Debug Logging"
                 Log component health edge transitions when a component becomes
                 unavailable or recovers during runtime.
 
-        config LOG_CAN_RECOVERY
-            bool "Log CAN recovery flow"
-            default n
-            help
-                Log CAN recovery events: stop/start cycles, full driver reinstall,
-                bus-off recovery, and TX failure counters.
-
         config LOG_HEARTBEAT_MONITOR_TRANSITIONS
             bool "Log heartbeat monitor lost/regained transitions"
             default y
@@ -96,75 +110,117 @@ menu "Debug Logging"
                 Log when a monitored heartbeat node is lost (timed out)
                 or regained (first heartbeat after timeout).
 
+        config LOG_CAN_RECOVERY
+            bool "Log CAN recovery flow"
+            default n
+            help
+                Log CAN recovery events: stop/start cycles, full driver reinstall,
+                bus-off recovery, and TX failure counters.
+
         config LOG_RETRY_TWAI
             bool "Log TWAI retry attempts"
             default n
             help
                 Log each failed TWAI retry while TWAI is unavailable.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_PUSH_BUTTON
             bool "Log push-button retry attempts"
             default n
             help
                 Log each failed push-button re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_RF_REMOTE
             bool "Log RF-remote retry attempts"
             default n
             help
                 Log each failed RF-remote re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_ULTRASONIC
             bool "Log ultrasonic retry attempts"
             default n
             help
                 Log each failed ultrasonic re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_POWER_RELAY
             bool "Log power-relay retry attempts"
             default n
             help
                 Log each failed power-relay re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
     endmenu
 
     menu "Safety Logic"
 
-        config LOG_SAFETY_ESTOP_INPUTS
-            bool "Log Safety e-stop inputs: every cycle"
-            default n
-
         config LOG_SAFETY_STATE_CHANGES
-            bool "Log Safety state changes"
+            bool "Log Safety target state changes"
             default y
+            help
+                Log each system target state transition (e.g. READY -> ENABLE)
+                with the reason (autonomy_request, enable_complete, autonomy_halt,
+                or fault code). Also logs autonomy request lifecycle events
+                (latched, consumed, re-armed).
+
+        config LOG_SAFETY_FAULT_CHANGES
+            bool "Log Safety estop fault code changes"
+            default y
+            help
+                Log each estop fault code transition (e.g. none -> ultrasonic,
+                ultrasonic -> none). Edge-triggered on fault code change.
+
+        config LOG_SAFETY_ESTOP_INPUTS
+            bool "Log Safety e-stop inputs: every cycle (verbose)"
+            default n
+            help
+                Log all e-stop input readings on every safety loop tick (20Hz).
+                Includes push button, RF remote, ultrasonic, and node states.
+                Extremely verbose — use only for detailed input debugging.
 
         config LOG_SAFETY_STATE_TICK
-            bool "Log Safety state evaluation: every cycle"
+            bool "Log Safety state evaluation: every cycle (verbose)"
             default n
+            help
+                Log the full state evaluation on every safety loop tick (20Hz).
+                Includes estop status, node states, autonomy request, and
+                target state old/new. Extremely verbose.
 
     endmenu
 
-    menu "Inputs"
+    menu "Sensor Inputs"
 
         config LOG_INPUT_PUSH_BUTTON
             bool "Log push-button input state changes"
             default n
+            help
+                Log push button pressed/released transitions (edge-triggered).
 
         config LOG_INPUT_RF_REMOTE
             bool "Log RF remote input state changes"
             default n
+            help
+                Log RF remote engaged/disengaged transitions (edge-triggered).
 
         config LOG_INPUT_ULTRASONIC_DISTANCE
             bool "Log ultrasonic parsed distance"
             default n
+            help
+                Log each valid ultrasonic distance reading in millimeters.
 
         config LOG_INPUT_ULTRASONIC_RX
             bool "Log ultrasonic raw UART RX"
             default n
+            help
+                Log raw bytes received on the ultrasonic UART. Very verbose.
 
         config LOG_INPUT_ULTRASONIC_PARSE_ERRORS
             bool "Log ultrasonic parse errors"
             default n
+            help
+                Log ultrasonic frame parse failures (checksum, length, etc.).
 
     endmenu
 
@@ -173,18 +229,25 @@ menu "Debug Logging"
         config LOG_ACTUATOR_POWER_RELAY_STATE
             bool "Log power relay state changes"
             default n
+            help
+                Log power relay enabled/disabled transitions (edge-triggered).
 
     endmenu
 
-    menu "HEARTBEAT_LED"
+    menu "Heartbeat LED"
 
         config LOG_HEARTBEAT_LED_STATE_CHANGES
-            bool "Log HEARTBEAT_LED color/reason changes"
+            bool "Log heartbeat LED color/reason changes"
             default n
+            help
+                Log when the WS2812 heartbeat LED changes color or blink
+                pattern due to a state change.
 
-        config LOG_HEARTBEAT_LED_BLINK_PULSES
-            bool "Log HEARTBEAT_LED ON pulses"
+        config LOG_HEARTBEAT_LED_COLOR_UPDATES
+            bool "Log heartbeat LED color updates"
             default n
+            help
+                Log each LED color update. Very verbose.
 
     endmenu
 

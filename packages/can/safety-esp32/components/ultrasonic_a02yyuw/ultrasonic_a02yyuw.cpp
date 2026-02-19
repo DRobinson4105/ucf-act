@@ -26,6 +26,8 @@ constexpr UBaseType_t RX_TASK_PRIO = 10;
 constexpr int UART_BUFFER_SIZE = 256;
 constexpr TickType_t UART_READ_TIMEOUT = pdMS_TO_TICKS(100);
 constexpr TickType_t MAX_SAMPLE_AGE = pdMS_TO_TICKS(200);  // Reject stale readings
+constexpr uint16_t DISTANCE_MIN_MM = 30;
+constexpr uint16_t DISTANCE_MAX_MM = 4500;
 
 // ============================================================================
 // Module State
@@ -37,6 +39,10 @@ static TickType_t s_last_update_tick = 0;
 static bool s_has_measurement = false;
 static TaskHandle_t s_rx_task = nullptr;
 static bool s_uart_installed = false;
+static uint32_t s_range_drop_count = 0;
+static volatile bool s_stop_requested = false;
+static uint8_t s_parser_frame[4] = {0};
+static int s_parser_idx = 0;
 
 // Internal copy of config - ensures background task always has a valid pointer
 // regardless of how the caller allocated the original config struct
@@ -49,30 +55,44 @@ static ultrasonic_a02yyuw_config_t s_config = {};
 // Parse A02YYUW UART protocol: [0xFF] [HIGH] [LOW] [CHECKSUM]
 // Checksum = (0xFF + HIGH + LOW) & 0xFF
 // Returns true when valid frame parsed, writes distance to *distance_mm
+static void ultrasonic_a02yyuw_reset_parser_state(void) {
+    s_parser_idx = 0;
+    for (int i = 0; i < 4; ++i) s_parser_frame[i] = 0;
+}
+
 static bool ultrasonic_a02yyuw_parse_stream(const uint8_t *data, int len, uint16_t *distance_mm) {
-    static uint8_t frame[4];
-    static int idx = 0;
     bool found = false;
 
     for (int i = 0; i < len; ++i) {
         uint8_t b = data[i];
 
         // Look for frame start byte
-        if (idx == 0) {
+        if (s_parser_idx == 0) {
             if (b != 0xFF) continue;
-            frame[idx++] = b;
+            s_parser_frame[s_parser_idx++] = b;
             continue;
         }
 
-        frame[idx++] = b;
-        if (idx == 4) {
-            idx = 0;
+        s_parser_frame[s_parser_idx++] = b;
+        if (s_parser_idx == 4) {
+            s_parser_idx = 0;
             // Verify checksum
-            uint8_t sum = (uint8_t)(frame[0] + frame[1] + frame[2]);
-            if (sum == frame[3]) {
-                *distance_mm = (uint16_t)((frame[1] << 8) | frame[2]);
-                found = true;
-                // Continue processing — use the freshest valid frame
+            uint8_t sum = (uint8_t)(s_parser_frame[0] + s_parser_frame[1] + s_parser_frame[2]);
+            if (sum == s_parser_frame[3]) {
+                uint16_t parsed_mm = (uint16_t)((s_parser_frame[1] << 8) | s_parser_frame[2]);
+                if (parsed_mm >= DISTANCE_MIN_MM && parsed_mm <= DISTANCE_MAX_MM) {
+                    *distance_mm = parsed_mm;
+                    found = true;
+                    // Continue processing — use the freshest valid frame
+                } else {
+                    s_range_drop_count++;
+#ifdef CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS
+                    if (s_range_drop_count == 1 || (s_range_drop_count % 20) == 0) {
+                        ESP_LOGW(TAG, "Out-of-range sample dropped: %u mm (valid %u-%u)",
+                                 parsed_mm, DISTANCE_MIN_MM, DISTANCE_MAX_MM);
+                    }
+#endif
+                }
             }
             // Bad checksum - frame discarded, continue searching
         }
@@ -104,7 +124,7 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
              config->uart_num, config->tx_gpio, config->rx_gpio, config->baud_rate);
 #endif
 
-    while (true) {
+    while (!s_stop_requested) {
         int read_len = uart_read_bytes(config->uart_num, buffer, sizeof(buffer), UART_READ_TIMEOUT);
         
         if (read_len > 0) {
@@ -140,6 +160,9 @@ static void ultrasonic_a02yyuw_uart_rx_task(void *arg) {
 #endif
         }
     }
+
+    s_rx_task = nullptr;
+    vTaskDelete(nullptr);
 }
 
 }  // namespace
@@ -152,6 +175,10 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     ultrasonic_a02yyuw_deinit();
+    if (s_rx_task != nullptr) {
+        // Previous RX task is still shutting down; caller should retry later.
+        return ESP_ERR_INVALID_STATE;
+    }
 
     uart_config_t uart_config = {
         .baud_rate = config->baud_rate,
@@ -189,7 +216,10 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     // Copy config internally so background task has a stable pointer
     s_config = *config;
 
+    ultrasonic_a02yyuw_reset_parser_state();
+
     // Start background task to continuously read sensor (uses internal config copy)
+    s_stop_requested = false;
     BaseType_t task_ok = xTaskCreate(ultrasonic_a02yyuw_uart_rx_task,
                                      "ultrasonic_a02yyuw_rx",
                                      RX_TASK_STACK,
@@ -208,14 +238,22 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config) {
     s_last_distance_mm = 0;
     s_last_update_tick = 0;
     taskEXIT_CRITICAL(&s_ultrasonic_lock);
+    s_range_drop_count = 0;
 
     return ESP_OK;
 }
 
 void ultrasonic_a02yyuw_deinit(void) {
     if (s_rx_task) {
-        vTaskDelete(s_rx_task);
-        s_rx_task = nullptr;
+        s_stop_requested = true;
+        for (int i = 0; i < 50 && s_rx_task != nullptr; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (s_rx_task != nullptr) {
+            // RX task still owns UART APIs; do not tear down the driver underneath it.
+            ESP_LOGW(TAG, "RX task did not stop within timeout; deferring UART teardown");
+            return;
+        }
     }
 
     if (s_uart_installed) {
@@ -228,6 +266,9 @@ void ultrasonic_a02yyuw_deinit(void) {
     s_last_distance_mm = 0;
     s_last_update_tick = 0;
     taskEXIT_CRITICAL(&s_ultrasonic_lock);
+    ultrasonic_a02yyuw_reset_parser_state();
+    s_range_drop_count = 0;
+    s_stop_requested = false;
 }
 
 // ============================================================================
