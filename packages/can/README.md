@@ -2,10 +2,10 @@
 
 CAN bus communication system for the autonomous golf cart, consisting of a Jetson AGX Orin (Planner), two ESP32-C6 microcontrollers (Control/Safety), and two UIM2852CA stepper motors (Steering/Braking).
 
-The Planner, Control, and Safety nodes share a unified heartbeat format, state enum, and fault code namespace over 1 Mbps CAN. Safety commands target states with READY/ENABLING/ACTIVE, while Planner/Control report live local states (including OVERRIDE/FAULT):
+The Planner, Control, and Safety nodes share a unified heartbeat format, state enum, and fault code namespace over 1 Mbps CAN. Safety commands target states with NOT_READY/READY/ENABLE/ACTIVE, while Planner/Control report live local states (including OVERRIDE/FAULT):
 
 | Node                           | Role                                                         | Heartbeat ID |
-| ------------------------------ | ------------------------------------------------------------ | ------------ |
+|--------------------------------|--------------------------------------------------------------|--------------|
 | **Safety** (ESP32-C6-WROOM-1)  | System state authority, e-stop/error monitoring, power relay | 0x100        |
 | **Planner** (Jetson AGX Orin)  | Path planning, sends throttle/steering/braking commands      | 0x110        |
 | **Control** (ESP32-C6-WROOM-1) | Executes actuator commands (throttle mux, stepper motors)    | 0x120        |
@@ -14,12 +14,12 @@ Two UIM2852CA stepper motors (steering node 5, braking node 6) also share the bu
 
 ## Documentation
 
-| Topic                                                           | Location                                                                         |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Frame layouts, state codes, fault codes, flags                  | [common/protocol/can_protocol/README.md](common/protocol/can_protocol/README.md) |
-| Control messages, pins, wiring, components                      | [control-esp32/README.md](control-esp32/README.md)                               |
-| Safety system state authority, e-stop logic, pins, wiring       | [safety-esp32/README.md](safety-esp32/README.md)                                 |
-| Host-native unit tests                                          | [tests/README.md](tests/README.md)                                               |
+| Topic                                                     | Location                                               |
+|-----------------------------------------------------------|--------------------------------------------------------|
+| Frame layouts, state codes, fault codes, flags            | [common/protocol/README.md](common/protocol/README.md) |
+| Control messages, pins, wiring, components                | [control-esp32/README.md](control-esp32/README.md)     |
+| Safety system state authority, e-stop logic, pins, wiring | [safety-esp32/README.md](safety-esp32/README.md)       |
+| Host-native unit tests                                    | [tests/README.md](tests/README.md)                     |
 
 ## CAN Bus Wiring
 
@@ -30,7 +30,7 @@ Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Pl
 Each CAN node requires three wires to the bus:
 
 | Wire  | Description                               |
-| ----- | ----------------------------------------- |
+|-------|-------------------------------------------|
 | CAN-H | CAN high signal                           |
 | CAN-L | CAN low signal                            |
 | GND   | Common ground reference between all nodes |
@@ -48,15 +48,15 @@ Each CAN node requires three wires to the bus:
 
 ### Message Traffic
 
-| ID       | Name              | Sender                 | Frame Type      |
-| -------- | ----------------- | ---------------------- | --------------- |
+| ID       | Name              | Sender           | Frame Type      |
+|----------|-------------------|------------------|-----------------|
 | 0x100    | SAFETY_HEARTBEAT  | Safety           | Standard 11-bit |
 | 0x110    | PLANNER_HEARTBEAT | Planner          | Standard 11-bit |
 | 0x111    | PLANNER_COMMAND   | Planner          | Standard 11-bit |
 | 0x120    | CONTROL_HEARTBEAT | Control          | Standard 11-bit |
 | Extended | STEPPER\_\*       | Control / Motors | Extended 29-bit |
 
-See [common/protocol/can_protocol/README.md](common/protocol/can_protocol/README.md) for frame layouts and byte-level detail.
+See [common/protocol/README.md](common/protocol/README.md) for frame layouts and byte-level detail.
 
 ## Development Setup
 
@@ -136,7 +136,7 @@ The serial port varies by OS and connection order. Find your ports first:
 ### Finding Ports
 
 | OS                | Command                                | Common Ports                              |
-| ----------------- | -------------------------------------- | ----------------------------------------- |
+|-------------------|----------------------------------------|-------------------------------------------|
 | **Linux**         | `ls /dev/ttyACM*` or `ls /dev/ttyUSB*` | `/dev/ttyACM0`, `/dev/ttyACM1`            |
 | **macOS**         | `ls /dev/cu.usb*`                      | `/dev/cu.usbmodem*`, `/dev/cu.usbserial*` |
 | **Windows (WSL)** | `ls /dev/ttyACM*` (with usbipd)        | `/dev/ttyACM0`, `/dev/ttyACM1`            |
