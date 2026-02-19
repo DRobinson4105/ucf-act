@@ -1,6 +1,7 @@
 build/
 sdkconfig
 sdkconfig.old
+.env
 
 # Host test build artifacts
 tests/test_stepper_protocol
