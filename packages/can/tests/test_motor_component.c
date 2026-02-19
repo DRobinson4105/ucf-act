@@ -1103,6 +1103,14 @@ static void test_position_error_negative_delta(void) {
     assert(stepper_motor_uim2852_position_error(&motor) == 200);
 }
 
+static void test_position_error_saturates_on_extreme_delta(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.target_position = INT32_MAX;
+    motor.absolute_position = INT32_MIN;
+    assert(stepper_motor_uim2852_position_error(&motor) == INT32_MAX);
+}
+
 static void test_target_position_not_set_on_bg_failure(void) {
     stepper_motor_uim2852_t motor;
     init_default_motor(&motor);
@@ -1115,6 +1123,187 @@ static void test_target_position_not_set_on_bg_failure(void) {
     // target_position should NOT have been updated
     assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
     g_mock_send_ext_fail_after = 0;
+}
+
+// ============================================================================
+// Deinit and re-init safety tests
+// ============================================================================
+
+static void test_deinit_clears_initialized(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    assert(motor.initialized == true);
+    assert(motor.query_sem != NULL);
+
+    stepper_motor_uim2852_deinit(&motor);
+    assert(motor.initialized == false);
+    assert(motor.query_sem == NULL);
+}
+
+static void test_deinit_null_motor(void) {
+    // Should not crash
+    stepper_motor_uim2852_deinit(NULL);
+}
+
+static void test_deinit_already_deinitialized(void) {
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    // Should not crash on zero-initialized motor
+    stepper_motor_uim2852_deinit(&motor);
+    assert(motor.initialized == false);
+    assert(motor.query_sem == NULL);
+}
+
+static void test_reinit_safe(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    assert(motor.initialized == true);
+
+    // Re-init should succeed without leaking the old semaphore
+    esp_err_t err = stepper_motor_uim2852_init(&motor, NULL);
+    assert(err == ESP_OK);
+    assert(motor.initialized == true);
+    assert(motor.query_sem != NULL);
+}
+
+static void test_deinit_then_enable_fails(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+
+    stepper_motor_uim2852_deinit(&motor);
+    esp_err_t err = stepper_motor_uim2852_enable(&motor);
+    assert(err == ESP_ERR_INVALID_STATE);
+}
+
+// ============================================================================
+// Liveness watchdog tests
+// ============================================================================
+
+static void test_liveness_ok_within_timeout(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.driver_enabled = true;
+    motor.last_response_tick = 100;
+    // 200 ticks elapsed, timeout is 500 -> not timed out
+    assert(stepper_motor_uim2852_check_liveness(&motor, 300, 500) == false);
+}
+
+static void test_liveness_timeout_exceeded(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.driver_enabled = true;
+    motor.last_response_tick = 100;
+    // 600 ticks elapsed, timeout is 500 -> timed out
+    assert(stepper_motor_uim2852_check_liveness(&motor, 700, 500) == true);
+}
+
+static void test_liveness_not_enabled(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.driver_enabled = false;
+    motor.last_response_tick = 100;
+    // Even though enough time passed, driver not enabled -> no timeout
+    assert(stepper_motor_uim2852_check_liveness(&motor, 700, 500) == false);
+}
+
+static void test_liveness_no_response_yet(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.driver_enabled = true;
+    motor.last_response_tick = 0;  // never received a response
+    // Should not flag timeout if we've never received a response
+    // (motor may still be initializing)
+    assert(stepper_motor_uim2852_check_liveness(&motor, 1000, 500) == false);
+}
+
+static void test_liveness_exact_boundary(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.driver_enabled = true;
+    motor.last_response_tick = 100;
+    // Exactly at timeout boundary: elapsed == timeout -> not timed out (needs >)
+    assert(stepper_motor_uim2852_check_liveness(&motor, 600, 500) == false);
+}
+
+static void test_liveness_tick_wrap(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    motor.driver_enabled = true;
+    motor.last_response_tick = UINT32_MAX - 100;
+    // Tick wrapped around: now_tick=500, elapsed = 500 - (MAX-100) = 601 (unsigned wrap) > 500
+    assert(stepper_motor_uim2852_check_liveness(&motor, 500, 500) == true);
+}
+
+static void test_liveness_null_motor(void) {
+    assert(stepper_motor_uim2852_check_liveness(NULL, 1000, 500) == false);
+}
+
+static void test_liveness_uninitialized(void) {
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    motor.initialized = false;
+    motor.driver_enabled = true;
+    motor.last_response_tick = 100;
+    assert(stepper_motor_uim2852_check_liveness(&motor, 700, 500) == false);
+}
+
+// ============================================================================
+// set_limits tests
+// ============================================================================
+
+static void test_set_limits_sends_lm_and_ic(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+
+    esp_err_t err = stepper_motor_uim2852_set_limits(&motor, -3200, 3200);
+    assert(err == ESP_OK);
+    // Should send 3 frames: LM[1], LM[2], IC[7]
+    assert(mock_sent_count == 3);
+    assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_LM);
+    assert(mock_sent_frames[0].data[0] == STEPPER_UIM2852_LM_LOWER_WORK);
+    // -3200 = 0xFFFFF380 LE
+    assert(mock_sent_frames[0].data[1] == 0x80);
+    assert(mock_sent_frames[0].data[2] == 0xF3);
+    assert(mock_sent_frames[0].data[3] == 0xFF);
+    assert(mock_sent_frames[0].data[4] == 0xFF);
+
+    assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_LM);
+    assert(mock_sent_frames[1].data[0] == STEPPER_UIM2852_LM_UPPER_WORK);
+    // 3200 = 0x00000C80 LE
+    assert(mock_sent_frames[1].data[1] == 0x80);
+    assert(mock_sent_frames[1].data[2] == 0x0C);
+    assert(mock_sent_frames[1].data[3] == 0x00);
+    assert(mock_sent_frames[1].data[4] == 0x00);
+
+    assert(get_sent_cw_base(2) == STEPPER_UIM2852_CW_IC);
+    assert(mock_sent_frames[2].data[0] == STEPPER_UIM2852_IC_SOFTWARE_LIMITS);
+    assert(mock_sent_frames[2].data[1] == 1);  // enable
+}
+
+static void test_set_limits_uninitialized(void) {
+    mock_reset_all();
+    stepper_motor_uim2852_t motor;
+    memset(&motor, 0, sizeof(motor));
+    motor.initialized = false;
+
+    esp_err_t err = stepper_motor_uim2852_set_limits(&motor, -3200, 3200);
+    assert(err == ESP_ERR_INVALID_STATE);
+    assert(mock_sent_count == 0);
+}
+
+static void test_set_limits_null_motor(void) {
+    esp_err_t err = stepper_motor_uim2852_set_limits(NULL, -3200, 3200);
+    assert(err == ESP_ERR_INVALID_STATE);
+}
+
+static void test_set_limits_tx_failure(void) {
+    stepper_motor_uim2852_t motor;
+    init_default_motor(&motor);
+    mock_twai_send_result = ESP_FAIL;
+
+    esp_err_t err = stepper_motor_uim2852_set_limits(&motor, -3200, 3200);
+    assert(err == ESP_FAIL);
+    assert(mock_sent_count == 0);  // first send fails
 }
 
 // ============================================================================
@@ -1253,7 +1442,34 @@ int main(void) {
     TEST(test_position_error_zero_when_at_target);
     TEST(test_position_error_positive_delta);
     TEST(test_position_error_negative_delta);
+    TEST(test_position_error_saturates_on_extreme_delta);
     TEST(test_target_position_not_set_on_bg_failure);
+
+    // deinit and re-init safety
+    printf("\n  --- deinit/reinit ---\n");
+    TEST(test_deinit_clears_initialized);
+    TEST(test_deinit_null_motor);
+    TEST(test_deinit_already_deinitialized);
+    TEST(test_reinit_safe);
+    TEST(test_deinit_then_enable_fails);
+
+    // liveness watchdog
+    printf("\n  --- liveness watchdog ---\n");
+    TEST(test_liveness_ok_within_timeout);
+    TEST(test_liveness_timeout_exceeded);
+    TEST(test_liveness_not_enabled);
+    TEST(test_liveness_no_response_yet);
+    TEST(test_liveness_exact_boundary);
+    TEST(test_liveness_tick_wrap);
+    TEST(test_liveness_null_motor);
+    TEST(test_liveness_uninitialized);
+
+    // set_limits
+    printf("\n  --- set_limits ---\n");
+    TEST(test_set_limits_sends_lm_and_ic);
+    TEST(test_set_limits_uninitialized);
+    TEST(test_set_limits_null_motor);
+    TEST(test_set_limits_tx_failure);
 
     printf("\n%d/%d tests passed.\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

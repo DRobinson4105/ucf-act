@@ -38,7 +38,7 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config) {
 
     gpio_config_t io_conf = {
         .pin_bit_mask = 1ULL << config->gpio,
-        .mode = GPIO_MODE_OUTPUT,
+        .mode = GPIO_MODE_INPUT_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,

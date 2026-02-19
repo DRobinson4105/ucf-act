@@ -52,8 +52,22 @@ static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw,
 // Initialization
 // ============================================================================
 
+void stepper_motor_uim2852_deinit(stepper_motor_uim2852_t *motor) {
+    if (!motor) return;
+    if (motor->query_sem) {
+        vSemaphoreDelete(motor->query_sem);
+        motor->query_sem = NULL;
+    }
+    motor->initialized = false;
+}
+
 esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepper_motor_uim2852_config_t *config) {
     if (!motor) return ESP_ERR_INVALID_ARG;
+    
+    // Free any previously allocated resources before re-initializing.
+    // This prevents semaphore leaks when init is called on an already-
+    // initialized motor (e.g. during fault retry).
+    stepper_motor_uim2852_deinit(motor);
     
     memset(motor, 0, sizeof(stepper_motor_uim2852_t));
     
@@ -117,6 +131,31 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor) {
     return err;
 }
 
+esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor,
+                                            int32_t lower_limit,
+                                            int32_t upper_limit) {
+    if (!motor || !motor->initialized) return ESP_ERR_INVALID_STATE;
+
+    esp_err_t err;
+
+    // Set lower working limit (LM[1])
+    err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM,
+                                           STEPPER_UIM2852_LM_LOWER_WORK, lower_limit);
+    if (err != ESP_OK) return err;
+
+    // Set upper working limit (LM[2])
+    err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM,
+                                           STEPPER_UIM2852_LM_UPPER_WORK, upper_limit);
+    if (err != ESP_OK) return err;
+
+    // Enable software limits via IC[7]=1
+    uint8_t data[8];
+    uint8_t dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_SOFTWARE_LIMITS, 1);
+    err = send_instruction(motor, STEPPER_UIM2852_CW_IC, data, dl);
+
+    return err;
+}
+
 // ============================================================================
 // Basic Control
 // ============================================================================
@@ -127,7 +166,9 @@ esp_err_t stepper_motor_uim2852_enable(stepper_motor_uim2852_t *motor) {
     
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_MO, data, dl);
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->driver_enabled = true;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Motor enabled", motor->config.node_id);
 #endif
@@ -141,8 +182,10 @@ esp_err_t stepper_motor_uim2852_disable(stepper_motor_uim2852_t *motor) {
     
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_MO, data, dl);
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->driver_enabled = false;
         motor->motion_in_progress = false;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Motor disabled", motor->config.node_id);
 #endif
@@ -156,7 +199,9 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor) {
     
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_ST, data, dl);
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->motion_in_progress = false;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
         ESP_LOGI(TAG, "Node %u: Stop commanded", motor->config.node_id);
 #endif
@@ -186,7 +231,9 @@ esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_ST, data, dl);
     
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->motion_in_progress = false;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Emergency stop!", motor->config.node_id);
 #endif
@@ -234,8 +281,10 @@ esp_err_t stepper_motor_uim2852_go_absolute(stepper_motor_uim2852_t *motor, int3
     err = send_instruction(motor, STEPPER_UIM2852_CW_BG, data, dl);
     
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->motion_in_progress = true;
         motor->target_position = position;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
         ESP_LOGI(TAG, "Node %u: Moving to PA=%ld", motor->config.node_id, (long)position);
 #endif
@@ -261,7 +310,9 @@ esp_err_t stepper_motor_uim2852_go_relative(stepper_motor_uim2852_t *motor, int3
     err = send_instruction(motor, STEPPER_UIM2852_CW_BG, data, dl);
     
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->motion_in_progress = true;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
         ESP_LOGI(TAG, "Node %u: Moving PR=%ld", motor->config.node_id, (long)displacement);
 #endif
@@ -275,7 +326,9 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor) {
     
     esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_OG, data, dl);
     if (err == ESP_OK) {
+        taskENTER_CRITICAL(&motor->lock);
         motor->absolute_position = 0;
+        taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
         ESP_LOGI(TAG, "Node %u: Origin set", motor->config.node_id);
 #endif
@@ -323,8 +376,10 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
     if (producer_id != motor->config.node_id) return false;
     
     // Update response timestamp
+    taskENTER_CRITICAL(&motor->lock);
     motor->last_response_tick = xTaskGetTickCount();
     motor->ack_pending = false;
+    taskEXIT_CRITICAL(&motor->lock);
     
     uint8_t cw_base = stepper_uim2852_cw_base(cw);
     uint8_t dl = msg->data_length_code;
@@ -428,7 +483,11 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
             
         case STEPPER_UIM2852_CW_MO:
             // ACK for motor enable/disable
-            if (dl >= 1) motor->driver_enabled = (data[0] != 0);
+            if (dl >= 1) {
+                taskENTER_CRITICAL(&motor->lock);
+                motor->driver_enabled = (data[0] != 0);
+                taskEXIT_CRITICAL(&motor->lock);
+            }
             break;
         case STEPPER_UIM2852_CW_PP:
         case STEPPER_UIM2852_CW_IC:
@@ -471,13 +530,39 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 }
 
 // ============================================================================
+// Liveness Watchdog
+// ============================================================================
+
+bool stepper_motor_uim2852_check_liveness(const stepper_motor_uim2852_t *motor,
+                                           TickType_t now_tick,
+                                           TickType_t timeout_ticks) {
+    if (!motor || !motor->initialized) return false;
+
+    stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
+    taskENTER_CRITICAL(&m->lock);
+    bool driver_enabled = m->driver_enabled;
+    TickType_t last_response_tick = m->last_response_tick;
+    taskEXIT_CRITICAL(&m->lock);
+
+    // Only flag timeout if the driver has been enabled (we expect responses)
+    // and at least one response has been received (last_response_tick != 0).
+    if (!driver_enabled) return false;
+    if (last_response_tick == 0) return false;
+
+    TickType_t elapsed = now_tick - last_response_tick;
+    return (elapsed > timeout_ticks);
+}
+
+// ============================================================================
 // Notification Callback
 // ============================================================================
 
 void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor, 
                                                 stepper_motor_uim2852_notify_cb_t callback) {
     if (!motor) return;
+    taskENTER_CRITICAL(&motor->lock);
     motor->notify_callback = callback;
+    taskEXIT_CRITICAL(&motor->lock);
 }
 
 // ============================================================================

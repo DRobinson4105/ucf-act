@@ -165,6 +165,46 @@ static void test_adc_raw_4095_returns_3300_mv(void) {
     adc_12bitsar_deinit();
 }
 
+static void test_adc_read_rejects_out_of_range_raw(void) {
+    mock_reset_all();
+    mock_adc_cali_create_result = ESP_FAIL;
+    mock_adc_read_raw_value = -1;
+
+    adc_12bitsar_config_t cfg = default_pedal_cfg();
+    assert(adc_12bitsar_init(&cfg) == ESP_OK);
+
+    uint16_t mv = 123;
+    assert(adc_12bitsar_read_mv_checked(&mv) == ESP_ERR_INVALID_RESPONSE);
+    assert(mv == 123);
+    assert(adc_12bitsar_read_mv() == 0);
+
+    adc_12bitsar_deinit();
+}
+
+static void test_adc_calibrated_voltage_clamps_to_zero(void) {
+    mock_reset_all();
+    mock_adc_cali_create_result = ESP_OK;
+    mock_adc_read_raw_value = 100;
+    mock_adc_cali_voltage_mv = -50;
+
+    adc_12bitsar_config_t cfg = default_pedal_cfg();
+    assert(adc_12bitsar_init(&cfg) == ESP_OK);
+    assert(adc_12bitsar_read_mv() == 0);
+    adc_12bitsar_deinit();
+}
+
+static void test_adc_calibrated_voltage_clamps_to_3300(void) {
+    mock_reset_all();
+    mock_adc_cali_create_result = ESP_OK;
+    mock_adc_read_raw_value = 100;
+    mock_adc_cali_voltage_mv = 5000;
+
+    adc_12bitsar_config_t cfg = default_pedal_cfg();
+    assert(adc_12bitsar_init(&cfg) == ESP_OK);
+    assert(adc_12bitsar_read_mv() == 3300);
+    adc_12bitsar_deinit();
+}
+
 // ============================================================================
 // FR debounce edge-case tests
 // ============================================================================
@@ -227,6 +267,9 @@ int main(void) {
     TEST(test_adc_12bitsar_init_fails_when_adc_setup_fails);
     TEST(test_adc_raw_zero_returns_zero_mv);
     TEST(test_adc_raw_4095_returns_3300_mv);
+    TEST(test_adc_read_rejects_out_of_range_raw);
+    TEST(test_adc_calibrated_voltage_clamps_to_zero);
+    TEST(test_adc_calibrated_voltage_clamps_to_3300);
     TEST(test_fr_raw_mapping_matches_pc817_wiring);
     TEST(test_fr_debounce_requires_stable_interval);
     TEST(test_fr_debounce_resets_on_bounce_back);

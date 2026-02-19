@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <limits.h>
 
 #include "freertos/FreeRTOS.h"
 #include "driver/twai.h"
@@ -101,8 +102,19 @@ typedef struct stepper_motor_uim2852 {
  * @param motor Motor instance
  * @param config Configuration (NULL for defaults)
  * @return ESP_OK on success
+ * @note Safe to call on a previously initialized motor — internally deinits first.
  */
 esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepper_motor_uim2852_config_t *config);
+
+/**
+ * @brief Deinitialize motor structure and free resources
+ *
+ * Releases the query semaphore and marks the motor as uninitialized.
+ * Safe to call on an already-deinitialized or zero-initialized motor.
+ *
+ * @param motor Motor instance
+ */
+void stepper_motor_uim2852_deinit(stepper_motor_uim2852_t *motor);
 
 /**
  * @brief Query motor configuration (microstepping) and initialize parameters
@@ -111,6 +123,22 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
  * @note Call this after CAN bus is initialized
  */
 esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor);
+
+/**
+ * @brief Program hardware software-limits (LM) on the motor controller.
+ *
+ * Sets lower/upper working limits and enables the limit system.
+ * These act as a secondary safety net — even if the host sends an
+ * out-of-range position, the motor controller will reject it.
+ *
+ * @param motor       Motor instance
+ * @param lower_limit Lower working limit in pulses (signed)
+ * @param upper_limit Upper working limit in pulses (signed)
+ * @return ESP_OK on success
+ */
+esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor,
+                                            int32_t lower_limit,
+                                            int32_t upper_limit);
 
 // ============================================================================
 // Basic Control
@@ -259,13 +287,53 @@ static inline int32_t stepper_motor_uim2852_get_target_position(const stepper_mo
 }
 
 /**
+ * @brief Check if motion is currently in progress
+ */
+static inline bool stepper_motor_uim2852_is_motion_in_progress(const stepper_motor_uim2852_t *motor) {
+    if (!motor) return false;
+    stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
+    taskENTER_CRITICAL(&m->lock);
+    bool in_progress = m->motion_in_progress;
+    taskEXIT_CRITICAL(&m->lock);
+    return in_progress;
+}
+
+/**
  * @brief Compute absolute position error (|target - actual|)
  * @return Position error in pulses (always >= 0)
  */
 static inline int32_t stepper_motor_uim2852_position_error(const stepper_motor_uim2852_t *motor) {
-    int32_t err = motor->target_position - motor->absolute_position;
-    return (err < 0) ? -err : err;
+    if (!motor) return 0;
+    stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
+    taskENTER_CRITICAL(&m->lock);
+    int32_t target = m->target_position;
+    int32_t actual = m->absolute_position;
+    taskEXIT_CRITICAL(&m->lock);
+    int64_t err = (int64_t)target - (int64_t)actual;
+    if (err < 0) err = -err;
+    if (err > INT32_MAX) return INT32_MAX;
+    return (int32_t)err;
 }
+
+// ============================================================================
+// Liveness Watchdog
+// ============================================================================
+
+/**
+ * @brief Check motor liveness based on response timeout.
+ *
+ * Compares the current tick against last_response_tick.  If the motor has
+ * been initialized, the driver is enabled, and no response has arrived
+ * within @p timeout_ticks, the motor is considered unresponsive.
+ *
+ * @param motor         Motor instance
+ * @param now_tick      Current FreeRTOS tick count (xTaskGetTickCount)
+ * @param timeout_ticks Maximum allowed silence (e.g. pdMS_TO_TICKS(500))
+ * @return true if the motor is unresponsive (timed out), false otherwise
+ */
+bool stepper_motor_uim2852_check_liveness(const stepper_motor_uim2852_t *motor,
+                                           TickType_t now_tick,
+                                           TickType_t timeout_ticks);
 
 // ============================================================================
 // CAN Frame Processing

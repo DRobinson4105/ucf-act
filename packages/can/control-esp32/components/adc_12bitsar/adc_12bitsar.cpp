@@ -11,6 +11,11 @@ namespace {
 
 [[maybe_unused]] static const char *TAG = "ADC_12BITSAR";
 
+constexpr int ADC_RAW_MIN = 0;
+constexpr int ADC_RAW_MAX = 4095;
+constexpr int ADC_MV_MIN = 0;
+constexpr int ADC_MV_MAX = 3300;
+
 static bool s_initialized = false;
 static adc_12bitsar_config_t s_config = {};
 static adc_oneshot_unit_handle_t s_adc_handle = nullptr;
@@ -98,12 +103,22 @@ esp_err_t adc_12bitsar_read_mv_checked(uint16_t *out_mv) {
         return err;
     }
 
+    if (raw < ADC_RAW_MIN || raw > ADC_RAW_MAX) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
     int voltage_mv = 0;
     if (s_cali_enabled && s_cali_handle) {
-        adc_cali_raw_to_voltage(s_cali_handle, raw, &voltage_mv);
+        err = adc_cali_raw_to_voltage(s_cali_handle, raw, &voltage_mv);
+        if (err != ESP_OK) {
+            return err;
+        }
     } else {
-        voltage_mv = (raw * 3300) / 4095;
+        voltage_mv = (raw * ADC_MV_MAX) / ADC_RAW_MAX;
     }
+
+    if (voltage_mv < ADC_MV_MIN) voltage_mv = ADC_MV_MIN;
+    if (voltage_mv > ADC_MV_MAX) voltage_mv = ADC_MV_MAX;
 
     *out_mv = (uint16_t)voltage_mv;
     return ESP_OK;

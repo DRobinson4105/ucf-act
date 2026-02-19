@@ -1,3 +1,13 @@
+config PRODUCTION_BUILD
+    bool "Production build (disallow test bypasses)"
+    default n
+    help
+        Enable this for production/vehicle deployment builds.
+        If any BYPASS_* option is enabled alongside this flag,
+        the firmware will fail to compile with a clear error.
+        This prevents accidental deployment of bench-test firmware
+        onto the vehicle.
+
 menu "Test Bypasses"
 
     menu "Safety Mirror"
@@ -44,7 +54,7 @@ menu "Test Bypasses"
 
     endmenu
 
-    menu "Driver Inputs"
+    menu "Sensor Inputs"
 
         config BYPASS_INPUT_PEDAL_ADC
             bool "Bypass pedal ADC input: force released"
@@ -109,10 +119,19 @@ menu "Debug Logging"
         config LOG_CAN_HEARTBEAT_RX
             bool "Log CAN heartbeat RX: every frame"
             default n
+            help
+                Log every received Safety heartbeat with sequence, target state,
+                and fault code. Very verbose (10 msgs/sec). For edge-triggered
+                Safety target/fault change logs, use the separate option under
+                Control Logic instead.
 
         config LOG_CAN_PLANNER_COMMAND_RX
             bool "Log Planner command RX: every frame"
             default n
+            help
+                Log every received Planner command with throttle, steering,
+                braking, and sequence number. Very verbose when Planner is
+                actively sending commands.
 
     endmenu
 
@@ -124,6 +143,13 @@ menu "Debug Logging"
             help
                 Log component health edge transitions when a component becomes
                 unavailable or recovers during runtime.
+
+        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
+            bool "Log heartbeat monitor lost/regained transitions"
+            default y
+            help
+                Log when a monitored heartbeat node is lost (timed out)
+                or regained (first heartbeat after timeout).
 
         config LOG_CAN_RECOVERY
             bool "Log CAN recovery flow"
@@ -137,49 +163,49 @@ menu "Debug Logging"
             default n
             help
                 Log each failed TWAI retry while TWAI is unavailable.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_MULTIPLEXER
             bool "Log multiplexer retry attempts"
             default n
             help
                 Log each failed multiplexer re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_PEDAL_RELAY
             bool "Log pedal relay retry attempts"
             default n
             help
                 Log each failed pedal-relay re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_PEDAL_INPUT
             bool "Log pedal input retry attempts"
             default n
             help
                 Log each failed pedal ADC input re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_FR_INPUT
             bool "Log F/R input retry attempts"
             default n
             help
                 Log each failed F/R optocoupler input re-initialization attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_STEPPER_STEERING
             bool "Log steering stepper retry attempts"
             default n
             help
                 Log each failed steering-stepper health recovery attempt.
+                Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_STEPPER_BRAKING
             bool "Log braking stepper retry attempts"
             default n
             help
                 Log each failed braking-stepper health recovery attempt.
-
-        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
-            bool "Log heartbeat monitor lost/regained transitions"
-            default y
-            help
-                Log when a monitored heartbeat node is lost (timed out)
-                or regained (first heartbeat after timeout).
+                Rate-limited: first attempt + every 20th.
 
     endmenu
 
@@ -188,50 +214,90 @@ menu "Debug Logging"
         config LOG_CONTROL_STATE_CHANGES
             bool "Log control state changes"
             default y
+            help
+                Log each control state transition (e.g. READY -> ENABLE)
+                with the reason for the transition.
 
         config LOG_CONTROL_FAULT_CHANGES
             bool "Log control fault code changes"
             default n
+            help
+                Log each control fault code transition with detail string.
 
-        config LOG_CONTROL_STATE_TICK
-            bool "Log control state evaluation: every cycle"
-            default n
+        config LOG_CONTROL_PRECONDITION_BLOCKED
+            bool "Log enable precondition failures"
+            default y
+            help
+                Log when Control is not autonomy-ready because one or more
+                preconditions failed (FR not
+                forward, pedal pressed, pedal not re-armed, active fault).
+                Edge-triggered: logs on first blocked tick and when the set
+                of failed preconditions changes.
 
         config LOG_CONTROL_ENABLE_SEQUENCE
             bool "Log control enable sequence events"
             default n
+            help
+                Log enable sequence lifecycle: start, complete, abort (with
+                reason), and stepper enable failures.
 
         config LOG_CONTROL_OVERRIDE
             bool "Log control override events"
             default n
+            help
+                Log when a driver override is triggered with the reason
+                (pedal, F/R change, steering/braking position error).
+
+        config LOG_CONTROL_SAFETY_TARGET_CHANGES
+            bool "Log received Safety target/fault changes"
+            default y
+            help
+                Log edge-triggered changes in the Safety target state and
+                estop fault code as received by Control. These reflect what
+                Safety is broadcasting, not Control's own state.
+
+        config LOG_CONTROL_STATE_TICK
+            bool "Log control state evaluation: every cycle"
+            default n
+            help
+                Log the full state evaluation on every control loop tick
+                (20Hz). Extremely verbose — use only for detailed debugging.
 
         config LOG_CONTROL_THROTTLE_CHANGES
             bool "Log control throttle changes"
             default n
+            help
+                Log each throttle level transition (edge-triggered).
 
         config LOG_CONTROL_THROTTLE_TICK
             bool "Log control throttle every cycle"
             default n
-
-        config LOG_CONTROL_SAFETY_MIRROR_CHANGES
-            bool "Log mirrored Safety target/fault changes"
-            default y
+            help
+                Log current and target throttle on every control loop tick.
+                Very verbose — use only for detailed throttle debugging.
 
     endmenu
 
-    menu "Inputs"
+    menu "Sensor Inputs"
 
         config LOG_INPUT_PEDAL_ADC
             bool "Log pedal ADC every cycle"
             default n
+            help
+                Log raw pedal ADC millivolt reading and threshold on every
+                control loop tick. Very verbose.
 
         config LOG_INPUT_FR_DEBOUNCE
             bool "Log F/R debounce transitions"
             default n
+            help
+                Log raw F/R optocoupler pin state changes during debounce.
 
         config LOG_INPUT_FR_STATE
             bool "Log F/R state changes"
             default n
+            help
+                Log debounced F/R state transitions (FORWARD/REVERSE/NEUTRAL/INVALID).
 
     endmenu
 
@@ -240,34 +306,50 @@ menu "Debug Logging"
         config LOG_ACTUATOR_MUX_LEVEL
             bool "Log multiplexer level changes"
             default n
+            help
+                Log each DG408DJZ multiplexer level change.
 
         config LOG_ACTUATOR_PEDAL_RELAY
             bool "Log pedal relay state changes"
             default n
+            help
+                Log pedal bypass relay energize/de-energize transitions.
 
         config LOG_ACTUATOR_STEPPER_COMMAND_TX
             bool "Log stepper position command TX"
             default n
+            help
+                Log each steering/braking stepper absolute position command
+                sent over CAN, including failures.
 
         config LOG_ACTUATOR_STEPPER_MOTION_TX
             bool "Log stepper motion command TX"
             default n
+            help
+                Log stepper motion commands (speed, acceleration).
 
         config LOG_ACTUATOR_STEPPER_RX
             bool "Log parsed stepper RX frames"
             default n
+            help
+                Log parsed stepper motor response frames received over CAN.
 
     endmenu
 
-    menu "HEARTBEAT_LED"
+    menu "Heartbeat LED"
 
         config LOG_HEARTBEAT_LED_STATE_CHANGES
-            bool "Log HEARTBEAT_LED color/reason changes"
+            bool "Log heartbeat LED color/reason changes"
             default n
+            help
+                Log when the WS2812 heartbeat LED changes color or blink
+                pattern due to a state change.
 
-        config LOG_HEARTBEAT_LED_BLINK_PULSES
-            bool "Log HEARTBEAT_LED ON pulses"
+        config LOG_HEARTBEAT_LED_COLOR_UPDATES
+            bool "Log heartbeat LED color updates"
             default n
+            help
+                Log each LED color update. Very verbose.
 
     endmenu
 
