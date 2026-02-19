@@ -21,22 +21,25 @@ static uint8_t sanitize_target_state(uint8_t target_state) {
     }
 }
 
+uint8_t control_check_preconditions_detailed(const precondition_inputs_t *inputs) {
+    if (!inputs) return 0xFF;  // all bits set = all failed
+
+    uint8_t fail = PRECONDITION_OK;
+
+    if (inputs->fr_state != FR_STATE_FORWARD)
+        fail |= PRECONDITION_FAIL_FR_NOT_FORWARD;
+    if (inputs->pedal_pressed)
+        fail |= PRECONDITION_FAIL_PEDAL_PRESSED;
+    if (!inputs->pedal_rearmed)
+        fail |= PRECONDITION_FAIL_PEDAL_NOT_REARMED;
+    if (inputs->fault_code != NODE_FAULT_NONE)
+        fail |= PRECONDITION_FAIL_ACTIVE_FAULT;
+
+    return fail;
+}
+
 bool control_check_preconditions(const precondition_inputs_t *inputs) {
-    if (!inputs) return false;
-
-    // Must be in Forward
-    if (inputs->fr_state != FR_STATE_FORWARD) return false;
-
-    // Pedal must NOT be pressed
-    if (inputs->pedal_pressed) return false;
-
-    // Pedal must be re-armed (below threshold for 500ms)
-    if (!inputs->pedal_rearmed) return false;
-
-    // No active faults
-    if (inputs->fault_code != NODE_FAULT_NONE) return false;
-
-    return true;
+    return control_check_preconditions_detailed(inputs) == PRECONDITION_OK;
 }
 
 throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_t *inputs) {
@@ -70,6 +73,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         .new_fault_code = current_fault,
         .override_reason = OVERRIDE_REASON_NONE,
         .disable_reason = CONTROL_DISABLE_REASON_NONE,
+        .abort_reason = CONTROL_ABORT_REASON_NONE,
+        .precondition_fail = PRECONDITION_OK,
         .heartbeat_flags = 0,
         .actions = CONTROL_ACTION_NONE,
         .throttle_level = 0,
@@ -103,6 +108,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             r.disable_reason = CONTROL_DISABLE_REASON_MOTOR_FAULT;
         } else if (current_state == NODE_STATE_ENABLING) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+            r.abort_reason = CONTROL_ABORT_REASON_MOTOR_FAULT;
         }
         r.new_state = NODE_STATE_FAULT;
         r.new_fault_code = inputs->motor_fault_code;
@@ -119,6 +125,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             r.disable_reason = CONTROL_DISABLE_REASON_SENSOR_INVALID;
         } else if (current_state == NODE_STATE_ENABLING) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+            r.abort_reason = CONTROL_ABORT_REASON_SENSOR_INVALID;
         }
         r.new_state = NODE_STATE_FAULT;
         r.new_fault_code = NODE_FAULT_SENSOR_INVALID;
@@ -130,7 +137,11 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
 
     switch (current_state) {
         case NODE_STATE_INIT:
-            r.new_state = NODE_STATE_READY;
+            if ((inputs->now_ms - inputs->boot_start_ms) >= inputs->init_dwell_ms) {
+                r.new_state = NODE_STATE_READY;
+            } else {
+                r.new_state = NODE_STATE_INIT;
+            }
             break;
 
         case NODE_STATE_READY: {
@@ -142,13 +153,16 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                     .pedal_rearmed = inputs->pedal_rearmed,
                     .fault_code = current_fault,
                 };
-                if (control_check_preconditions(&pre)) {
+                uint8_t fail = control_check_preconditions_detailed(&pre);
+                if (fail == PRECONDITION_OK) {
                     r.new_state = NODE_STATE_ENABLING;
                     r.actions |= CONTROL_ACTION_START_ENABLE;
                     r.enable_start_ms = inputs->now_ms;
                     r.enable_work_done = false;
                     r.throttle_level = 0;
                     r.throttle_change_ms = inputs->now_ms;
+                } else {
+                    r.precondition_fail = fail;
                 }
             }
             break;
@@ -159,6 +173,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             if (target_state < NODE_STATE_ENABLING) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.abort_reason = CONTROL_ABORT_REASON_SAFETY_RETREAT;
                 r.enable_work_done = false;
                 break;
             }
@@ -166,6 +181,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             if (inputs->pedal_pressed) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.abort_reason = CONTROL_ABORT_REASON_PEDAL_PRESSED;
                 r.enable_work_done = false;
                 break;
             }
@@ -173,6 +189,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             if (inputs->fr_state != FR_STATE_FORWARD) {
                 r.new_state = NODE_STATE_READY;
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
+                r.abort_reason = CONTROL_ABORT_REASON_FR_NOT_FORWARD;
                 r.enable_work_done = false;
                 break;
             }
@@ -268,16 +285,36 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                 r.actions |= CONTROL_ACTION_APPLY_THROTTLE;
             }
 
-            // Stepper dedup
-            if (inputs->steering_cmd != inputs->last_steering_sent) {
-                r.send_steering = true;
-                r.steering_position = inputs->steering_cmd;
-                r.new_last_steering = inputs->steering_cmd;
+            // Clamp steering/braking commands to safe envelopes before dedup.
+            // If min == max == 0, envelope is not configured; force neutral (0)
+            // instead of passing through raw planner commands.
+            int16_t clamped_steering = inputs->steering_cmd;
+            int16_t clamped_braking  = inputs->braking_cmd;
+            if (inputs->steering_min == 0 && inputs->steering_max == 0) {
+                clamped_steering = 0;
+            } else {
+                clamped_steering = control_clamp_command(inputs->steering_cmd,
+                                                         inputs->steering_min,
+                                                         inputs->steering_max);
             }
-            if (inputs->braking_cmd != inputs->last_braking_sent) {
+            if (inputs->braking_min == 0 && inputs->braking_max == 0) {
+                clamped_braking = 0;
+            } else {
+                clamped_braking = control_clamp_command(inputs->braking_cmd,
+                                                        inputs->braking_min,
+                                                        inputs->braking_max);
+            }
+
+            // Stepper dedup (uses clamped values)
+            if (clamped_steering != inputs->last_steering_sent) {
+                r.send_steering = true;
+                r.steering_position = clamped_steering;
+                r.new_last_steering = clamped_steering;
+            }
+            if (clamped_braking != inputs->last_braking_sent) {
                 r.send_braking = true;
-                r.braking_position = inputs->braking_cmd;
-                r.new_last_braking = inputs->braking_cmd;
+                r.braking_position = clamped_braking;
+                r.new_last_braking = clamped_braking;
             }
             break;
         }
@@ -301,14 +338,50 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             r.throttle_level = 0;
             r.new_last_steering = INT16_MIN;
             r.new_last_braking = INT16_MIN;
-            r.actions |= CONTROL_ACTION_ATTEMPT_RECOVERY;
+            {
+                bool fault_cleared = false;
+                switch (current_fault) {
+                    case NODE_FAULT_NONE:
+                        fault_cleared = true;
+                        break;
+                    case NODE_FAULT_MOTOR_COMM:
+                        fault_cleared = (inputs->motor_fault_code == NODE_FAULT_NONE);
+                        break;
+                    case NODE_FAULT_SENSOR_INVALID:
+                        fault_cleared = !inputs->fr_is_invalid;
+                        break;
+                    default:
+                        fault_cleared = false;
+                        break;
+                }
+
+                if (fault_cleared) {
+                    r.new_state = NODE_STATE_READY;
+                    r.new_fault_code = NODE_FAULT_NONE;
+                } else {
+                    r.actions |= CONTROL_ACTION_ATTEMPT_RECOVERY;
+                }
+            }
             break;
 
         default:
+            r.new_state = NODE_STATE_FAULT;
+            r.new_fault_code = NODE_FAULT_GENERAL;
+            r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
+            r.disable_reason = CONTROL_DISABLE_REASON_NONE;
+            r.throttle_level = 0;
+            r.new_last_steering = INT16_MIN;
+            r.new_last_braking = INT16_MIN;
             break;
     }
 
     return r;
+}
+
+int16_t control_clamp_command(int16_t value, int16_t min, int16_t max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
 }
 
 can_tx_track_result_t control_track_can_tx(const can_tx_track_inputs_t *inputs) {

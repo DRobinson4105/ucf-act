@@ -20,11 +20,12 @@ extern "C" {
 // ============================================================================
 // WS2812 Status LED Driver
 // ============================================================================
-// Visual heartbeat indicator using onboard WS2812 RGB LED (GPIO8 on ESP32-C6).
-// Blinks at interval_ticks rate with color indicating state:
+// Visual status indicator using onboard WS2812 RGB LED (GPIO8 on ESP32-C6).
+// Displays a solid color indicating state:
 //   - Idle (green): Normal operation, no recent CAN activity
 //   - Activity (blue): Recent CAN traffic within activity_window
 //   - Error (red): Fault condition active
+// Color is updated every interval_ticks.
 // ============================================================================
 
 // ============================================================================
@@ -33,7 +34,7 @@ extern "C" {
 
 typedef struct {
     gpio_num_t gpio;                    // WS2812 data pin (GPIO8 on ESP32-C6 dev board)
-    TickType_t interval_ticks;          // Blink interval
+    TickType_t interval_ticks;          // Color update interval
     TickType_t activity_window_ticks;   // Duration to show activity after mark_activity()
     const char *label;                  // Debug label for logging
     uint8_t idle_red;                   // Idle state color (0-255 each)
@@ -59,7 +60,7 @@ esp_err_t led_ws2812_init(const led_ws2812_config_t *config);
 // ============================================================================
 
 // Update LED state - call from main loop at regular intervals
-// Handles blink timing and state transitions
+// Handles color update timing and state transitions
 void led_ws2812_tick(const led_ws2812_config_t *config, TickType_t now_ticks);
 
 // Mark recent activity (e.g., CAN frame received/sent)

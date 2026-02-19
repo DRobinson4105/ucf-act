@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "rf_remote_ev1527.cpp"
+    SRCS "gpio_input.cpp"
     INCLUDE_DIRS "include"
     REQUIRES driver
 )

@@ -214,11 +214,13 @@ static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *h
     data[7] = 0;
 }
 
-static inline void can_decode_heartbeat(const uint8_t *data, node_heartbeat_t *hb) {
+static inline bool can_decode_heartbeat(const uint8_t *data, uint8_t dlc, node_heartbeat_t *hb) {
+    if (!data || !hb || dlc < 4) return false;
     hb->sequence = data[0];
     hb->state = data[1];
     hb->fault_code = data[2];
     hb->flags = data[3];
+    return true;
 }
 
 // ============================================================================
@@ -234,11 +236,13 @@ static inline void can_encode_planner_command(uint8_t *data, const planner_comma
     data[7] = 0;  // reserved
 }
 
-static inline void can_decode_planner_command(const uint8_t *data, planner_command_t *cmd) {
+static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, planner_command_t *cmd) {
+    if (!data || !cmd || dlc < 6) return false;
     cmd->sequence = data[0];
-    cmd->throttle = data[1];
+    cmd->throttle = (uint8_t)(data[1] & 0x07);
     cmd->steering_position = can_unpack_le16s(&data[2]);
     cmd->braking_position = can_unpack_le16s(&data[4]);
+    return true;
 }
 
 // ============================================================================

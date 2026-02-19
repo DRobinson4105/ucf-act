@@ -19,8 +19,7 @@ static const char *TAG = "HEARTBEAT_LED";
 // ============================================================================
 
 static bool s_initialized = false;
-static bool s_led_on = false;
-static TickType_t s_last_toggle = 0;
+static TickType_t s_last_update = 0;
 static volatile TickType_t s_last_activity = 0;
 static TickType_t s_activity_window = 0;
 static volatile bool s_error = false;
@@ -35,7 +34,7 @@ static uint8_t s_manual_red = 0, s_manual_green = 0, s_manual_blue = 0;
 constexpr size_t LED_REASON_MAX_LEN = 48;
 static char s_manual_reason[LED_REASON_MAX_LEN] = "manual";
 
-#if defined(CONFIG_LOG_HEARTBEAT_LED_BLINK_PULSES) || defined(CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES)
+#if defined(CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES) || defined(CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES)
 static const char *led_color_name(uint8_t red, uint8_t green, uint8_t blue) {
     if (red == 0 && green == 0 && blue == 0) return "OFF";
     if (red > 0 && green == 0 && blue == 0) return "RED";
@@ -158,11 +157,10 @@ esp_err_t led_ws2812_init(const led_ws2812_config_t *config) {
         return err;
     }
 
-    ws2812_set_rgb(0, 0, 0);  // Start with LED off
+    ws2812_set_rgb(0, 0, 0);
 
-    s_led_on = false;
-    s_last_toggle = xTaskGetTickCount();
-    s_last_activity = s_last_toggle;
+    s_last_update = xTaskGetTickCount();
+    s_last_activity = s_last_update;
     s_activity_window = config->activity_window_ticks;
     s_initialized = true;
 
@@ -175,53 +173,48 @@ esp_err_t led_ws2812_init(const led_ws2812_config_t *config) {
 
 void led_ws2812_tick(const led_ws2812_config_t *config, TickType_t now_ticks) {
     if (!config || !s_initialized) return;
-    if (now_ticks - s_last_toggle < config->interval_ticks) return;
+    if (now_ticks - s_last_update < config->interval_ticks) return;
 
     bool activity = s_activity_window > 0 && (now_ticks - s_last_activity <= s_activity_window);
-    s_led_on = !s_led_on;
 
-    if (s_led_on) {
-        uint8_t red = 0;
-        uint8_t green = 0;
-        uint8_t blue = 0;
-        const char *reason = "idle";
+    uint8_t red = 0;
+    uint8_t green = 0;
+    uint8_t blue = 0;
+    const char *reason = "idle";
 
-        if (s_manual_mode) {
-            red = s_manual_red;
-            green = s_manual_green;
-            blue = s_manual_blue;
-            reason = s_manual_reason;
-        } else if (s_error) {
-            red = s_error_red;
-            green = s_error_green;
-            blue = s_error_blue;
-            reason = "error";
-        } else if (activity) {
-            red = s_activity_red;
-            green = s_activity_green;
-            blue = s_activity_blue;
-            reason = "activity";
-        } else {
-            red = s_idle_red;
-            green = s_idle_green;
-            blue = s_idle_blue;
-            reason = "idle";
-        }
-
-        ws2812_set_rgb(red, green, blue);
-
-#ifdef CONFIG_LOG_HEARTBEAT_LED_BLINK_PULSES
-        ESP_LOGI(TAG, "Blink ON: color=%s rgb=(%u,%u,%u) reason=%s",
-                 led_color_name(red, green, blue),
-                 red, green, blue, reason);
-#else
-        (void)reason;
-#endif
+    if (s_manual_mode) {
+        red = s_manual_red;
+        green = s_manual_green;
+        blue = s_manual_blue;
+        reason = s_manual_reason;
+    } else if (s_error) {
+        red = s_error_red;
+        green = s_error_green;
+        blue = s_error_blue;
+        reason = "error";
+    } else if (activity) {
+        red = s_activity_red;
+        green = s_activity_green;
+        blue = s_activity_blue;
+        reason = "activity";
     } else {
-        ws2812_set_rgb(0, 0, 0);
+        red = s_idle_red;
+        green = s_idle_green;
+        blue = s_idle_blue;
+        reason = "idle";
     }
 
-    s_last_toggle = now_ticks;
+    ws2812_set_rgb(red, green, blue);
+
+#ifdef CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES
+    ESP_LOGI(TAG, "LED: color=%s rgb=(%u,%u,%u) reason=%s",
+             led_color_name(red, green, blue),
+             red, green, blue, reason);
+#else
+    (void)reason;
+#endif
+
+    s_last_update = now_ticks;
 }
 
 // Record CAN activity - triggers activity color for activity_window duration

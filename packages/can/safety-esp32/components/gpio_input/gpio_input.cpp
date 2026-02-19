@@ -1,22 +1,16 @@
 /**
- * @file rf_remote_ev1527.cpp
- * @brief EV1527 RF remote e-stop input implementation.
+ * @file gpio_input.cpp
+ * @brief Generic GPIO digital input driver implementation.
  */
-#include "rf_remote_ev1527.hh"
+#include "gpio_input.hh"
 
 #include "esp_log.h"
-
-namespace {
-
-[[maybe_unused]] static const char *TAG = "RF_REMOTE";
-
-}  // namespace
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
-esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
+esp_err_t gpio_input_init(const gpio_input_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
 
     gpio_config_t io_conf = {
@@ -37,20 +31,7 @@ esp_err_t rf_remote_ev1527_init(const rf_remote_ev1527_config_t *config) {
 // State Reading
 // ============================================================================
 
-// Returns true when remote e-stop button is pressed
-bool rf_remote_ev1527_is_active(const rf_remote_ev1527_config_t *config) {
-    if (!config) return true;  // fail-safe: treat as active (e-stop triggered)
-    bool active = gpio_get_level(config->gpio) == config->active_level;
-
-#ifdef CONFIG_LOG_INPUT_RF_REMOTE
-    static bool s_prev = false;
-    static bool s_first = true;
-    if (active != s_prev || s_first) {
-        ESP_LOGI(TAG, "RF remote %s", active ? "ENGAGED" : "disengaged");
-        s_prev = active;
-        s_first = false;
-    }
-#endif
-
-    return active;
+bool gpio_input_is_active(const gpio_input_config_t *config) {
+    if (!config) return true;  // fail-safe: treat as active
+    return gpio_get_level(config->gpio) == config->active_level;
 }

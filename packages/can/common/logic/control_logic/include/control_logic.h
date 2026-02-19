@@ -40,6 +40,17 @@ typedef struct {
  */
 bool control_check_preconditions(const precondition_inputs_t *inputs);
 
+/**
+ * @brief Check preconditions and return a bitmask of failures.
+ *
+ * Returns PRECONDITION_OK (0) when all preconditions pass, or a bitmask
+ * of PRECONDITION_FAIL_* flags indicating which conditions failed.
+ *
+ * @param inputs  Current sensor readings
+ * @return Bitmask of PRECONDITION_FAIL_* flags (0 = all pass)
+ */
+uint8_t control_check_preconditions_detailed(const precondition_inputs_t *inputs);
+
 // ============================================================================
 // Throttle Slew Rate Limiter
 // ============================================================================
@@ -88,6 +99,22 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 #define CONTROL_DISABLE_REASON_MOTOR_FAULT    0x02
 #define CONTROL_DISABLE_REASON_SENSOR_INVALID 0x03
 
+// Reasons for CONTROL_ACTION_ABORT_ENABLE.
+#define CONTROL_ABORT_REASON_NONE             0x00
+#define CONTROL_ABORT_REASON_SAFETY_RETREAT   0x01
+#define CONTROL_ABORT_REASON_PEDAL_PRESSED    0x02
+#define CONTROL_ABORT_REASON_FR_NOT_FORWARD   0x03
+#define CONTROL_ABORT_REASON_MOTOR_FAULT      0x04
+#define CONTROL_ABORT_REASON_SENSOR_INVALID   0x05
+
+// Enable precondition failure flags (bitmask for diagnostics).
+// Indicates which preconditions blocked the READY -> ENABLING transition.
+#define PRECONDITION_OK                       0x00
+#define PRECONDITION_FAIL_FR_NOT_FORWARD      0x01
+#define PRECONDITION_FAIL_PEDAL_PRESSED       0x02
+#define PRECONDITION_FAIL_PEDAL_NOT_REARMED   0x04
+#define PRECONDITION_FAIL_ACTIVE_FAULT        0x08
+
 typedef struct {
     // Safety system command
     uint8_t target_state;               // NODE_STATE_* from Safety's heartbeat
@@ -99,17 +126,22 @@ typedef struct {
     uint8_t motor_fault_code;           // one-shot from CAN RX (NODE_FAULT_*)
 
     // Sensor state
+    // NOTE: pedal/fr values are expected to be debounced by the caller.
+    // A single noisy sample can trigger override or block enable.
     uint8_t fr_state;                   // FR_STATE_*
     bool pedal_pressed;
     bool pedal_rearmed;
     bool fr_is_invalid;                 // true if FR reads as INVALID
 
     // Stepper position error (computed by caller from motor feedback)
+    // NOTE: caller should apply hysteresis/filtering before asserting these.
     bool steering_position_error;       // true if steering position diverged beyond threshold
     bool braking_position_error;        // true if braking position diverged beyond threshold
 
     // Timing
     uint32_t now_ms;
+    uint32_t boot_start_ms;             // boot/startup timestamp
+    uint32_t init_dwell_ms;             // minimum INIT dwell before READY
     uint32_t enable_start_ms;           // when enable sequence began
     uint32_t enable_sequence_ms;        // required hold time to complete enable
     bool enable_work_done;              // true after COMPLETE_ENABLE has fired once
@@ -122,6 +154,14 @@ typedef struct {
     // Stepper dedup
     int16_t last_steering_sent;
     int16_t last_braking_sent;
+
+    // Command envelope limits.
+    // If min == max == 0, the envelope is treated as unconfigured and the
+    // command is forced to neutral (0) for fail-safe behavior.
+    int16_t steering_min;           // minimum allowed steering position
+    int16_t steering_max;           // maximum allowed steering position
+    int16_t braking_min;            // minimum allowed braking position
+    int16_t braking_max;            // maximum allowed braking position
 } control_inputs_t;
 
 typedef struct {
@@ -130,6 +170,8 @@ typedef struct {
     uint8_t new_fault_code;         // NODE_FAULT_* (0 = none)
     uint8_t override_reason;        // OVERRIDE_REASON_* (set when triggering override)
     uint8_t disable_reason;         // CONTROL_DISABLE_REASON_* (non-override disable)
+    uint8_t abort_reason;           // CONTROL_ABORT_REASON_* (set when aborting enable)
+    uint8_t precondition_fail;      // PRECONDITION_FAIL_* bitmask (set when READY blocked)
 
     // Heartbeat flags to send
     uint8_t heartbeat_flags;        // HEARTBEAT_FLAG_* to include in next heartbeat
@@ -167,7 +209,7 @@ typedef struct {
  *   - INIT -> READY -> ENABLING -> ACTIVE
  *   - ACTIVE -> OVERRIDE -> READY
  *   - Any live state can enter FAULT
- *   - FAULT returns to READY when faults clear (handled by caller health checks)
+ *   - FAULT returns to READY when the active fault condition clears
  *
  * @param current_state  Current NODE_STATE_* value
  * @param current_fault  Current fault code
@@ -176,6 +218,23 @@ typedef struct {
  */
 control_step_result_t control_compute_step(uint8_t current_state, uint8_t current_fault,
                                             const control_inputs_t *inputs);
+
+// ============================================================================
+// Command Envelope Clamping
+// ============================================================================
+
+/**
+ * @brief Clamp a signed 16-bit command value to [min, max].
+ *
+ * Used to enforce safe steering and braking position envelopes before
+ * forwarding planner commands to stepper motors.
+ *
+ * @param value  Raw command value from planner
+ * @param min    Minimum allowed value (inclusive)
+ * @param max    Maximum allowed value (inclusive)
+ * @return Clamped value
+ */
+int16_t control_clamp_command(int16_t value, int16_t min, int16_t max);
 
 // ============================================================================
 // CAN TX Failure Tracking

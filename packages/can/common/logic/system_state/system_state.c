@@ -15,6 +15,22 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs) {
     if (!inputs) return r;
 
     uint8_t current = inputs->current_target;
+
+    // INIT dwell handling: hold INIT for a minimum stabilization period.
+    // This is evaluated before retreat checks so Safety can complete startup
+    // sequencing deterministically.
+    if (current == NODE_STATE_INIT) {
+        uint32_t elapsed = inputs->now_ms - inputs->boot_start_ms;
+        if (elapsed >= inputs->init_dwell_ms) {
+            r.new_target = NODE_STATE_READY;
+            r.target_changed = true;
+        } else {
+            r.new_target = NODE_STATE_INIT;
+            r.target_changed = false;
+        }
+        return r;
+    }
+
     bool autonomy_halt = ((current == NODE_STATE_ENABLING || current == NODE_STATE_ACTIVE) &&
                           !inputs->autonomy_hold);
 
@@ -40,12 +56,6 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs) {
     // Forward transitions (only when no negative conditions)
     // ----------------------------------------------------------------
     switch (current) {
-        case NODE_STATE_INIT:
-            // Safety always advances from INIT to READY
-            r.new_target = NODE_STATE_READY;
-            r.target_changed = true;
-            break;
-
         case NODE_STATE_READY:
             // Advance to ENABLING when both nodes are READY and
             // Planner/Orin has requested autonomy enable

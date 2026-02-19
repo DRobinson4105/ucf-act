@@ -27,6 +27,11 @@ typedef struct {
     // Current target state (what Safety last commanded)
     uint8_t current_target;
 
+    // Timing for INIT -> READY dwell
+    uint32_t now_ms;
+    uint32_t boot_start_ms;
+    uint32_t init_dwell_ms;
+
     // E-stop evaluation result (from safety_logic)
     bool estop_active;
 
@@ -78,7 +83,7 @@ typedef struct {
  *   - ENABLING -> ACTIVE: both nodes ENABLING, both enable_complete, no e-stop
  *   - ENABLING/ACTIVE -> READY: Planner autonomy hold dropped (halt command)
  *   - ANY target -> READY: e-stop active, node fault, node override, node timeout
- *   - INIT -> READY: always (Safety starts in INIT, advances to READY once)
+ *   - INIT -> READY: after init_dwell_ms has elapsed since boot_start_ms
  *
  * @param inputs  All state machine inputs
  * @return New target state and whether it changed
