@@ -65,10 +65,10 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon,
 
 // Call when heartbeat CAN frame received - updates timestamp and marks node alive
 void heartbeat_monitor_update(heartbeat_monitor_t *mon,
-                               int node_id,
-                               uint8_t sequence,
-                               uint8_t state) {
-    if (!mon || node_id < 0 || node_id >= mon->node_count) return;
+                                int node_id,
+                                uint8_t sequence,
+                                uint8_t state) {
+    if (!mon || node_id < 0) return;
 
     TickType_t now = xTaskGetTickCount();
     bool was_alive;
@@ -76,6 +76,10 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon,
     char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN] = {0};
 
     taskENTER_CRITICAL(&mon->lock);
+    if (node_id >= mon->node_count) {
+        taskEXIT_CRITICAL(&mon->lock);
+        return;
+    }
     if (!mon->nodes[node_id].active) {
         taskEXIT_CRITICAL(&mon->lock);
         return;
@@ -155,10 +159,14 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon) {
 // ============================================================================
 
 bool heartbeat_monitor_is_alive(heartbeat_monitor_t *mon, int node_id) {
-    if (!mon || node_id < 0 || node_id >= mon->node_count) return false;
+    if (!mon || node_id < 0) return false;
 
     bool alive;
     taskENTER_CRITICAL(&mon->lock);
+    if (node_id >= mon->node_count) {
+        taskEXIT_CRITICAL(&mon->lock);
+        return false;
+    }
     alive = mon->nodes[node_id].active && mon->nodes[node_id].alive;
     taskEXIT_CRITICAL(&mon->lock);
     return alive;
@@ -182,9 +190,13 @@ bool heartbeat_monitor_all_alive(heartbeat_monitor_t *mon) {
 bool heartbeat_monitor_get_status(heartbeat_monitor_t *mon,
                                    int node_id,
                                    heartbeat_monitor_node_t *out_status) {
-    if (!mon || node_id < 0 || node_id >= mon->node_count || !out_status) return false;
+    if (!mon || node_id < 0 || !out_status) return false;
 
     taskENTER_CRITICAL(&mon->lock);
+    if (node_id >= mon->node_count) {
+        taskEXIT_CRITICAL(&mon->lock);
+        return false;
+    }
     if (!mon->nodes[node_id].active) {
         taskEXIT_CRITICAL(&mon->lock);
         return false;

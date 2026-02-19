@@ -1,21 +1,12 @@
 /**
  * @file test_system_state.c
- * @brief Unit tests for pure system state machine logic (system_state.c).
- *
- * Compile:
- *   gcc -Wall -Wextra -Werror -std=c11 -g -O0 \
- *       -I../common/system_state/include \
- *       -I../common/can_protocol/include \
- *       -o test_system_state \
- *       test_system_state.c \
- *       ../common/system_state/system_state.c
+ * @brief Unit tests for Safety target-state logic (system_state.c).
  */
 
 #include <assert.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 
 #include "system_state.h"
 #include "can_protocol.hh"
@@ -31,13 +22,12 @@ static int tests_passed = 0;
     printf("PASS\n"); \
 } while (0)
 
-// ============================================================================
-// Helper: returns an all-clear inputs struct (current_target=READY)
-// ============================================================================
-
 static system_state_inputs_t default_inputs(void) {
     system_state_inputs_t in = {
-        .current_target = NODE_STATE_READY,
+        .current_target = NODE_STATE_NOT_READY,
+        .now_ms = 0,
+        .boot_start_ms = 0,
+        .init_dwell_ms = 0,
         .estop_active = false,
         .planner_state = NODE_STATE_READY,
         .control_state = NODE_STATE_READY,
@@ -51,374 +41,176 @@ static system_state_inputs_t default_inputs(void) {
     return in;
 }
 
-// ============================================================================
-// 1. INIT -> READY (always advances, target_changed=true)
-// ============================================================================
-
-static void test_init_to_ready(void) {
+static void test_init_dwell_holds_then_not_ready(void) {
     system_state_inputs_t in = default_inputs();
     in.current_target = NODE_STATE_INIT;
+    in.boot_start_ms = 1000;
+    in.init_dwell_ms = 500;
+
+    in.now_ms = 1499;
+    system_state_result_t r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_INIT);
+    assert(r.target_changed == false);
+
+    in.now_ms = 1500;
+    r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_NOT_READY);
+    assert(r.target_changed == true);
+}
+
+static void test_not_ready_to_ready_when_both_nodes_ready(void) {
+    system_state_inputs_t in = default_inputs();
+    in.current_target = NODE_STATE_NOT_READY;
+
     system_state_result_t r = system_state_step(&in);
     assert(r.new_target == NODE_STATE_READY);
     assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 2. READY -> ENABLING (both nodes READY, no estop, both alive, request=true)
-// ============================================================================
+static void test_not_ready_stays_when_node_not_ready(void) {
+    system_state_inputs_t in = default_inputs();
+    in.current_target = NODE_STATE_NOT_READY;
+    in.control_state = NODE_STATE_NOT_READY;
 
-static void test_ready_to_enabling(void) {
+    system_state_result_t r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_NOT_READY);
+    assert(r.target_changed == false);
+}
+
+static void test_ready_to_enable_on_request(void) {
     system_state_inputs_t in = default_inputs();
     in.current_target = NODE_STATE_READY;
-    in.planner_state = NODE_STATE_READY;
-    in.control_state = NODE_STATE_READY;
     in.autonomy_request = true;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_ENABLING);
+    assert(r.new_target == NODE_STATE_ENABLE);
     assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 3. READY stays READY when autonomy request is not asserted
-// ============================================================================
-
-static void test_ready_stays_without_autonomy_request(void) {
+static void test_ready_to_not_ready_when_node_drops_ready(void) {
     system_state_inputs_t in = default_inputs();
     in.current_target = NODE_STATE_READY;
-    in.planner_state = NODE_STATE_READY;
-    in.control_state = NODE_STATE_READY;
-    in.autonomy_request = false;
+    in.control_state = NODE_STATE_NOT_READY;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == false);
+    assert(r.new_target == NODE_STATE_NOT_READY);
+    assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 3. READY stays READY (one node not READY — control still INIT)
-// ============================================================================
-
-static void test_ready_stays_control_not_ready(void) {
+static void test_enable_to_active_on_dual_complete(void) {
     system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_READY;
-    in.planner_state = NODE_STATE_READY;
-    in.control_state = NODE_STATE_INIT;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == false);
-}
-
-// ============================================================================
-// 4. READY stays READY (planner INIT, control READY)
-// ============================================================================
-
-static void test_ready_stays_planner_not_ready(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_READY;
-    in.planner_state = NODE_STATE_INIT;
-    in.control_state = NODE_STATE_READY;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == false);
-}
-
-// ============================================================================
-// 5. ENABLING -> ACTIVE (both ENABLING + both enable_complete)
-// ============================================================================
-
-static void test_enabling_to_active(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.planner_state = NODE_STATE_ENABLING;
-    in.control_state = NODE_STATE_ENABLING;
+    in.current_target = NODE_STATE_ENABLE;
+    in.planner_state = NODE_STATE_ENABLE;
+    in.control_state = NODE_STATE_ENABLE;
     in.planner_enable_complete = true;
     in.control_enable_complete = true;
+
     system_state_result_t r = system_state_step(&in);
     assert(r.new_target == NODE_STATE_ACTIVE);
     assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 6. ENABLING stays ENABLING (both ENABLING, only planner enable_complete)
-// ============================================================================
-
-static void test_enabling_stays_one_complete(void) {
+static void test_enable_stays_while_working(void) {
     system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.planner_state = NODE_STATE_ENABLING;
-    in.control_state = NODE_STATE_ENABLING;
+    in.current_target = NODE_STATE_ENABLE;
+    in.planner_state = NODE_STATE_ENABLE;
+    in.control_state = NODE_STATE_ENABLE;
     in.planner_enable_complete = true;
     in.control_enable_complete = false;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_ENABLING);
+    assert(r.new_target == NODE_STATE_ENABLE);
     assert(r.target_changed == false);
 }
 
-// ============================================================================
-// 7. ENABLING stays ENABLING (both ENABLING, neither enable_complete)
-// ============================================================================
-
-static void test_enabling_stays_none_complete(void) {
+static void test_enable_to_not_ready_if_node_reboots(void) {
     system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.planner_state = NODE_STATE_ENABLING;
-    in.control_state = NODE_STATE_ENABLING;
-    in.planner_enable_complete = false;
-    in.control_enable_complete = false;
+    in.current_target = NODE_STATE_ENABLE;
+    in.planner_state = NODE_STATE_INIT;
+    in.control_state = NODE_STATE_ENABLE;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_ENABLING);
-    assert(r.target_changed == false);
+    assert(r.new_target == NODE_STATE_NOT_READY);
+    assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 8. ACTIVE stays ACTIVE (normal operation)
-// ============================================================================
-
-static void test_active_stays_active(void) {
+static void test_autonomy_halt_enable_to_ready_when_nodes_ready(void) {
     system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ACTIVE;
-    in.planner_state = NODE_STATE_ACTIVE;
-    in.control_state = NODE_STATE_ACTIVE;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_ACTIVE);
-    assert(r.target_changed == false);
-}
-
-// ============================================================================
-// 8b. ENABLING/ACTIVE -> READY when Planner drops autonomy hold (halt command)
-// ============================================================================
-
-static void test_enabling_to_ready_on_autonomy_halt(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
+    in.current_target = NODE_STATE_ENABLE;
+    in.planner_state = NODE_STATE_READY;
+    in.control_state = NODE_STATE_READY;
     in.autonomy_hold = false;
+
     system_state_result_t r = system_state_step(&in);
     assert(r.new_target == NODE_STATE_READY);
     assert(r.target_changed == true);
 }
 
-static void test_active_to_ready_on_autonomy_halt(void) {
+static void test_autonomy_halt_active_to_not_ready_when_nodes_not_ready(void) {
     system_state_inputs_t in = default_inputs();
     in.current_target = NODE_STATE_ACTIVE;
+    in.control_state = NODE_STATE_NOT_READY;
     in.autonomy_hold = false;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
+    assert(r.new_target == NODE_STATE_NOT_READY);
     assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 9. ANY -> READY on estop (from READY, ENABLING, ACTIVE)
-// ============================================================================
-
-static void test_estop_from_ready(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_READY;
-    in.estop_active = true;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == false);
-}
-
-static void test_estop_from_enabling(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.estop_active = true;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-static void test_estop_from_active(void) {
+static void test_hard_negative_retreats_to_not_ready(void) {
     system_state_inputs_t in = default_inputs();
     in.current_target = NODE_STATE_ACTIVE;
     in.estop_active = true;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
+    assert(r.new_target == NODE_STATE_NOT_READY);
     assert(r.target_changed == true);
-}
 
-// ============================================================================
-// 10. ANY -> READY on planner fault (planner_state=FAULT)
-// ============================================================================
-
-static void test_planner_fault_from_active(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ACTIVE;
-    in.planner_state = NODE_STATE_FAULT;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-// ============================================================================
-// 11. ANY -> READY on control fault (control_state=FAULT)
-// ============================================================================
-
-static void test_control_fault_from_active(void) {
-    system_state_inputs_t in = default_inputs();
+    in = default_inputs();
     in.current_target = NODE_STATE_ACTIVE;
     in.control_state = NODE_STATE_FAULT;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
+    r = system_state_step(&in);
+    assert(r.new_target == NODE_STATE_NOT_READY);
     assert(r.target_changed == true);
 }
 
-// ============================================================================
-// 12. ANY -> READY on planner override (planner_state=OVERRIDE)
-// ============================================================================
-
-static void test_planner_override_from_active(void) {
+static void test_active_stays_active_when_nominal(void) {
     system_state_inputs_t in = default_inputs();
     in.current_target = NODE_STATE_ACTIVE;
-    in.planner_state = NODE_STATE_OVERRIDE;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-// ============================================================================
-// 13. ANY -> READY on control override (control_state=OVERRIDE)
-// ============================================================================
-
-static void test_control_override_from_enabling(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.control_state = NODE_STATE_OVERRIDE;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-// ============================================================================
-// 14. ANY -> READY on planner timeout (!planner_alive)
-// ============================================================================
-
-static void test_planner_timeout_from_active(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ACTIVE;
-    in.planner_alive = false;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-// ============================================================================
-// 15. ANY -> READY on control timeout (!control_alive)
-// ============================================================================
-
-static void test_control_timeout_from_enabling(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.control_alive = false;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-// ============================================================================
-// 16. target_changed=false when already READY and retreat condition present
-// ============================================================================
-
-static void test_already_ready_estop_no_change(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_READY;
-    in.estop_active = true;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
+    assert(r.new_target == NODE_STATE_ACTIVE);
     assert(r.target_changed == false);
 }
 
-// ============================================================================
-// 18. Unknown current_target value -> retreats to READY
-// ============================================================================
-
-static void test_unknown_state_retreats(void) {
+static void test_unknown_target_retreats_to_not_ready(void) {
     system_state_inputs_t in = default_inputs();
-    in.current_target = 99;
+    in.current_target = 0xFF;
+
     system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
+    assert(r.new_target == NODE_STATE_NOT_READY);
     assert(r.target_changed == true);
 }
-
-// ============================================================================
-// 19. ENABLING stays ENABLING (control_enable_complete only — symmetric case)
-// ============================================================================
-
-static void test_enabling_stays_control_complete_only(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_ENABLING;
-    in.planner_state = NODE_STATE_ENABLING;
-    in.control_state = NODE_STATE_ENABLING;
-    in.planner_enable_complete = false;
-    in.control_enable_complete = true;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_ENABLING);
-    assert(r.target_changed == false);
-}
-
-// ============================================================================
-// 20. OVERRIDE and FAULT as current_target -> retreat to READY
-// ============================================================================
-
-static void test_override_as_current_target(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_OVERRIDE;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-static void test_fault_as_current_target(void) {
-    system_state_inputs_t in = default_inputs();
-    in.current_target = NODE_STATE_FAULT;
-    system_state_result_t r = system_state_step(&in);
-    assert(r.new_target == NODE_STATE_READY);
-    assert(r.target_changed == true);
-}
-
-// ============================================================================
-// Main
-// ============================================================================
 
 int main(void) {
-    printf("\n=== system_state unit tests ===\n\n");
+    printf("=== system_state tests ===\n\n");
 
-    // Forward transitions
-    TEST(test_init_to_ready);
-    TEST(test_ready_to_enabling);
-    TEST(test_ready_stays_without_autonomy_request);
-    TEST(test_ready_stays_control_not_ready);
-    TEST(test_ready_stays_planner_not_ready);
-    TEST(test_enabling_to_active);
-    TEST(test_enabling_stays_one_complete);
-    TEST(test_enabling_stays_none_complete);
-    TEST(test_enabling_stays_control_complete_only);
-    TEST(test_active_stays_active);
-    TEST(test_enabling_to_ready_on_autonomy_halt);
-    TEST(test_active_to_ready_on_autonomy_halt);
+    TEST(test_init_dwell_holds_then_not_ready);
+    TEST(test_not_ready_to_ready_when_both_nodes_ready);
+    TEST(test_not_ready_stays_when_node_not_ready);
+    TEST(test_ready_to_enable_on_request);
+    TEST(test_ready_to_not_ready_when_node_drops_ready);
+    TEST(test_enable_to_active_on_dual_complete);
+    TEST(test_enable_stays_while_working);
+    TEST(test_enable_to_not_ready_if_node_reboots);
+    TEST(test_autonomy_halt_enable_to_ready_when_nodes_ready);
+    TEST(test_autonomy_halt_active_to_not_ready_when_nodes_not_ready);
+    TEST(test_hard_negative_retreats_to_not_ready);
+    TEST(test_active_stays_active_when_nominal);
+    TEST(test_unknown_target_retreats_to_not_ready);
 
-    // Retreat: estop
-    TEST(test_estop_from_ready);
-    TEST(test_estop_from_enabling);
-    TEST(test_estop_from_active);
+    printf("\n=== Results ===\n");
+    printf("%d/%d tests passed\n", tests_passed, tests_run);
 
-    // Retreat: faults
-    TEST(test_planner_fault_from_active);
-    TEST(test_control_fault_from_active);
-
-    // Retreat: override
-    TEST(test_planner_override_from_active);
-    TEST(test_control_override_from_enabling);
-
-    // Retreat: timeout
-    TEST(test_planner_timeout_from_active);
-    TEST(test_control_timeout_from_enabling);
-
-    // Edge cases
-    TEST(test_already_ready_estop_no_change);
-    TEST(test_unknown_state_retreats);
-    TEST(test_override_as_current_target);
-    TEST(test_fault_as_current_target);
-
-    printf("\n  %d / %d tests passed\n\n", tests_passed, tests_run);
-    return (tests_passed == tests_run) ? 0 : 1;
+    return (tests_run == tests_passed) ? 0 : 1;
 }

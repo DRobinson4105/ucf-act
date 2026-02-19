@@ -3,9 +3,9 @@
  * @brief Shared CAN bus protocol definitions for Safety, Control, and Planner nodes.
  *
  * All nodes share a unified state and fault code enum. Safety ESP32 acts as the
- * system state authority — it commands target state using only READY/ENABLING/ACTIVE.
+ * system state authority — it commands target state using NOT_READY/READY/ENABLE/ACTIVE.
  * Planner and Control own their live states and can enter OVERRIDE or FAULT locally
- * for immediate safety; local FAULT clears back to READY when faults clear.
+ * for immediate safety; local FAULT clears back to NOT_READY/READY when faults clear.
  *
  * Every node sends an identical heartbeat format (node_heartbeat_t) at 100ms.
  * Safety's "state" field carries the system target state; its "fault_code" field
@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -53,15 +54,18 @@ extern "C" {
 // Unified Node States (NODE_STATE_*)
 // ============================================================================
 // All nodes share the same state enum.
-// Safety heartbeat uses READY/ENABLING/ACTIVE as commanded target states.
+// Safety heartbeat uses NOT_READY/READY/ENABLE/ACTIVE as commanded target states.
 // Nodes report live state and may use OVERRIDE/FAULT locally for immediate safety.
 
 #define NODE_STATE_INIT              0   // Booting, not ready
-#define NODE_STATE_READY             1   // Running, idle — waiting for Safety to advance
-#define NODE_STATE_ENABLING          2   // Preparing for autonomous (hardware settle / planning init)
-#define NODE_STATE_ACTIVE            3   // Autonomous mode — processing/sending commands
-#define NODE_STATE_OVERRIDE          4   // Driver took over (local, immediate)
-#define NODE_STATE_FAULT             5   // Fault condition (local, immediate)
+#define NODE_STATE_NOT_READY         1   // Running/manual-safe, but autonomy preconditions not satisfied
+#define NODE_STATE_READY             2   // Running/manual-safe and autonomy preconditions satisfied
+#define NODE_STATE_ENABLE            3   // Preparing for autonomous (hardware settle / planning init)
+#define NODE_STATE_ACTIVE            4   // Autonomous mode — processing/sending commands
+#define NODE_STATE_OVERRIDE          5   // Driver took over (local, immediate)
+#define NODE_STATE_FAULT             6   // Fault condition (local, immediate)
+// Backward-compatible alias; use NODE_STATE_ENABLE in new code.
+#define NODE_STATE_ENABLING          NODE_STATE_ENABLE
 
 // ============================================================================
 // Unified Fault Codes (NODE_FAULT_*)
@@ -111,8 +115,9 @@ extern "C" {
 // Heartbeat Flags
 // ============================================================================
 
-#define HEARTBEAT_FLAG_ENABLE_COMPLETE   0x01  // Node finished ENABLING, ready for ACTIVE
+#define HEARTBEAT_FLAG_ENABLE_COMPLETE   0x01  // Node finished ENABLE, ready for ACTIVE
 #define HEARTBEAT_FLAG_AUTONOMY_REQUEST  0x02  // Planner requests/holds autonomy (enable gate + halt on drop)
+// 0x04 reserved (previously HEARTBEAT_FLAG_ENABLE_READY)
 
 // ============================================================================
 // Node Heartbeat (0x100, 0x110, 0x120)
@@ -122,7 +127,7 @@ extern "C" {
 // byte 1: state (NODE_STATE_* — for Safety: system target state)
 // byte 2: fault_code (NODE_FAULT_* — for Safety: e-stop reason, 0 when advancing)
 // byte 3: flags (HEARTBEAT_FLAG_*)
-//         - HEARTBEAT_FLAG_ENABLE_COMPLETE: node finished ENABLING
+//         - HEARTBEAT_FLAG_ENABLE_COMPLETE: node finished ENABLE
 //         - HEARTBEAT_FLAG_AUTONOMY_REQUEST: Planner/Orin requests autonomy enable and
 //           must stay asserted while autonomy should remain enabled
 // byte 4-7: reserved
@@ -215,7 +220,7 @@ static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *h
 }
 
 static inline bool can_decode_heartbeat(const uint8_t *data, uint8_t dlc, node_heartbeat_t *hb) {
-    if (!data || !hb || dlc < 4) return false;
+    if (!data || !hb || dlc != 8) return false;
     hb->sequence = data[0];
     hb->state = data[1];
     hb->fault_code = data[2];
@@ -251,49 +256,68 @@ static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, 
 
 static inline const char* node_state_to_string(uint8_t state) {
     switch (state) {
-        case NODE_STATE_INIT:     return "INIT";
-        case NODE_STATE_READY:    return "READY";
-        case NODE_STATE_ENABLING: return "ENABLING";
-        case NODE_STATE_ACTIVE:   return "ACTIVE";
-        case NODE_STATE_OVERRIDE: return "OVERRIDE";
-        case NODE_STATE_FAULT:    return "FAULT";
-        default:                  return "UNKNOWN";
+        case NODE_STATE_INIT:      return "INIT";
+        case NODE_STATE_NOT_READY: return "NOT_READY";
+        case NODE_STATE_READY:     return "READY";
+        case NODE_STATE_ENABLE:    return "ENABLE";
+        case NODE_STATE_ACTIVE:    return "ACTIVE";
+        case NODE_STATE_OVERRIDE:  return "OVERRIDE";
+        case NODE_STATE_FAULT:     return "FAULT";
+        default:                   return "UNKNOWN";
     }
 }
 
 // Decode an estop bitmask into a human-readable string.
-// Returns a pointer to a static buffer — NOT thread-safe, but fine for
-// sequential ESP_LOG calls. Multiple active faults separated by '+'.
+// Writes into caller-provided buffer (re-entrant/thread-safe).
+// Multiple active faults are separated by '+'.
 // Example: fault=0x05 -> "button+ultrasonic"
-static inline const char* node_estop_to_string(uint8_t fault) {
-    if (fault == NODE_FAULT_NONE) return "none";
+static inline const char *node_estop_to_string_r(uint8_t fault, char *buf, size_t buf_len) {
+    if (!buf || buf_len == 0) return "";
+    if (fault == NODE_FAULT_NONE) {
+        const char *none = "none";
+        char *p = buf;
+        char *end = buf + buf_len;
+        while (*none && p < end - 1) *p++ = *none++;
+        if (p < end) *p = '\0';
+        else buf[buf_len - 1] = '\0';
+        return buf;
+    }
 
-    // Static buffer sized for worst case: all 7 flags with '+' separators
-    // "button+remote+ultrasonic+planner+planner_timeout+control+control_timeout" = 71 chars
-    static char buf[80];
     char *p = buf;
-    char *end = buf + sizeof(buf);
+    char *end = buf + buf_len;
 
     #define ESTOP_APPEND(flag, name) do { \
         if ((fault & (flag)) && p < end) { \
-            if (p != buf && p < end) *p++ = '+'; \
+            if (p != buf && p < end - 1) *p++ = '+'; \
             const char *s = name; \
             while (*s && p < end - 1) *p++ = *s++; \
         } \
     } while(0)
 
     ESTOP_APPEND(NODE_FAULT_ESTOP_BUTTON,          "button");
-    ESTOP_APPEND(NODE_FAULT_ESTOP_REMOTE,           "remote");
-    ESTOP_APPEND(NODE_FAULT_ESTOP_ULTRASONIC,       "ultrasonic");
-    ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER,          "planner");
-    ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER_TIMEOUT,  "planner_timeout");
-    ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL,          "control");
-    ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL_TIMEOUT,  "control_timeout");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_REMOTE,          "remote");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_ULTRASONIC,      "ultrasonic");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER,         "planner");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER_TIMEOUT, "planner_timeout");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL,         "control");
+    ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL_TIMEOUT, "control_timeout");
 
     #undef ESTOP_APPEND
 
-    *p = '\0';
+    if (p >= end) buf[buf_len - 1] = '\0';
+    else *p = '\0';
     return buf;
+}
+
+// Compatibility helper for existing call sites.
+// Uses a thread-local buffer so independent tasks don't clobber each other.
+static inline const char *node_estop_to_string(uint8_t fault) {
+#if defined(__cplusplus)
+    static thread_local char buf[80];
+#else
+    static _Thread_local char buf[80];
+#endif
+    return node_estop_to_string_r(fault, buf, sizeof(buf));
 }
 
 // Decode a fault code into a human-readable string.
@@ -321,6 +345,14 @@ static inline const char* node_fault_to_string(uint8_t fault) {
         case NODE_FAULT_GENERAL:             return "general";
         default:                             return "unknown";
     }
+}
+
+// Re-entrant/thread-safe variant of node_fault_to_string.
+// For estop bitmask values, writes into caller buffer.
+static inline const char *node_fault_to_string_r(uint8_t fault, char *buf, size_t buf_len) {
+    if (fault != NODE_FAULT_NONE && fault <= NODE_FAULT_ESTOP_ANY)
+        return node_estop_to_string_r(fault, buf, buf_len);
+    return node_fault_to_string(fault);
 }
 
 #ifdef __cplusplus

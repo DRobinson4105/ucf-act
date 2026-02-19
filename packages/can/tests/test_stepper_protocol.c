@@ -589,6 +589,18 @@ static void test_parse_param_response_8bit(void) {
     assert(val == 42);
 }
 
+static void test_parse_param_response_8bit_unsigned(void) {
+    uint8_t data[8] = {0};
+    data[0] = 5;
+    data[1] = 200;
+
+    uint8_t idx = 0;
+    int32_t val = 0;
+    assert(stepper_uim2852_parse_param_response(data, 2, &idx, &val));
+    assert(idx == 5);
+    assert(val == 200);
+}
+
 static void test_parse_param_response_negative(void) {
     uint8_t data[8] = {0};
     data[0] = 0;
@@ -772,6 +784,7 @@ int main(void) {
     TEST(test_parse_param_response_32bit);
     TEST(test_parse_param_response_16bit);
     TEST(test_parse_param_response_8bit);
+    TEST(test_parse_param_response_8bit_unsigned);
     TEST(test_parse_param_response_negative);
     TEST(test_parse_param_too_short);
 

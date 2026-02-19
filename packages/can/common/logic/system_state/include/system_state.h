@@ -3,9 +3,9 @@
  * @brief Pure decision logic for Safety ESP32 system state machine.
  *
  * The Safety ESP32 is the system target-state authority — it advances only
- * READY -> ENABLING -> ACTIVE. Any node can report OVERRIDE or FAULT as a
+ * NOT_READY -> READY -> ENABLE -> ACTIVE. Any node can report OVERRIDE or FAULT as a
  * local live state for immediate safety; Safety reacts by pulling target back
- * to READY.
+ * to NOT_READY.
  *
  * This module is a pure function library with no hardware dependencies,
  * allowing comprehensive unit testing on the host.
@@ -27,7 +27,7 @@ typedef struct {
     // Current target state (what Safety last commanded)
     uint8_t current_target;
 
-    // Timing for INIT -> READY dwell
+    // Timing for INIT -> NOT_READY dwell
     uint32_t now_ms;
     uint32_t boot_start_ms;
     uint32_t init_dwell_ms;
@@ -51,7 +51,7 @@ typedef struct {
     bool autonomy_request;
 
     // Planner/Orin autonomy hold level (from Planner heartbeat flags level).
-    // If this drops while target is ENABLING or ACTIVE, Safety retreats target to READY.
+    // If this drops while target is ENABLE or ACTIVE, Safety retreats target.
     bool autonomy_hold;
 } system_state_inputs_t;
 
@@ -78,12 +78,13 @@ typedef struct {
  * what the new target state should be.
  *
  * Transitions:
- *   - READY -> ENABLING: both nodes READY, no e-stop, both alive,
- *                        Planner autonomy request asserted
- *   - ENABLING -> ACTIVE: both nodes ENABLING, both enable_complete, no e-stop
- *   - ENABLING/ACTIVE -> READY: Planner autonomy hold dropped (halt command)
- *   - ANY target -> READY: e-stop active, node fault, node override, node timeout
- *   - INIT -> READY: after init_dwell_ms has elapsed since boot_start_ms
+ *   - INIT -> NOT_READY: after init_dwell_ms has elapsed since boot_start_ms
+ *   - NOT_READY -> READY: both nodes report READY, both alive, no e-stop
+ *   - READY -> ENABLE: both nodes READY, Planner autonomy request asserted
+ *   - ENABLE -> ACTIVE: both nodes ENABLE, both enable_complete, no e-stop
+ *   - ENABLE/ACTIVE -> READY: Planner autonomy hold dropped and nodes still READY
+ *   - ENABLE/ACTIVE -> NOT_READY: Planner autonomy hold dropped and nodes not READY
+ *   - ANY target -> NOT_READY: e-stop active, node fault, node override, node timeout
  *
  * @param inputs  All state machine inputs
  * @return New target state and whether it changed

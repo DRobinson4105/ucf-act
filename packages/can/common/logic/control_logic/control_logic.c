@@ -10,19 +10,37 @@
 
 static uint8_t sanitize_target_state(uint8_t target_state) {
     switch (target_state) {
+        case NODE_STATE_NOT_READY:
         case NODE_STATE_READY:
-        case NODE_STATE_ENABLING:
+        case NODE_STATE_ENABLE:
         case NODE_STATE_ACTIVE:
             return target_state;
         default:
-            // Safety target commands only use READY/ENABLING/ACTIVE.
-            // Treat all other values as READY (safe retreat).
-            return NODE_STATE_READY;
+            // Safety target commands only use NOT_READY/READY/ENABLE/ACTIVE.
+            // Treat all other values as NOT_READY (safe retreat).
+            return NODE_STATE_NOT_READY;
     }
 }
 
+static bool target_requests_enable(uint8_t target_state) {
+    return (target_state == NODE_STATE_ENABLE || target_state == NODE_STATE_ACTIVE);
+}
+
+static uint8_t readiness_state_from_inputs(uint8_t fault_code, const control_inputs_t *inputs,
+                                           uint8_t *out_precondition_fail) {
+    precondition_inputs_t pre = {
+        .fr_state = inputs->fr_state,
+        .pedal_pressed = inputs->pedal_pressed,
+        .pedal_rearmed = inputs->pedal_rearmed,
+        .fault_code = fault_code,
+    };
+    uint8_t fail = control_check_preconditions_detailed(&pre);
+    if (out_precondition_fail) *out_precondition_fail = fail;
+    return (fail == PRECONDITION_OK) ? NODE_STATE_READY : NODE_STATE_NOT_READY;
+}
+
 uint8_t control_check_preconditions_detailed(const precondition_inputs_t *inputs) {
-    if (!inputs) return 0xFF;  // all bits set = all failed
+    if (!inputs) return PRECONDITION_FAIL_ALL;
 
     uint8_t fail = PRECONDITION_OK;
 
@@ -106,7 +124,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         if (current_state == NODE_STATE_ACTIVE) {
             r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
             r.disable_reason = CONTROL_DISABLE_REASON_MOTOR_FAULT;
-        } else if (current_state == NODE_STATE_ENABLING) {
+        } else if (current_state == NODE_STATE_ENABLE) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
             r.abort_reason = CONTROL_ABORT_REASON_MOTOR_FAULT;
         }
@@ -123,7 +141,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
         if (current_state == NODE_STATE_ACTIVE) {
             r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
             r.disable_reason = CONTROL_DISABLE_REASON_SENSOR_INVALID;
-        } else if (current_state == NODE_STATE_ENABLING) {
+        } else if (current_state == NODE_STATE_ENABLE) {
             r.actions |= CONTROL_ACTION_ABORT_ENABLE;
             r.abort_reason = CONTROL_ABORT_REASON_SENSOR_INVALID;
         }
@@ -138,40 +156,44 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
     switch (current_state) {
         case NODE_STATE_INIT:
             if ((inputs->now_ms - inputs->boot_start_ms) >= inputs->init_dwell_ms) {
-                r.new_state = NODE_STATE_READY;
+                r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
             } else {
                 r.new_state = NODE_STATE_INIT;
             }
             break;
 
+        case NODE_STATE_NOT_READY: {
+            uint8_t fail = PRECONDITION_OK;
+            uint8_t ready_state = readiness_state_from_inputs(current_fault, inputs, &fail);
+            r.precondition_fail = fail;
+            r.new_state = ready_state;
+            break;
+        }
+
         case NODE_STATE_READY: {
-            // Safety commands us to start enabling?
-            if (target_state >= NODE_STATE_ENABLING) {
-                precondition_inputs_t pre = {
-                    .fr_state = inputs->fr_state,
-                    .pedal_pressed = inputs->pedal_pressed,
-                    .pedal_rearmed = inputs->pedal_rearmed,
-                    .fault_code = current_fault,
-                };
-                uint8_t fail = control_check_preconditions_detailed(&pre);
-                if (fail == PRECONDITION_OK) {
-                    r.new_state = NODE_STATE_ENABLING;
-                    r.actions |= CONTROL_ACTION_START_ENABLE;
-                    r.enable_start_ms = inputs->now_ms;
-                    r.enable_work_done = false;
-                    r.throttle_level = 0;
-                    r.throttle_change_ms = inputs->now_ms;
-                } else {
-                    r.precondition_fail = fail;
-                }
+            uint8_t fail = PRECONDITION_OK;
+            if (readiness_state_from_inputs(current_fault, inputs, &fail) != NODE_STATE_READY) {
+                r.new_state = NODE_STATE_NOT_READY;
+                r.precondition_fail = fail;
+                break;
+            }
+
+            // Safety commands us to start enable sequence?
+            if (target_requests_enable(target_state)) {
+                r.new_state = NODE_STATE_ENABLE;
+                r.actions |= CONTROL_ACTION_START_ENABLE;
+                r.enable_start_ms = inputs->now_ms;
+                r.enable_work_done = false;
+                r.throttle_level = 0;
+                r.throttle_change_ms = inputs->now_ms;
             }
             break;
         }
 
-        case NODE_STATE_ENABLING: {
+        case NODE_STATE_ENABLE: {
             // Safety retreated? Abort enable.
-            if (target_state < NODE_STATE_ENABLING) {
-                r.new_state = NODE_STATE_READY;
+            if (!target_requests_enable(target_state)) {
+                r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
                 r.abort_reason = CONTROL_ABORT_REASON_SAFETY_RETREAT;
                 r.enable_work_done = false;
@@ -179,7 +201,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             }
             // Pedal pressed during enable? Abort.
             if (inputs->pedal_pressed) {
-                r.new_state = NODE_STATE_READY;
+                r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
                 r.abort_reason = CONTROL_ABORT_REASON_PEDAL_PRESSED;
                 r.enable_work_done = false;
@@ -187,7 +209,7 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             }
             // FR no longer forward? Abort.
             if (inputs->fr_state != FR_STATE_FORWARD) {
-                r.new_state = NODE_STATE_READY;
+                r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
                 r.actions |= CONTROL_ACTION_ABORT_ENABLE;
                 r.abort_reason = CONTROL_ABORT_REASON_FR_NOT_FORWARD;
                 r.enable_work_done = false;
@@ -203,28 +225,28 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                 r.enable_work_done = true;
 
                 // If Safety already says ACTIVE, go directly to ACTIVE
-                if (target_state >= NODE_STATE_ACTIVE) {
+                if (target_state == NODE_STATE_ACTIVE) {
                     r.new_state = NODE_STATE_ACTIVE;
                     r.override_reason = OVERRIDE_REASON_NONE;
                 } else {
-                    // Stay ENABLING, set enable_complete flag for heartbeat
+                    // Stay ENABLE, set enable_complete flag for heartbeat
                     // Safety will advance us to ACTIVE once both nodes are ready
-                    r.new_state = NODE_STATE_ENABLING;
+                    r.new_state = NODE_STATE_ENABLE;
                     r.heartbeat_flags |= HEARTBEAT_FLAG_ENABLE_COMPLETE;
                 }
             }
-            // else: stay ENABLING, timer not yet expired
+            // else: stay ENABLE, timer not yet expired
             break;
         }
 
         case NODE_STATE_ACTIVE: {
-            // Safety retreated? Disable actuators and return to READY.
+            // Safety retreated? Disable actuators and return to readiness state.
             // This is NOT an override (human intervention) — Safety commanded
-            // the retreat, so we go directly to READY rather than OVERRIDE.
-            if (target_state < NODE_STATE_ACTIVE) {
+            // the retreat, so we do not emit OVERRIDE.
+            if (target_state != NODE_STATE_ACTIVE) {
                 r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
                 r.disable_reason = CONTROL_DISABLE_REASON_SAFETY_RETREAT;
-                r.new_state = NODE_STATE_READY;
+                r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
                 r.throttle_level = 0;
                 r.new_last_steering = INT16_MIN;
                 r.new_last_braking = INT16_MIN;
@@ -324,12 +346,10 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
             r.new_last_steering = INT16_MIN;
             r.new_last_braking = INT16_MIN;
 
-            // Recover to READY when conditions clear
-            // Safety will re-advance us through the state machine
-            if (target_state >= NODE_STATE_READY &&
-                inputs->fr_state == FR_STATE_FORWARD &&
+            // Recover to readiness state when override conditions clear.
+            if (inputs->fr_state == FR_STATE_FORWARD &&
                 inputs->pedal_rearmed) {
-                r.new_state = NODE_STATE_READY;
+                r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
                 r.override_reason = OVERRIDE_REASON_NONE;
             }
             break;
@@ -356,8 +376,8 @@ control_step_result_t control_compute_step(uint8_t current_state, uint8_t curren
                 }
 
                 if (fault_cleared) {
-                    r.new_state = NODE_STATE_READY;
                     r.new_fault_code = NODE_FAULT_NONE;
+                    r.new_state = readiness_state_from_inputs(NODE_FAULT_NONE, inputs, &r.precondition_fail);
                 } else {
                     r.actions |= CONTROL_ACTION_ATTEMPT_RECOVERY;
                 }

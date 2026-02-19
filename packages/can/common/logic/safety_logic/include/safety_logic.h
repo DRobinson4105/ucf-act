@@ -6,7 +6,7 @@
  * pure functions with no hardware dependencies. This allows comprehensive
  * unit testing on the host without mocking any ESP-IDF or FreeRTOS APIs.
  *
- * The system state machine (advancing READY -> ENABLING -> ACTIVE) is now
+ * The system state machine (advancing NOT_READY -> READY -> ENABLE -> ACTIVE) is now
  * handled by the system_state component. safety_logic focuses solely on
  * e-stop evaluation and relay decisions.
  */

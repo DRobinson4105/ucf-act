@@ -361,7 +361,7 @@ bool stepper_uim2852_parse_param_response(const uint8_t *data, uint8_t dl, uint8
             *value = (int32_t)(int16_t)((uint16_t)data[1] | ((uint16_t)data[2] << 8));
         else
             // 8-bit value
-            *value = (int32_t)(int8_t)data[1];
+            *value = (int32_t)(uint8_t)data[1];
     }
     
     return true;

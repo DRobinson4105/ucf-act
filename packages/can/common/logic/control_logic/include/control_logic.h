@@ -108,12 +108,16 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 #define CONTROL_ABORT_REASON_SENSOR_INVALID   0x05
 
 // Enable precondition failure flags (bitmask for diagnostics).
-// Indicates which preconditions blocked the READY -> ENABLING transition.
+// Indicates which preconditions block autonomy readiness/entry.
 #define PRECONDITION_OK                       0x00
 #define PRECONDITION_FAIL_FR_NOT_FORWARD      0x01
 #define PRECONDITION_FAIL_PEDAL_PRESSED       0x02
 #define PRECONDITION_FAIL_PEDAL_NOT_REARMED   0x04
 #define PRECONDITION_FAIL_ACTIVE_FAULT        0x08
+#define PRECONDITION_FAIL_ALL                 (PRECONDITION_FAIL_FR_NOT_FORWARD | \
+                                              PRECONDITION_FAIL_PEDAL_PRESSED | \
+                                              PRECONDITION_FAIL_PEDAL_NOT_REARMED | \
+                                              PRECONDITION_FAIL_ACTIVE_FAULT)
 
 typedef struct {
     // Safety system command
@@ -202,14 +206,14 @@ typedef struct {
  * Pure function: reads current state + inputs, produces next state + action list.
  * The caller executes the hardware side effects indicated by the actions bitmask.
  *
- * Control reacts to Safety's target_state (READY/ENABLING/ACTIVE).
- * Any other target value is treated as READY for a safe retreat.
+ * Control reacts to Safety's target_state (NOT_READY/READY/ENABLE/ACTIVE).
+ * Any other target value is treated as NOT_READY for a safe retreat.
  *
  * Live-state behavior:
- *   - INIT -> READY -> ENABLING -> ACTIVE
- *   - ACTIVE -> OVERRIDE -> READY
+ *   - INIT -> NOT_READY <-> READY -> ENABLE -> ACTIVE
+ *   - ACTIVE -> OVERRIDE -> NOT_READY/READY
  *   - Any live state can enter FAULT
- *   - FAULT returns to READY when the active fault condition clears
+ *   - FAULT returns to NOT_READY/READY when the active fault condition clears
  *
  * @param current_state  Current NODE_STATE_* value
  * @param current_fault  Current fault code
