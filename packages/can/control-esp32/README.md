@@ -1,6 +1,6 @@
 # control-esp32
 
-ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (Jetson AGX Orin) over CAN and controls throttle, steering, and braking actuators. Follows the system target state broadcast by Safety ESP32.
+ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (Jetson AGX Orin) over CAN and controls/monitors throttle, steering, and braking actuators. Follows the system target state broadcast by Safety ESP32.
 
 ## State Machine
 
@@ -121,7 +121,7 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 ## Wiring
 
-Each subsection covers production (on-cart) and bench wiring for Control ESP32 interfaces. For CAN bus topology and stepper motor wiring shared across all nodes, see [CAN Bus Wiring](../README.md#can-bus-wiring).
+Each subsection covers production (on-cart) and bench wiring for Control ESP32 interfaces where applicable. F/R hardware wiring in this revision is cart-only; on bench, use the F/R input bypass flag if cart switch wiring is not present. For CAN bus topology and stepper motor wiring shared across all nodes, see [CAN Bus Wiring](../README.md#can-bus-wiring).
 
 ### Wiring Summary
 
@@ -131,18 +131,31 @@ Each subsection covers production (on-cart) and bench wiring for Control ESP32 i
 | Throttle system (DG408 mux + AEDIKO relay) | Same hardware — bench output unloaded (no Curtis controller)      |
 | Pedal bypass relay (JD-2912 via IRLZ44N)   | Same hardware — bench relay switches with no 48V load             |
 | Pedal ADC                                  | Same — bench divider floating reads ~0mV (safe default)           |
-| F/R optocouplers (PC817)                   | **Different** — production: 48V via 4.7k; bench: 3.3V via 330 ohm |
+| F/R optocouplers (PC817)                   | Cart wiring only — production-style 48V switch wiring via 4.7k    |
 | Status LED (WS2812)                        | Same                                                              |
 
 ### CAN Bus (SN65HVD230)
 
-GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module. Control ESP32's Waveshare board has onboard termination **disabled** (termination is on Safety ESP32 and Planner/Orin). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module. Control ESP32's Waveshare board has the onboard termination resistor **removed** (termination is on Safety ESP32 and Planner/Orin). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
 
 ### Throttle System (DG408DJZ Mux + AEDIKO Relay)
 
-8-channel analog multiplexer selects one of 8 resistor taps for throttle levels 0-7. Address lines A0-A2 (GPIO 2/3/6) select the channel; EN (GPIO 7) gates the output. An AEDIKO SRD-05VDC-SL-C relay (GPIO 9) switches the Curtis controller throttle input between manual pedal pot (NC, de-energized) and mux output (NO, energized). EN has a 10k pull-down to ensure the mux is disabled on reset.
+8-channel analog multiplexer selects throttle levels 0-7 using this resistor ladder:
 
-**Production:** Mux output feeds into the Curtis motor controller throttle input through the relay. The 8 resistor taps are tuned to the Curtis controller's expected voltage range.
+| Resistor # | Resistance (Ohms) |
+|------------|-------------------|
+| 1          | 910               |
+| 2          | 750               |
+| 3          | 910               |
+| 4          | 1000              |
+| 5          | 1000              |
+| 6          | 1000              |
+
+The six series resistors create seven physical ladder taps (`T0..T6`). Mux channels are mapped `CH0..CH6 -> T0..T6`, and `CH7` is intentionally duplicated to `T6` (max throttle).
+
+Address lines A0-A2 (GPIO 2/3/6) select the channel; EN (GPIO 7) gates the output. An AEDIKO SRD-05VDC-SL-C relay (GPIO 9) switches the Curtis controller throttle input between manual pedal pot (NC, de-energized) and mux output (NO, energized). EN has a 10k pull-down to ensure the mux is disabled on reset.
+
+**Production:** Mux output feeds into the Curtis motor controller throttle input through the relay. The ladder taps and channel mapping are tuned to the Curtis controller's expected voltage range.
 
 **Bench:** Same DG408 + resistor ladder + relay hardware. The mux output is unloaded (no Curtis controller connected). Useful for verifying channel selection with a DMM on the mux output. The relay will audibly click when energized — verifies GPIO 9 output.
 
@@ -182,31 +195,13 @@ State decode (PC817 optocouplers, active LOW with internal pull-up):
 
 Each PC817 provides galvanic isolation between the cart's 48V signal circuits and the ESP32:
 
-**Production (48V):** 4.7k ohm current-limiting resistor on pin 1. Cart GND and ESP32 GND must **NOT** be connected (galvanic isolation is the point). Microswitch closed -> LED on -> phototransistor conducts -> GPIO pulled LOW (active). Microswitch open -> LED off -> phototransistor off -> GPIO pulled HIGH by internal pull-up.
+**Production (48V):** 4.7k ohm current-limiting resistor on pin 1 for each F/R channel on the **PC817 LED side**. Keep the cart-side F/R switch wiring isolated from the ESP32 GPIO side (do not tie the cart-side LED return for these channels to ESP32 GND). Microswitch closed -> LED on -> phototransistor conducts -> GPIO pulled LOW (active). Microswitch open -> LED off -> phototransistor off -> GPIO pulled HIGH by internal pull-up.
 
-**Bench (3.3V):** Connect each PC817 LED (pins 1-2) through a 330 ohm resistor to ESP32 3.3V. Use separate jumper wires per optocoupler to simulate F/R states:
-
-| State   | Anti-arc (GPIO 22)              | Buzzer (GPIO 23)                |
-|---------|---------------------------------|---------------------------------|
-| Forward | Apply 3.3V (LED on -> GPIO LOW) | Leave disconnected (GPIO HIGH)  |
-| Reverse | Apply 3.3V (LED on -> GPIO LOW) | Apply 3.3V (LED on -> GPIO LOW) |
-| Neutral | Leave disconnected (GPIO HIGH)  | Leave disconnected (GPIO HIGH)  |
-
-#### Microswitch Identification
-
-The third microswitch (half-speed/reverse limiter) is not used for direction sensing. To identify which microswitch is which on the physical switch assembly:
-
-1. **Anti-arcing:** Clicks ON when moving from Neutral to Forward OR Reverse
-2. **Reverse buzzer:** Clicks ON only when moving to Reverse
-3. **Half-speed:** Clicks ON only when moving to Reverse (wired to controller speed circuit, not used here)
-
-The anti-arcing and reverse buzzer switches can be distinguished by toggling between Forward and Reverse: the anti-arcing switch stays ON for both, while the buzzer switch toggles.
+**Bench:** If cart F/R switch wiring is absent on bench, use `CONFIG_BYPASS_INPUT_FR_SENSOR` to force Forward.
 
 ### Status LED (WS2812)
 
-GPIO 8 drives a WS2812 RGB LED for state indication. Direct connection to GPIO 8, powered from ESP32 3.3V rail.
-
-**Same wiring for bench and production.**
+GPIO 8 drives the data input of the onboard WS2812 RGB status LED (no external wiring required).
 
 ## Components
 
@@ -223,9 +218,6 @@ GPIO 8 drives a WS2812 RGB LED for state indication. Direct connection to GPIO 8
 | `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared)                |
 | `control_logic`            | Extracted state machine decision logic (shared, tested)    |
 
-Driver-input policy (pedal re-arm + F/R gating) now lives directly in `control-esp32/main/main.cpp`
-and consumes `adc_12bitsar` + `optocoupler_pc817` as low-level hardware components.
-
 ### Hardware Detection Limitations
 
 Not all components can detect physical absence at init or runtime. Components that are output-only GPIOs have no feedback path from the external hardware -- the ESP32 drives pins but receives no acknowledgment.
@@ -235,14 +227,14 @@ Not all components can detect physical absence at init or runtime. Components th
 | `multiplexer_dg408djz`  | No               | Output-only GPIO. Init readback tests the MCU output latch, not the external IC. The DG408DJZ is a purely analog device with no feedback path.                                                                                               |
 | `relay_jd2912`          | No               | Output-only GPIO. Same readback pattern as the mux -- verifies the MCU register, not whether the relay/MOSFET is physically present.                                                                                                         |
 | `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled. |
-| `optocoupler_pc817`     | **Yes**          | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. `init_fr_inputs()` rejects NEUTRAL as invalid, triggering FAULT.                                                                                                        |
-| `stepper_motor_uim2852` | **Yes**          | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                        |
+| `optocoupler_pc817`     | Yes              | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. `init_fr_inputs()` rejects NEUTRAL as invalid, triggering FAULT.                                                                                                        |
+| `stepper_motor_uim2852` | Yes              | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                        |
 
 For the mux and relay, detecting hardware absence would require board-level changes (e.g., adding a sense/feedback line). For the pedal ADC, a plausibility range check on the idle reading could improve detection but is not yet implemented.
 
 ## Throttle Control
 
-The throttle system uses an 8-channel analog multiplexer to select from 8 resistor taps:
+The throttle system uses an 8-channel analog multiplexer to select 8 levels from a 7-tap resistor ladder (top tap duplicated on CH7):
 - Level 0: Idle (minimum throttle)
 - Level 7: Maximum throttle
 - Slew rate limited: max 1 level change per 100ms
@@ -250,9 +242,9 @@ The throttle system uses an 8-channel analog multiplexer to select from 8 resist
 Enable sequence (READY -> ACTIVE):
 1. Set mux to level 0
 2. Energize pedal bypass relay (GPIO10) - JD-2912 bypasses pedal microswitch
-3. Wait 200ms for Curtis controller to recognize
-4. Energize throttle relay (GPIO9) - switches to mux output
-5. Enable steering and braking motors
+3. Wait 200ms enable dwell
+4. Enable steering and braking motors
+5. Energize throttle relay (GPIO9) - switches to mux output, then enable mux autonomous path
 
 ## Test Bypasses
 
@@ -271,35 +263,6 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY`         | Skip pedal bypass relay energize/de-energize                    |
 | `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING`    | Skip steering stepper motor (node 5) init/configure/commands    |
 | `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING`     | Skip braking stepper motor (node 6) init/configure/commands     |
-
-### Typical Bench Bypass Presets
-
-To test Control ESP32 alone (no other nodes on the bus, no actuators):
-```ini
-CONFIG_BYPASS_SAFETY_TARGET_MIRROR=y
-CONFIG_BYPASS_SAFETY_ESTOP_MIRROR=y
-CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS=y
-CONFIG_BYPASS_PLANNER_COMMAND_INPUTS=y
-CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS=y
-CONFIG_BYPASS_INPUT_PEDAL_ADC=y
-CONFIG_BYPASS_INPUT_FR_SENSOR=y
-CONFIG_BYPASS_ACTUATOR_MULTIPLEXER=y
-CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY=y
-CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING=y
-CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING=y
-```
-
-To test Control + Safety (no Planner/Orin, no actuators):
-```ini
-CONFIG_BYPASS_PLANNER_COMMAND_INPUTS=y
-CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS=y
-CONFIG_BYPASS_INPUT_PEDAL_ADC=y
-CONFIG_BYPASS_INPUT_FR_SENSOR=y
-CONFIG_BYPASS_ACTUATOR_MULTIPLEXER=y
-CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY=y
-CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING=y
-CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING=y
-```
 
 ## Debug Logging
 

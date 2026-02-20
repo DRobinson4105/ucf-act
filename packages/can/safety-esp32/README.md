@@ -1,6 +1,6 @@
 # safety-esp32
 
-ESP-IDF firmware for the Safety ESP32-C6. Acts as the **system state authority** — it is the only node that can advance the system forward (NOT_READY -> READY -> ENABLE -> ACTIVE). Monitors all safety inputs, controls the 24V power relay, and broadcasts the system target state via a unified heartbeat.
+ESP-IDF firmware for the Safety ESP32-C6. Acts as the **system state authority** — it is the only node that can advance the system forward (NOT_READY -> READY -> ENABLE -> ACTIVE). Monitors all safety inputs, controls the 24V power relay , and broadcasts the system target state via a unified heartbeat.
 
 ## State Machine
 
@@ -8,17 +8,19 @@ Safety owns the system target state and broadcasts it as `state` in heartbeat `0
 
 ### Target Transitions
 
-- **Startup target**: Safety heartbeats start at `NOT_READY` after `INIT` dwell.
+- **Startup target**: Safety starts in `INIT`; after `INIT` dwell it transitions to `NOT_READY`.
 - **`NOT_READY -> READY`**: Planner and Control both report `READY`, both are alive, no e-stop.
-- **`READY -> ENABLE`**: Planner/Orin request edge (`HEARTBEAT_FLAG_AUTONOMY_REQUEST`) is latched.
+- **`READY -> ENABLE`**: Planner/Orin request edge (`HEARTBEAT_FLAG_AUTONOMY_REQUEST`) is latched when Safety is in the accept window (target `READY`, no e-stop, both nodes alive, both node states `READY`).
 - **`ENABLE -> ACTIVE`**: Both nodes report `ENABLE` with `HEARTBEAT_FLAG_ENABLE_COMPLETE`, no e-stop.
 - **`ENABLE/ACTIVE -> READY`**: Planner/Orin drops autonomy request while nodes remain `READY`.
 - **`ENABLE/ACTIVE -> NOT_READY`**: Planner/Orin drops autonomy request while either node is not `READY`.
-- **`ANY -> NOT_READY`**: e-stop active, node `FAULT`, node `OVERRIDE`, or node timeout.
+- **`ANY (post-INIT) -> NOT_READY`**: e-stop active, node `FAULT`, node `OVERRIDE`, or node timeout.
+
+Note: During `INIT` dwell, Safety intentionally holds target state at `INIT` for deterministic startup sequencing.
 
 Autonomy request handling is one-shot for entry and level-hold for run:
 
-- Safety latches a rising request edge.
+- Safety latches a rising request edge only while in the accept window (`READY`, clear, both nodes alive, both node states `READY`).
 - Safety consumes it when entering `ENABLE`.
 - Safety requires request drop before re-arm.
 - If request drops during `ENABLE`/`ACTIVE`, Safety retreats out of autonomy.
@@ -199,24 +201,6 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button e-stop to inactive (not pressed)                |
 | `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote e-stop to inactive (not engaged)                  |
 | `CONFIG_BYPASS_INPUT_ULTRASONIC`        | Force ultrasonic clear and healthy (skip sensor)                  |
-
-### Typical Bench Bypass Presets
-
-To test Safety ESP32 alone (no other nodes on the bus):
-```ini
-CONFIG_BYPASS_PLANNER_AUTONOMY_GATE=y
-CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS=y
-CONFIG_BYPASS_PLANNER_STATE_MIRROR=y
-CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS=y
-CONFIG_BYPASS_CONTROL_STATE_MIRROR=y
-```
-
-To test Safety + Control (no Planner/Orin):
-```ini
-CONFIG_BYPASS_PLANNER_AUTONOMY_GATE=y
-CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS=y
-CONFIG_BYPASS_PLANNER_STATE_MIRROR=y
-```
 
 ## Debug Logging
 
