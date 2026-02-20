@@ -89,6 +89,7 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 | 4   | 0x10 | ESTOP_PLANNER_TIMEOUT | No Planner heartbeat for 500ms                          |
 | 5   | 0x20 | ESTOP_CONTROL         | Control heartbeat state == FAULT                        |
 | 6   | 0x40 | ESTOP_CONTROL_TIMEOUT | No Control heartbeat for 500ms                          |
+| all | 0x7F | ESTOP_ANY             | Power relay unavailable (all bits set = total e-stop)   |
 
 ## Pin Configuration
 

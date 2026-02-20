@@ -357,8 +357,8 @@ bool stepper_uim2852_parse_param_response(const uint8_t *data, uint8_t dl, uint8
     if (value) {
         if (dl >= 5) *value = unpack_le32(&data[1]);
         else if (dl >= 3)
-            // 16-bit value
-            *value = (int32_t)(int16_t)((uint16_t)data[1] | ((uint16_t)data[2] << 8));
+            // 16-bit unsigned value (IC, IE, MT, QE params are all unsigned)
+            *value = (int32_t)((uint16_t)data[1] | ((uint16_t)data[2] << 8));
         else
             // 8-bit value
             *value = (int32_t)(uint8_t)data[1];

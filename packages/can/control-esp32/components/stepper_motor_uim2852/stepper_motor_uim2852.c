@@ -210,6 +210,8 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor) {
 }
 
 esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor) {
+    if (!motor || !motor->initialized) return ESP_ERR_INVALID_STATE;
+    
     // First set very high SD rate for emergency (10x configured stop rate)
     uint8_t data[8];
     uint8_t dl;

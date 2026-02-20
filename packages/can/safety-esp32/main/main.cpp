@@ -372,9 +372,10 @@ static void mark_component_lost(volatile bool *ready, const char *name, const ch
 }
 
 static const char *safety_fault_to_log_string(uint8_t fault_code) {
-    if (fault_code == NODE_FAULT_GENERAL) {
-        // Safety currently uses NODE_FAULT_GENERAL only for internal relay
-        // availability failures; log that concrete reason explicitly.
+    if (fault_code == NODE_FAULT_ESTOP_ANY && !g_relay_init_ok) {
+        // When relay is unavailable, Safety sets all estop bitmask bits
+        // (NODE_FAULT_ESTOP_ANY). Log the concrete reason explicitly
+        // rather than enumerating every bit name.
         return "relay_unavailable";
     }
     return node_fault_to_string(fault_code);
@@ -1032,9 +1033,13 @@ void safety_task(void *param) {
         safety_decision_t decision = safety_evaluate(&inputs);
 
         // Missing critical output/transport components force fail-safe behavior.
+        // Relay unavailable = system cannot cut power = treat as total e-stop.
+        // Use NODE_FAULT_ESTOP_ANY (all bitmask bits set) rather than
+        // NODE_FAULT_GENERAL (0xFF) which falls outside the estop bitmask
+        // range and collides with the Planner/Control scalar fault encoding.
         if (!g_relay_init_ok) {
             decision.estop_active = true;
-            decision.fault_code = NODE_FAULT_GENERAL;
+            decision.fault_code = NODE_FAULT_ESTOP_ANY;
             decision.relay_enable = false;
         }
 

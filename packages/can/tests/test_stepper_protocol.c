@@ -601,6 +601,35 @@ static void test_parse_param_response_8bit_unsigned(void) {
     assert(val == 200);
 }
 
+static void test_parse_param_response_16bit_unsigned_high(void) {
+    // 16-bit value with bit 15 set (>= 32768) must parse as positive int32_t.
+    // Before fix: (int32_t)(int16_t)0x8000 == -32768 (wrong for unsigned params).
+    // After fix:  (int32_t)(uint16_t)0x8000 == +32768 (correct).
+    uint8_t data[8] = {0};
+    data[0] = 0;  // index
+    // value = 0x8000 (32768) LE: 0x00, 0x80
+    data[1] = 0x00;
+    data[2] = 0x80;
+
+    uint8_t idx = 0;
+    int32_t val = 0;
+    assert(stepper_uim2852_parse_param_response(data, 3, &idx, &val));
+    assert(idx == 0);
+    assert(val == 32768);
+}
+
+static void test_parse_param_response_16bit_unsigned_max(void) {
+    // 16-bit max unsigned value (0xFFFF = 65535) must parse as positive.
+    uint8_t data[8] = {0};
+    data[0] = 0;
+    data[1] = 0xFF;
+    data[2] = 0xFF;
+
+    int32_t val = 0;
+    assert(stepper_uim2852_parse_param_response(data, 3, NULL, &val));
+    assert(val == 65535);
+}
+
 static void test_parse_param_response_negative(void) {
     uint8_t data[8] = {0};
     data[0] = 0;
@@ -785,6 +814,8 @@ int main(void) {
     TEST(test_parse_param_response_16bit);
     TEST(test_parse_param_response_8bit);
     TEST(test_parse_param_response_8bit_unsigned);
+    TEST(test_parse_param_response_16bit_unsigned_high);
+    TEST(test_parse_param_response_16bit_unsigned_max);
     TEST(test_parse_param_response_negative);
     TEST(test_parse_param_too_short);
 
