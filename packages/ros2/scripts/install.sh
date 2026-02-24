@@ -119,11 +119,17 @@ git clone https://github.com/DRobinson4105/FAST_LIO_ROS2.git src/FAST_LIO_ROS2 -
 # Install perception models
 
 mkdir -p src/perception/models
+
 wget -O src/perception/models/seg.onnx https://huggingface.co/DavidRobinson05/ddrnet23slim_ucf/resolve/main/seg.onnx
 /usr/src/tensorrt/bin/trtexec \
   --onnx=src/perception/models/seg.onnx \
   --saveEngine=src/perception/models/seg.engine \
   --fp16
+
+wget -O src/perception/models/det.onnx https://huggingface.co/DavidRobinson05/yolo11_ucf/resolve/main/det.onnx
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=src/perception/models/det.onnx \
+  --saveEngine=src/perception/models/det.engine
 
 # Build workspace
 

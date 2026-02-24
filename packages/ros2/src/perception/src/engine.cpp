@@ -1,5 +1,13 @@
 #include "engine.hpp"
 
+nvinfer1::Dims3 Engine::getInputShape() {
+  return m_inputDims[0];
+}
+
+nvinfer1::Dims Engine::getOutputShape() {
+  return m_outputDims[0];
+}
+
 bool Engine::loadNetwork(const std::string &trtModelPath, const std::array<float, 3> &subVals, const std::array<float, 3> &divVals, bool normalize) {
   m_subVals = subVals;
   m_divVals = divVals;
@@ -166,20 +174,25 @@ bool Engine::runInference(const std::vector<std::vector<cv::cuda::GpuMat>> &inpu
     const auto &dims = m_inputDims[i];
 
     auto &input = batchInput[0];
-
-    if (input.channels() != dims.d[0] || input.rows != dims.d[1] || input.cols != dims.d[2]) {
-      std::string msg = "Input does not have the correct size: expected (" +
-        std::to_string(dims.d[0]) + ", " + std::to_string(dims.d[1]) + ", " +
-        std::to_string(dims.d[2]) + ") and received (" + std::to_string(input.channels()) + ", " +
-        std::to_string(input.rows) + ", " + std::to_string(input.cols) + ").";
+    
+    if (input.channels() != dims.d[0]) {
+      std::string msg = "Input does not have the correct number of channels: expected " +
+        std::to_string(dims.d[0]) + " and received " + std::to_string(input.channels()) + ".";
       m_logger.error(msg);
       return false;
+    }
+    std::vector<cv::cuda::GpuMat> mat;
+
+    if (input.channels() != dims.d[0] || input.rows != dims.d[1] || input.cols != dims.d[2]) {
+      mat = {this->resize(input, dims.d[1], dims.d[2], cv::Scalar(0, 0, 0))};
+    } else {
+      mat = batchInput;
     }
 
     nvinfer1::Dims4 inputDims = {batchSize, dims.d[0], dims.d[1], dims.d[2]};
     m_context->setInputShape(m_IOTensorNames[i].c_str(), inputDims);
     
-    auto mfloat = blobFromGpuMats(batchInput, m_subVals, m_divVals, m_normalize);
+    auto mfloat = blobFromGpuMats(mat, m_subVals, m_divVals, m_normalize, true);
     preprocessedInputs.push_back(mfloat);
     m_buffers[i] = mfloat.ptr<void>();
   }

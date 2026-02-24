@@ -3,8 +3,8 @@
     in_topic: /livox/lidar_pc2
     out_topic: /livox/lidar_filtered
     frequency: 10.0
-    x_min: -2.5908
+    x_min: -2.6
     x_max: 0.2286
-    y_min: -0.5842
-    y_max: 0.5842
+    y_min: -0.6
+    y_max: 0.6
     include: false

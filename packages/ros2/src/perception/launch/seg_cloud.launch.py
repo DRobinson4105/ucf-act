@@ -7,9 +7,9 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    device = LaunchConfiguration("device")
+    params = osp.join(get_package_share_directory("perception"), "config", "seg_cloud.yaml")
+    
     camera = LaunchConfiguration("camera")
-
     cameras = [
         "front_left",
         "front_right",
@@ -18,21 +18,18 @@ def generate_launch_description():
         "side_BL",
         "side_BR",
     ]
-    
-    params = osp.join(get_package_share_directory("bringup"), "config", "camera.yaml")
 
     return LaunchDescription([
-        DeclareLaunchArgument("device"),
         DeclareLaunchArgument("camera", choices=cameras),
         Node(
-            package="usb_cam",
-            executable="usb_cam_node_exe",
+            package="perception",
+            executable="seg_cloud_node",
+            name="seg_cloud_node",
             namespace=camera,
-            name="usb_cam",
-            parameters=[params, {
-                "video_device": device,
-                "frame_id": camera,
-            }],
-            output="screen",
-        )
+            parameters=[
+              params,
+              { "camera_frame": camera }
+            ],
+            output="screen"
+        ),
     ])

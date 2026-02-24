@@ -60,6 +60,8 @@ SegNode::SegNode() : rclcpp::Node("seg_node"), m_act_logger([this](act::util::Se
   };
   
   if (!m_engine->loadNetwork(trtModelPath, subFloats, divFloats, normalize)) {
+    std::string msg = "Engine failed to load.";
+    RCLCPP_ERROR(this->get_logger(), msg.c_str());
     return;
   }
 

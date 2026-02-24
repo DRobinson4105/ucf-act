@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    in_topic: "image_raw"
+    out_topic: "objects"
+    frequency: 10.0
+    sub_vals: [0.0, 0.0, 0.0]
+    div_vals: [1.0, 1.0, 1.0]
+    normalize: true
+    width: 1280
+    height: 720
+    batch_size: 1
+    confidence_threshold: 0.01
