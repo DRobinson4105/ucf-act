@@ -27,6 +27,9 @@ PKGS=(
     ros-humble-rviz2
     ros-humble-rviz-default-plugins
     ros-humble-rviz-common
+    ros-humble-image-pipeline
+    ros-humble-pcl-conversions
+    ros-humble-pcl-ros
 )
 
 sudo apt-get install -y "${PKGS[@]}"
@@ -49,7 +52,10 @@ cmake ../opencv-4.10.0 \
   -DPYTHON2_LIBRARY="" \
   -DPYTHON2_NUMPY_INCLUDE_DIRS="" \
   -DBUILD_opencv_python2=OFF \
-  -DBUILD_opencv_python3=OFF \
+  -DBUILD_opencv_python3=ON \
+  -DPYTHON3_EXECUTABLE=$(which python3) \
+  -DPYTHON3_INCLUDE_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_path('include'))") \
+  -DPYTHON3_NUMPY_INCLUDE_DIRS=$(python3 -c "import numpy; print(numpy.get_include())") \
   -DWITH_CUDA=ON \
   -DWITH_CUDNN=ON \
   -DWITH_CUBLAS=ON \
@@ -81,7 +87,7 @@ sudo ldconfig
 
 cd ..
 
-rm -rf opencv-4.5.0
+rm -rf opencv-4.10.0
 sudo rm -rf build
 rm -rf opencv_contrib
 rm opencv.zip

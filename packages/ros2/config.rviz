@@ -138,20 +138,19 @@ Visualization Manager:
       Show Names: false
       Tree:
         map:
-          {}
-        odom:
-          base_link:
-            front_left:
-              {}
-            front_right:
-              {}
-            gps_frame:
-              {}
-            livox_frame:
-              {}
-          camera_init:
-            body:
-              {}
+          odom:
+            base_link:
+              front_left:
+                {}
+              front_right:
+                {}
+              gps_frame:
+                {}
+              livox_frame:
+                {}
+            camera_init:
+              body:
+                {}
       Update Interval: 0
       Value: true
     - Class: rviz_default_plugins/Image
@@ -197,7 +196,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 255
+      Max Intensity: 164
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: PointCloud2
@@ -311,10 +310,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.33479684591293335
+      Pitch: 0.4097968637943268
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 4.397098064422607
+      Yaw: 5.0670976638793945
     Saved: ~
 Window Geometry:
   Displays:

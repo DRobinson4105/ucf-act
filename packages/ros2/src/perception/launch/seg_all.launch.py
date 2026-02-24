@@ -17,7 +17,5 @@ def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_argum
 def generate_launch_description():
   return LaunchDescription([
     include("perception", "seg.launch.py", launch_arguments={"camera": "front_left"}),
-    include("perception", "seg_cloud.launch.py", launch_arguments={"camera": "front_left"}),
     include("perception", "seg.launch.py", launch_arguments={"camera": "front_right"}),
-    include("perception", "seg_cloud.launch.py", launch_arguments={"camera": "front_right"}),
   ])

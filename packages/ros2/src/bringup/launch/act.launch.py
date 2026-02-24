@@ -23,4 +23,5 @@ def generate_launch_description():
         include("fast_lio", "mapping.launch.py"),
         include("bringup", "localization.launch.py"),
         include("perception", "seg_all.launch.py"),
+        include("perception", "lidar_filter.launch.py")
   ])

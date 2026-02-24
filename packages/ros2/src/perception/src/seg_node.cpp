@@ -129,16 +129,6 @@ void SegNode::cb(const sensor_msgs::msg::Image::SharedPtr msg) {
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-
-  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> exec = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
-
-  auto node = std::make_shared<SegNode>();
-  
-  exec->add_node(node);
-  exec->spin();
-  exec->remove_node(node);
-  node.reset();
-
+  rclcpp::spin(std::make_shared<SegNode>());
   rclcpp::shutdown();
-  return 0;
 }
