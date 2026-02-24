@@ -17,18 +17,16 @@ extern "C" {
 // ============================================================================
 // DG408DJZ Multiplexer Driver
 // ============================================================================
-// Controls throttle output using a DG408DJZ 8-channel analog
-// multiplexer and a DPDT relay for autonomous/manual mode switching.
+// Controls throttle output level using a DG408DJZ 8-channel analog
+// multiplexer. The throttle source relay (AEDIKO SRD-05VDC) that switches
+// between manual pedal and mux output is managed separately via relay_srd05vdc.
 //
 // Hardware:
 //   - 8:1 analog mux selects one of 8 voltage divider taps (throttle levels 0-7)
 //   - Three address lines (A0-A2) select the active channel
 //   - Enable line (EN) gates the mux output (LOW = disabled)
-//   - DPDT relay switches between:
-//       - NC (de-energized): Manual throttle from pedal
-//       - NO (energized): Autonomous throttle from mux
 //
-// Safe state: EN LOW (mux disabled), relay de-energized (manual mode)
+// Safe state: EN LOW (mux disabled)
 // ============================================================================
 
 // ============================================================================
@@ -40,20 +38,18 @@ extern "C" {
 //   a1:    Address bit 1 - selects mux channel bit 1
 //   a2:    Address bit 2 (MSB) - selects mux channel bit 2
 //   en:    Enable pin - HIGH enables mux output, LOW disables (safe state)
-//   relay: Relay control - HIGH energizes (autonomous), LOW de-energizes (manual)
 typedef struct {
     gpio_num_t a0;
     gpio_num_t a1;
     gpio_num_t a2;
     gpio_num_t en;
-    gpio_num_t relay;
 } multiplexer_dg408djz_config_t;
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
-// Initialize GPIO pins and set safe state (EN LOW, relay de-energized)
+// Initialize GPIO pins and set safe state (EN LOW, address lines zeroed)
 esp_err_t multiplexer_dg408djz_init(const multiplexer_dg408djz_config_t *config);
 
 // ============================================================================
@@ -75,15 +71,15 @@ int8_t multiplexer_dg408djz_get_level(void);
 // Autonomous Mode Control
 // ============================================================================
 
-// Enable autonomous mode: sets level to 0, then energizes relay
-// Call this when entering autonomous control state
+// Enable autonomous mode: sets mux to level 0 and marks active.
+// Caller must energize throttle relay (relay_srd05vdc) separately.
 esp_err_t multiplexer_dg408djz_enable_autonomous(void);
 
-// Emergency stop: immediate mux disable + relay de-energize
-// Use for fault conditions requiring instant throttle cutoff
+// Emergency stop: immediate mux disable, clears autonomous flag.
+// Caller must de-energize throttle relay separately.
 esp_err_t multiplexer_dg408djz_emergency_stop(void);
 
-// Check if currently in autonomous mode (relay energized)
+// Check if currently in autonomous mode
 bool multiplexer_dg408djz_is_autonomous(void);
 
 #ifdef __cplusplus

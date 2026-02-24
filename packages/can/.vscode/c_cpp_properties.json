@@ -2,31 +2,11 @@
     "configurations": [
         {
             "name": "control-esp32",
-            "compileCommands": "${workspaceFolder}/control-esp32/build/compile_commands.json",
-            "includePath": [
-                "${workspaceFolder}/common/**",
-                "${workspaceFolder}/control-esp32/main",
-                "${workspaceFolder}/control-esp32/components/**",
-                "${workspaceFolder}/control-esp32/build/config",
-                "${workspaceFolder}/safety-esp32/main",
-                "${workspaceFolder}/safety-esp32/components/**",
-                "${workspaceFolder}/safety-esp32/build/config",
-                "/opt/esp/idf/components/**"
-            ]
+            "compileCommands": "${workspaceFolder}/control-esp32/build/compile_commands.json"
         },
         {
             "name": "safety-esp32",
-            "compileCommands": "${workspaceFolder}/safety-esp32/build/compile_commands.json",
-            "includePath": [
-                "${workspaceFolder}/common/**",
-                "${workspaceFolder}/safety-esp32/main",
-                "${workspaceFolder}/safety-esp32/components/**",
-                "${workspaceFolder}/safety-esp32/build/config",
-                "${workspaceFolder}/control-esp32/main",
-                "${workspaceFolder}/control-esp32/components/**",
-                "${workspaceFolder}/control-esp32/build/config",
-                "/opt/esp/idf/components/**"
-            ]
+            "compileCommands": "${workspaceFolder}/safety-esp32/build/compile_commands.json"
         }
     ],
     "version": 4

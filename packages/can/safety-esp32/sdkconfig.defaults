@@ -5,4 +5,23 @@ CONFIG_SPI_FLASH_SUPPORT_GD_CHIP=y
 # Task watchdog and stack overflow detection
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+
+# Panic handler: print panic and reboot to return to a known-safe state
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+# Production build guard — uncomment for vehicle deployment builds
+# CONFIG_PRODUCTION_BUILD=y
+
+# Explicit bypass defaults — all disabled.
+# These are the Kconfig defaults but are set explicitly here to prevent
+# accidental leakage from a dirty sdkconfig.
+# CONFIG_BYPASS_PLANNER_AUTONOMY_GATE is not set
+# CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS is not set
+# CONFIG_BYPASS_PLANNER_STATE_MIRROR is not set
+# CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS is not set
+# CONFIG_BYPASS_CONTROL_STATE_MIRROR is not set
+# CONFIG_BYPASS_INPUT_PUSH_BUTTON is not set
+# CONFIG_BYPASS_INPUT_RF_REMOTE is not set
+# CONFIG_BYPASS_INPUT_ULTRASONIC is not set

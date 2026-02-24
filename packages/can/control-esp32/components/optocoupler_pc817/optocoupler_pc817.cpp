@@ -18,14 +18,26 @@ static fr_state_t s_state_pending = FR_STATE_NEUTRAL;
 static uint32_t s_change_time_ms = 0;
 static bool s_debouncing = false;
 
+/**
+ * Decode F/R state from dual PC817 optocoupler inputs.
+ *
+ * 1999 Club Car DS 48V wiring:
+ *   forward_gpio (GPIO 22) = anti-arcing microswitch (ON in Forward AND Reverse)
+ *   reverse_gpio (GPIO 23) = reverse buzzer microswitch (ON in Reverse only)
+ *
+ * Both active  = Reverse (anti-arc + buzzer both ON)
+ * Forward only = Forward (anti-arc ON, buzzer OFF)
+ * Neither      = Neutral (handle in center detent)
+ * Reverse only = Invalid (buzzer without anti-arc is a wiring fault)
+ */
 static fr_state_t read_state_raw_internal(void) {
     bool forward_active = (gpio_get_level(s_config.forward_gpio) == 0);
     bool reverse_active = (gpio_get_level(s_config.reverse_gpio) == 0);
 
     if (forward_active && !reverse_active) return FR_STATE_FORWARD;
-    if (!forward_active && reverse_active) return FR_STATE_REVERSE;
+    if (forward_active && reverse_active)  return FR_STATE_REVERSE;
     if (!forward_active && !reverse_active) return FR_STATE_NEUTRAL;
-    return FR_STATE_INVALID;
+    return FR_STATE_INVALID;  // reverse_active without forward = wiring fault
 }
 
 }  // namespace

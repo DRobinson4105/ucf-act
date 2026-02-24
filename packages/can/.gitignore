@@ -1,14 +1,20 @@
 build/
 sdkconfig
 sdkconfig.old
+.env
+.direnv/
 
-# Host test build artifacts
-tests/test_stepper_protocol
-tests/test_can_protocol
-tests/test_motor_component
-tests/test_safety_logic
-tests/test_control_logic
-tests/test_system_state
-tests/test_heartbeat_monitor
-tests/test_driver_inputs
-tests/*.o
+.DS_Store
+*.dSYM/
+
+.cache/
+
+tests/**
+!tests/Makefile
+!tests/README.md
+!tests/mocks/
+!tests/mocks/**
+!tests/test_*.c
+!tests/test_*.cpp
+!tests/test_*.h
+!tests/test_*.hh

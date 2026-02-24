@@ -202,6 +202,10 @@ static inline void xSemaphoreGive(SemaphoreHandle_t sem) {
     mock_sem_give_count++;
 }
 
+static inline void vSemaphoreDelete(SemaphoreHandle_t sem) {
+    (void)sem;
+}
+
 static inline void vTaskDelay(TickType_t ticks) {
     (void)ticks;
 }

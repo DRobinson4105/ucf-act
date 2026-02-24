@@ -12,17 +12,61 @@
 #include "driver/gpio.h"
 #include "driver/twai.h"
 
+#include "esp_heap_caps.h"
+#include "esp_task_wdt.h"
+
 #include "can_protocol.hh"
 #include "can_twai.hh"
 #include "led_ws2812.hh"
 #include "multiplexer_dg408djz.hh"
 #include "stepper_motor_uim2852.h"
+#include "relay_srd05vdc.hh"
 #include "relay_jd2912.hh"
 #include "adc_12bitsar.hh"
 #include "optocoupler_pc817.hh"
 #include "control_logic.h"
+#include "heartbeat_monitor.hh"
 
-
+// ============================================================================
+// Production Build Guard
+// ============================================================================
+// If CONFIG_PRODUCTION_BUILD is set, all BYPASS_* flags must be disabled.
+// This prevents accidental deployment of bench-test firmware onto the vehicle.
+#ifdef CONFIG_PRODUCTION_BUILD
+#ifdef CONFIG_BYPASS_SAFETY_TARGET_MIRROR
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_SAFETY_TARGET_MIRROR must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_SAFETY_ESTOP_MIRROR
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_SAFETY_ESTOP_MIRROR must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_COMMAND_INPUTS
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_PLANNER_COMMAND_INPUTS must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_INPUT_PEDAL_ADC must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_INPUT_FR_SENSOR must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_ACTUATOR_MULTIPLEXER must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING must be disabled"
+#endif
+#endif // CONFIG_PRODUCTION_BUILD
 
 // Control ESP32 - Autonomous control execution
 //
@@ -47,9 +91,9 @@ static const char *TAG_RX __attribute__((unused)) = "CONTROL_RX";
 //   Control loop (middle) - run state + actuator decisions deterministically
 //   Heartbeat (lowest)    - periodic status, less latency-sensitive
 
-constexpr int CAN_RX_TASK_STACK = 4096;
-constexpr int CONTROL_TASK_STACK = 4096;
-constexpr int HEARTBEAT_TASK_STACK = 4096;
+constexpr int CAN_RX_TASK_STACK = 8192;
+constexpr int CONTROL_TASK_STACK = 8192;
+constexpr int HEARTBEAT_TASK_STACK = 8192;
 constexpr UBaseType_t CAN_RX_TASK_PRIO = 7;
 constexpr UBaseType_t CONTROL_TASK_PRIO = 6;
 constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
@@ -65,7 +109,8 @@ constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
 constexpr TickType_t CAN_RX_TIMEOUT = pdMS_TO_TICKS(10);  // wait per RX poll
 constexpr TickType_t CONTROL_LOOP_INTERVAL = pdMS_TO_TICKS(20);  // state/actuation tick (50 Hz)
 constexpr TickType_t HEARTBEAT_SEND_INTERVAL = pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS);  // protocol cadence
-constexpr uint32_t ENABLE_SEQUENCE_MS = 200;  // ENABLING dwell before enable_complete
+constexpr uint32_t INIT_DWELL_MS = 500;  // minimum dwell in INIT before READY
+constexpr uint32_t ENABLE_SEQUENCE_MS = 200;  // ENABLE dwell before enable_complete
 constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;  // throttle: max 1 level step per interval
 constexpr TickType_t PLANNER_CMD_TIMEOUT = pdMS_TO_TICKS(500);  // stale planner command cutoff
 constexpr uint16_t PEDAL_ADC_THRESHOLD_MV = 360;  // pedal override trigger threshold
@@ -76,6 +121,28 @@ constexpr uint32_t PEDAL_REARM_MS = 500;  // pedal must stay released this long 
 // motor reports in-position/stopped, an external physical override is assumed.
 // At 16 microsteps (3200 pulses/rev), 200 pulses ~ 22.5 degrees.
 constexpr int32_t STEPPER_POSITION_ERROR_THRESHOLD = 200;
+
+// Stepper liveness watchdog: if no CAN response from a motor within this
+// window, treat as NODE_FAULT_MOTOR_COMM and retreat to safe state.
+// Must be longer than the query interval to allow at least one round-trip.
+constexpr TickType_t STEPPER_LIVENESS_TIMEOUT = pdMS_TO_TICKS(500);
+
+// Interval between periodic MS[0] status queries sent to each stepper as a
+// liveness probe. Must be shorter than STEPPER_LIVENESS_TIMEOUT.
+constexpr uint32_t STEPPER_QUERY_INTERVAL_MS = 200;
+
+// ============================================================================
+// Stepper Command Envelope Limits (pulses)
+// ============================================================================
+// These define the safe operating range for planner steering/braking commands.
+// Out-of-range commands are clamped before actuation. The same values are
+// programmed into the motor's hardware software-limits (LM) during configure
+// as a secondary safety net.
+
+constexpr int16_t STEERING_POSITION_MIN = -3200;  // negative limit (pulses)
+constexpr int16_t STEERING_POSITION_MAX =  3200;  // positive limit (pulses)
+constexpr int16_t BRAKING_POSITION_MIN  = -1600;  // negative limit (pulses)
+constexpr int16_t BRAKING_POSITION_MAX  =  1600;  // positive limit (pulses)
 
 // ============================================================================
 // Retry & Fault Constants
@@ -109,8 +176,8 @@ constexpr gpio_num_t ENABLE_MOSFET_GPIO = GPIO_NUM_10;   // IRLZ44N gate for JD-
 constexpr adc_channel_t PEDAL_ADC_CHANNEL = ADC_CHANNEL_0;  // GPIO 0
 
 // F/R PC817 channels - detect gear selector contacts
-constexpr gpio_num_t FR_FORWARD_GPIO = GPIO_NUM_14;  // forward contact optocoupler
-constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_15;  // reverse contact optocoupler
+constexpr gpio_num_t FR_FORWARD_GPIO = GPIO_NUM_22;  // forward contact optocoupler
+constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23;  // reverse contact optocoupler
 
 // Status LED (WS2812)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
@@ -126,7 +193,13 @@ static multiplexer_dg408djz_config_t g_mux_cfg = {
     .a1 = MUX_A1_GPIO,
     .a2 = MUX_A2_GPIO,
     .en = MUX_EN_GPIO,
-    .relay = THROTTLE_RELAY_GPIO,
+};
+
+static relay_srd05vdc_config_t g_throttle_relay_cfg = {
+    .gpio = THROTTLE_RELAY_GPIO,
+    .active_high = true,
+    .enable_pullup = false,
+    .enable_pulldown = false,
 };
 
 static relay_jd2912_config_t g_relay_cfg = {
@@ -173,17 +246,13 @@ struct command_snapshot_t {
     int16_t steering_cmd;
     int16_t braking_cmd;
     uint8_t motor_fault_code;   // set by CAN RX on stepper error
+    TickType_t last_planner_cmd_tick;
+    uint8_t planner_cmd_last_seq;
+    uint8_t planner_cmd_stale_count;
 };
 
 static portMUX_TYPE g_cmd_lock = portMUX_INITIALIZER_UNLOCKED;
 static command_snapshot_t g_cmd = {};  // protected by g_cmd_lock
-
-// Timestamp of last Planner command received (set by CAN RX task, read by control_task)
-static volatile TickType_t g_last_planner_cmd_tick = 0;
-
-// Planner command stale detection (set by CAN RX, read by control_task)
-static volatile uint8_t g_planner_cmd_last_seq = 0;
-static volatile uint8_t g_planner_cmd_stale_count = 0;
 
 // ============================================================================
 // Local State (Control task only - no lock needed)
@@ -208,6 +277,10 @@ static uint32_t g_pedal_below_threshold_since = 0;
 static uint32_t g_enable_start_ms = 0;
 static uint32_t g_last_throttle_change_ms = 0;
 static bool g_enable_work_done = false;
+static uint32_t g_boot_start_ms = 0;
+
+// Stepper liveness probe timing (control task only)
+[[maybe_unused]] static uint32_t g_last_stepper_query_ms = 0;
 
 // Heartbeat
 static volatile uint8_t g_heartbeat_seq = 0;
@@ -225,14 +298,19 @@ struct recovery_state_t {
 };
 
 static recovery_state_t g_recovery = {};
-static bool g_can_recovery_in_progress = false;
+static volatile bool g_can_recovery_in_progress = false;
+static uint8_t g_can_tx_in_flight = 0;
 
 // Component health tracking for startup checks and persistent retries.
-static bool g_twai_ready = false;
-static bool g_mux_ready = false;
-static bool g_relay_ready = false;
-static bool g_stepper_steering_ready = false;
-static bool g_stepper_braking_ready = false;
+static volatile bool g_twai_ready = false;
+static volatile bool g_mux_ready = false;
+static volatile bool g_throttle_relay_ready = false;
+static volatile bool g_relay_ready = false;
+static volatile bool g_stepper_steering_ready = false;
+static volatile bool g_stepper_braking_ready = false;
+
+// CAN RX task handle — used to verify quiesce during recovery.
+static TaskHandle_t g_can_rx_task_handle = nullptr;
 
 // Spinlock for CAN TX tracking / recovery (used by control_task + heartbeat_task)
 static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -242,6 +320,10 @@ static portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
 // hammering init calls on every control loop tick.
 static uint32_t g_last_retry_ms = 0;
 
+// Heartbeat monitor: detect Safety heartbeat timeout on Control.
+static heartbeat_monitor_t g_hb_monitor;
+static int g_node_safety = -1;
+
 // ============================================================================
 // Stepper Motor Instances (UIM2852CA)
 // ============================================================================
@@ -250,23 +332,48 @@ static uint32_t g_last_retry_ms = 0;
 [[maybe_unused]] static stepper_motor_uim2852_t g_braking_stepper = {};
 
 static uint32_t get_time_ms() {
+    // 32-bit millisecond uptime (wraps at ~49.7 days). All elapsed-time
+    // checks in this file use unsigned subtraction, which remains correct
+    // across a single wrap for intervals << 2^31 ms.
     return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+static void task_wdt_add_self_or_log(const char *task_name) {
+    esp_err_t err = esp_task_wdt_add(NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: esp_task_wdt_add failed: %s", task_name, esp_err_to_name(err));
+    }
+}
+
+static void task_wdt_reset_or_log(const char *task_name, bool *had_failure) {
+    if (!had_failure) return;
+    esp_err_t err = esp_task_wdt_reset();
+    if (err != ESP_OK) {
+        if (!*had_failure) {
+            ESP_LOGE(TAG, "%s: esp_task_wdt_reset failed: %s", task_name, esp_err_to_name(err));
+            *had_failure = true;
+        }
+    } else if (*had_failure) {
+        ESP_LOGI(TAG, "%s: esp_task_wdt_reset recovered", task_name);
+        *had_failure = false;
+    }
 }
 
 static uint8_t sanitize_safety_target_state(uint8_t raw_state) {
     switch (raw_state) {
+        case NODE_STATE_NOT_READY:
         case NODE_STATE_READY:
-        case NODE_STATE_ENABLING:
+        case NODE_STATE_ENABLE:
         case NODE_STATE_ACTIVE:
             return raw_state;
         default:
-            // Safety target commands only use READY/ENABLING/ACTIVE.
-            // Treat all other values as READY (safe retreat).
-            return NODE_STATE_READY;
+            // Safety target commands only use NOT_READY/READY/ENABLE/ACTIVE.
+            // Treat all other values as NOT_READY (safe retreat).
+            return NODE_STATE_NOT_READY;
     }
 }
 
-static void mark_component_lost(bool *ready, const char *name, const char *detail);
+static void mark_component_lost(volatile bool *ready, const char *name, const char *detail);
 
 // ============================================================================
 // Driver Input Helpers (pedal ADC + F/R PC817)
@@ -306,6 +413,7 @@ static void mark_component_lost(bool *ready, const char *name, const char *detai
 }
 
 static void update_driver_inputs(uint32_t now_ms) {
+#ifndef CONFIG_BYPASS_INPUT_PEDAL_ADC
     if (g_pedal_input_ready) {
         uint16_t pedal_mv = 0;
         esp_err_t pedal_err = adc_12bitsar_read_mv_checked(&pedal_mv);
@@ -335,6 +443,7 @@ static void update_driver_inputs(uint32_t now_ms) {
             }
         }
     }
+#endif
 
     if (g_fr_inputs_ready)
         optocoupler_pc817_update(now_ms);
@@ -357,6 +466,7 @@ static fr_state_t fr_state_debounced(void) {
 
 static void log_startup_device_status(bool twai_ready,
                                       bool mux_ready,
+                                      bool throttle_relay_ready,
                                       bool relay_ready,
                                       bool pedal_ready,
                                       bool fr_ready,
@@ -364,23 +474,39 @@ static void log_startup_device_status(bool twai_ready,
                                       bool stepper_braking_ready,
                                       bool heartbeat_ready) {
     if (twai_ready)
-        ESP_LOGI(TAG_INIT, "TWAI: OK: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
+        ESP_LOGI(TAG_INIT, "TWAI: CONFIGURED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
     else
         ESP_LOGE(TAG_INIT, "TWAI: FAILED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
 
 #ifdef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     ESP_LOGW(TAG_INIT,
-             "MULTIPLEXER: BYPASSED: disabled (a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d relay_gpio=%d)",
-             g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en, g_mux_cfg.relay);
+             "MULTIPLEXER: BYPASSED: disabled (a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d)",
+             g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en);
 #else
     if (mux_ready) {
         ESP_LOGI(TAG_INIT,
-                 "MULTIPLEXER: OK: a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d relay_gpio=%d start=MANUAL",
-                 g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en, g_mux_cfg.relay);
+                 "MULTIPLEXER: CONFIGURED: a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d start=DISABLED",
+                 g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en);
     } else {
         ESP_LOGE(TAG_INIT,
-                 "MULTIPLEXER: FAILED: a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d relay_gpio=%d",
-                 g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en, g_mux_cfg.relay);
+                 "MULTIPLEXER: FAILED: a0_gpio=%d a1_gpio=%d a2_gpio=%d en_gpio=%d",
+                 g_mux_cfg.a0, g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en);
+    }
+#endif
+
+#ifdef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
+    ESP_LOGW(TAG_INIT,
+             "THROTTLE_RELAY: BYPASSED: disabled (gpio=%d active_level=%s)",
+             g_throttle_relay_cfg.gpio, g_throttle_relay_cfg.active_high ? "HIGH" : "LOW");
+#else
+    if (throttle_relay_ready) {
+        ESP_LOGI(TAG_INIT,
+                 "THROTTLE_RELAY: CONFIGURED: gpio=%d active_level=%s start=DE-ENERGIZED",
+                 g_throttle_relay_cfg.gpio, g_throttle_relay_cfg.active_high ? "HIGH" : "LOW");
+    } else {
+        ESP_LOGE(TAG_INIT,
+                 "THROTTLE_RELAY: FAILED: gpio=%d active_level=%s",
+                 g_throttle_relay_cfg.gpio, g_throttle_relay_cfg.active_high ? "HIGH" : "LOW");
     }
 #endif
 
@@ -391,7 +517,7 @@ static void log_startup_device_status(bool twai_ready,
 #else
     if (relay_ready) {
         ESP_LOGI(TAG_INIT,
-                 "PEDAL_RELAY: OK: gpio=%d active_level=%s start=DE-ENERGIZED",
+                 "PEDAL_RELAY: CONFIGURED: gpio=%d active_level=%s start=DE-ENERGIZED",
                  g_relay_cfg.gpio, g_relay_cfg.active_high ? "HIGH" : "LOW");
     } else {
         ESP_LOGE(TAG_INIT,
@@ -407,7 +533,7 @@ static void log_startup_device_status(bool twai_ready,
 #else
     if (pedal_ready) {
         ESP_LOGI(TAG_INIT,
-                 "PEDAL_INPUT: OK: adc_channel=ADC%d_CH%d adc_mode=%s threshold_mv=%u initial_mv=%u",
+                 "PEDAL_INPUT: CONFIGURED: adc_channel=ADC%d_CH%d adc_mode=%s threshold_mv=%u initial_mv=%u",
                  g_pedal_adc_cfg.adc_unit + 1,
                  g_pedal_adc_cfg.adc_channel,
                  adc_12bitsar_is_calibrated() ? "curve_fit" : "raw",
@@ -479,12 +605,13 @@ static void log_startup_device_status(bool twai_ready,
 #endif
 
     if (heartbeat_ready)
-        ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: OK: gpio=%d state=init", HEARTBEAT_LED_GPIO);
+        ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: CONFIGURED: gpio=%d state=init", HEARTBEAT_LED_GPIO);
     else
         ESP_LOGW(TAG_INIT, "HEARTBEAT_LED: UNAVAILABLE: gpio=%d (non-critical)", HEARTBEAT_LED_GPIO);
 }
 
-[[maybe_unused]] static esp_err_t init_stepper_checked(stepper_motor_uim2852_t *motor, uint8_t node_id) {
+[[maybe_unused]] static esp_err_t init_stepper_checked(stepper_motor_uim2852_t *motor, uint8_t node_id,
+                                                        int32_t lower_limit = 0, int32_t upper_limit = 0) {
     stepper_motor_uim2852_config_t cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
     cfg.node_id = node_id;
 
@@ -494,14 +621,20 @@ static void log_startup_device_status(bool twai_ready,
     err = stepper_motor_uim2852_configure(motor);
     if (err != ESP_OK) return err;
 
+    // Program hardware software-limits as a secondary safety net
+    if (lower_limit != 0 || upper_limit != 0) {
+        err = stepper_motor_uim2852_set_limits(motor, lower_limit, upper_limit);
+        if (err != ESP_OK) return err;
+    }
+
     return stepper_motor_uim2852_disable(motor);
 }
 
 static bool all_required_components_ready(void) {
     bool ready = true;
-    if (!g_twai_ready) ready = false;
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     if (!g_mux_ready) ready = false;
+    if (!g_throttle_relay_ready) ready = false;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
     if (!g_relay_ready) ready = false;
@@ -522,9 +655,9 @@ static bool all_required_components_ready(void) {
 }
 
 static uint8_t primary_fault_from_component_health(void) {
-    if (!g_twai_ready) return NODE_FAULT_CAN_TX;
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     if (!g_mux_ready) return NODE_FAULT_THROTTLE_INIT;
+    if (!g_throttle_relay_ready) return NODE_FAULT_RELAY_INIT;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
     if (!g_relay_ready) return NODE_FAULT_RELAY_INIT;
@@ -539,6 +672,16 @@ static uint8_t primary_fault_from_component_health(void) {
     if (!g_stepper_braking_ready) return NODE_FAULT_MOTOR_COMM;
 #endif
     return NODE_FAULT_NONE;
+}
+
+static const char *fr_state_to_string(fr_state_t state) {
+    switch (state) {
+        case FR_STATE_FORWARD: return "forward";
+        case FR_STATE_REVERSE: return "reverse";
+        case FR_STATE_NEUTRAL: return "neutral";
+        case FR_STATE_INVALID: return "wiring_fault";
+        default:               return "unknown";
+    }
 }
 
 static const char *sensor_fault_detail_string(fr_state_t fr_state, bool has_fr_sample) {
@@ -572,9 +715,9 @@ static const char *fault_detail_string(uint8_t fault_code, fr_state_t fr_state, 
 static void log_component_lost(const char *name, const char *detail) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
     if (detail && detail[0] != '\0') {
-        ESP_LOGE(TAG_INIT, "%s: LOST: %s", name, detail);
+        ESP_LOGE(TAG, "%s: LOST: %s", name, detail);
     } else {
-        ESP_LOGE(TAG_INIT, "%s: LOST", name);
+        ESP_LOGE(TAG, "%s: LOST", name);
     }
 #else
     (void)name;
@@ -584,13 +727,13 @@ static void log_component_lost(const char *name, const char *detail) {
 
 static void log_component_regained(const char *name) {
 #ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
-    ESP_LOGI(TAG_INIT, "%s: REGAINED", name);
+    ESP_LOGI(TAG, "%s: REGAINED", name);
 #else
     (void)name;
 #endif
 }
 
-static void mark_component_lost(bool *ready, const char *name, const char *detail) {
+static void mark_component_lost(volatile bool *ready, const char *name, const char *detail) {
     if (!ready) return;
     if (*ready) {
         log_component_lost(name, detail);
@@ -603,26 +746,64 @@ static void handle_mux_runtime_error(esp_err_t err, const char *detail) {
     mark_component_lost(&g_mux_ready, "MULTIPLEXER", detail);
 }
 
-static void handle_relay_runtime_error(esp_err_t err, const char *detail) {
+static void handle_throttle_relay_runtime_error(esp_err_t err, const char *detail) {
+    if (err == ESP_OK) return;
+    mark_component_lost(&g_throttle_relay_ready, "THROTTLE_RELAY", detail);
+}
+
+[[maybe_unused]] static void handle_relay_runtime_error(esp_err_t err, const char *detail) {
     if (err == ESP_OK) return;
     mark_component_lost(&g_relay_ready, "PEDAL_RELAY", detail);
 }
 
+[[maybe_unused]] static void handle_stepper_runtime_error(esp_err_t err,
+                                                          volatile bool *ready,
+                                                          const char *name,
+                                                          const char *detail) {
+    if (err == ESP_OK) return;
+    mark_component_lost(ready, name, detail);
+}
+
 static void update_control_state_from_component_health(void) {
     if (!all_required_components_ready()) {
+        taskENTER_CRITICAL(&g_hb_seq_lock);
         g_fault_code = primary_fault_from_component_health();
         g_control_state = NODE_STATE_FAULT;
+        taskEXIT_CRITICAL(&g_hb_seq_lock);
         return;
     }
 
     if (g_control_state == NODE_STATE_FAULT) {
-#ifdef CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS
-        ESP_LOGI(TAG_INIT, "SYSTEM: RECOVERED: all required components healthy");
-#endif
+        taskENTER_CRITICAL(&g_hb_seq_lock);
         g_fault_code = NODE_FAULT_NONE;
-        g_control_state = NODE_STATE_READY;
+        g_control_state = NODE_STATE_NOT_READY;
+        taskEXIT_CRITICAL(&g_hb_seq_lock);
     }
 }
+
+// Wait for can_rx_task (and any in-flight send_control_heartbeat) to exit
+// TWAI API calls. Must be called AFTER setting g_twai_ready = false.
+// can_rx_task's twai_receive() has a CAN_RX_TIMEOUT (10ms) bound, so a
+// 20ms delay guarantees it has returned and entered its idle sleep.
+// send_control_heartbeat() checks g_twai_ready at the top, so after this
+// delay no task is calling twai_transmit() or twai_receive().
+static void quiesce_can_rx() {
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    // Also wait for any in-flight heartbeat TX to complete before touching
+    // TWAI driver state.
+    for (int i = 0; i < 20; ++i) {
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        uint8_t in_flight = g_can_tx_in_flight;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
+        if (in_flight == 0) break;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+// Rate-limit retry failure logs: log on 1st attempt, then every RETRY_LOG_EVERY_N
+// attempts. At RETRY_INTERVAL_MS = 500ms, N=20 gives ~10 second intervals.
+static const uint16_t RETRY_LOG_EVERY_N = 20;
 
 static void retry_failed_components(void) {
     // Pace retries at RETRY_INTERVAL_MS to avoid hammering init calls every
@@ -632,46 +813,130 @@ static void retry_failed_components(void) {
     g_last_retry_ms = now_ms;
 
     if (!g_twai_ready) {
-        esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, TAG_INIT);
-        bool recovered = (err == ESP_OK);
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
+        // Skip if another task is already performing CAN recovery.
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        bool skip = g_can_recovery_in_progress;
+        if (!skip) g_can_recovery_in_progress = true;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
+        if (skip) return;
+
+        // g_twai_ready is already false; quiesce before touching driver.
+        quiesce_can_rx();
+
+        // Suppress internal can_twai_recover_with_reinit() logs unless
+        // CONFIG_LOG_CAN_RECOVERY is enabled; then rate-limit to 1st + every Nth.
+#ifdef CONFIG_LOG_CAN_RECOVERY
+        const char *verbose_tag = (s_retry_count == 0 ||
+            ((s_retry_count + 1) % RETRY_LOG_EVERY_N) == 0) ? TAG : nullptr;
+#else
+        const char *verbose_tag = nullptr;
+#endif
+        esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, verbose_tag);
+        bool recovered = false;
+        if (err == ESP_OK) {
+            // Active probe: send one heartbeat frame to verify bus is truly connected.
+            // After reinit the driver starts RUNNING with zero error counters, so a
+            // passive bus_ok() check always passes. Sending a real frame forces TEC
+            // accumulation on a disconnected bus (TEC += ~8 per failed TX).
+            uint8_t probe_data[8] = {0};
+            node_heartbeat_t probe_hb = {
+                .sequence = 0,
+                .state = g_control_state,
+                .fault_code = g_fault_code,
+                .flags = g_heartbeat_flags,
+            };
+            can_encode_heartbeat(probe_data, &probe_hb);
+            (void)can_twai_send(CAN_ID_CONTROL_HEARTBEAT, probe_data, pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(50));
+            twai_status_info_t probe_status;
+            recovered = (twai_get_status_info(&probe_status) == ESP_OK &&
+                         probe_status.state == TWAI_STATE_RUNNING &&
+                         probe_status.tx_error_counter == 0);
+        }
 #ifdef CONFIG_LOG_RETRY_TWAI
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "TWAI retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                if (err != ESP_OK) {
+                    ESP_LOGW(TAG, "TWAI retry failed (%u attempts): %s",
+                             s_retry_count, esp_err_to_name(err));
+                } else {
+                    ESP_LOGW(TAG, "TWAI retry failed (%u attempts): bus unstable after reinit",
+                             s_retry_count);
+                }
+            }
         }
 #endif
         if (recovered) {
-            log_component_regained("TWAI");
+            s_retry_count = 0;
+            g_twai_ready = true;
         }
-        g_twai_ready = recovered;
+
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        g_can_recovery_in_progress = false;
+        taskEXIT_CRITICAL(&g_can_tx_lock);
     }
 
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     if (!g_mux_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = multiplexer_dg408djz_init(&g_mux_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_MULTIPLEXER
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "MULTIPLEXER retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "MULTIPLEXER retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("MULTIPLEXER (driver-level)");
         }
         g_mux_ready = recovered;
+    }
+
+    if (!g_throttle_relay_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
+        esp_err_t err = relay_srd05vdc_init(&g_throttle_relay_cfg);
+        bool recovered = (err == ESP_OK);
+#ifdef CONFIG_LOG_RETRY_MULTIPLEXER
+        if (!recovered) {
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "THROTTLE_RELAY retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
+        }
+#endif
+        if (recovered) {
+            s_retry_count = 0;
+            log_component_regained("THROTTLE_RELAY (driver-level)");
+        }
+        g_throttle_relay_ready = recovered;
     }
 #endif
 
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
     if (!g_relay_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = relay_jd2912_init(&g_relay_cfg);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_PEDAL_RELAY
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "PEDAL_RELAY retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "PEDAL_RELAY retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
-            log_component_regained("PEDAL_RELAY REGAINED (driver-level)");
+            s_retry_count = 0;
+            log_component_regained("PEDAL_RELAY (driver-level)");
         }
         g_relay_ready = recovered;
     }
@@ -679,14 +944,20 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_PEDAL_ADC
     if (!g_pedal_input_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = init_pedal_input();
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_PEDAL_INPUT
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "PEDAL_INPUT retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "PEDAL_INPUT retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("PEDAL_INPUT");
         }
         g_pedal_input_ready = recovered;
@@ -695,15 +966,26 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_INPUT_FR_SENSOR
     if (!g_fr_inputs_ready) {
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
         esp_err_t err = init_fr_inputs();
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_FR_INPUT
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "FR_INPUT retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "FR_INPUT_FORWARD retry failed (%u attempts): %s (input_gpio=%d)",
+                         s_retry_count, esp_err_to_name(err), g_fr_pc817_cfg.forward_gpio);
+                ESP_LOGW(TAG, "FR_INPUT_REVERSE retry failed (%u attempts): %s (input_gpio=%d)",
+                         s_retry_count, esp_err_to_name(err), g_fr_pc817_cfg.reverse_gpio);
+            }
         }
 #endif
         if (recovered) {
-            log_component_regained("FR_INPUT");
+            s_retry_count = 0;
+            fr_state_t recovered_state = optocoupler_pc817_get_state();
+            char fr_regained[48];
+            snprintf(fr_regained, sizeof(fr_regained), "FR_INPUT (fr=%s)", fr_state_to_string(recovered_state));
+            log_component_regained(fr_regained);
         }
         g_fr_inputs_ready = recovered;
     }
@@ -711,14 +993,21 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
     if (!g_stepper_steering_ready) {
-        esp_err_t err = init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING);
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
+        esp_err_t err = init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING,
+                                              STEERING_POSITION_MIN, STEERING_POSITION_MAX);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_STEPPER_STEERING
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "STEPPER_STEERING retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "STEPPER_STEERING retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("STEPPER_STEERING");
         }
         g_stepper_steering_ready = recovered;
@@ -727,14 +1016,21 @@ static void retry_failed_components(void) {
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
     if (!g_stepper_braking_ready) {
-        esp_err_t err = init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING);
+        [[maybe_unused]] static uint16_t s_retry_count = 0;
+        esp_err_t err = init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING,
+                                              BRAKING_POSITION_MIN, BRAKING_POSITION_MAX);
         bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_STEPPER_BRAKING
         if (!recovered) {
-            ESP_LOGI(TAG_INIT, "STEPPER_BRAKING retry failed: %s", esp_err_to_name(err));
+            s_retry_count++;
+            if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0) {
+                ESP_LOGW(TAG, "STEPPER_BRAKING retry failed (%u attempts): %s",
+                         s_retry_count, esp_err_to_name(err));
+            }
         }
 #endif
         if (recovered) {
+            s_retry_count = 0;
             log_component_regained("STEPPER_BRAKING");
         }
         g_stepper_braking_ready = recovered;
@@ -763,10 +1059,13 @@ static void update_control_led_mode() {
     } else if (g_control_state == NODE_STATE_ACTIVE) {
         blue = LED_LEVEL;
         reason = "state_active";
-    } else if (g_control_state == NODE_STATE_ENABLING) {
+    } else if (g_control_state == NODE_STATE_ENABLE) {
         red = LED_LEVEL;
         green = LED_ORANGE_GREEN;
-        reason = "state_enabling";
+        reason = "state_enable";
+    } else if (g_control_state == NODE_STATE_NOT_READY) {
+        green = LED_ORANGE_GREEN;
+        reason = "state_not_ready";
     } else if (g_control_state == NODE_STATE_READY) {
         green = LED_LEVEL;
         reason = "state_ready";
@@ -779,42 +1078,16 @@ static void update_control_led_mode() {
     led_ws2812_set_manual_color(red, green, blue, reason);
 }
 
-// ============================================================================
-// CAN Recovery Helper
-// ============================================================================
-
-// Attempt to recover CAN bus communication.
-// Returns true on success, false on failure (no reset).
-static bool attempt_can_recovery() {
-    bool was_ready = g_twai_ready;
-#ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGI(TAG, "Attempting CAN recovery (stop/start, then re-init if needed)");
-#endif
-    esp_err_t err = can_twai_recover_with_reinit(TWAI_TX_GPIO, TWAI_RX_GPIO, TAG);
-        if (err == ESP_OK) {
-            g_twai_ready = true;
-            if (!was_ready) {
-                log_component_regained("TWAI");
-            }
-#ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGI(TAG, "CAN recovery succeeded");
-#endif
-        g_recovery.can_tx_fail_count = 0;
-        return true;
-    }
-
-    mark_component_lost(&g_twai_ready, "TWAI", "CAN recovery failed");
-
-#ifdef CONFIG_LOG_CAN_RECOVERY
-    ESP_LOGE(TAG, "CAN recovery FAILED: %s (will retry)", esp_err_to_name(err));
-#endif
-    return false;
-}
-
-// Track CAN TX result. On consecutive failures, trigger recovery.
+// Track CAN TX result. On consecutive failures, mark TWAI lost.
 // Protected by g_can_tx_lock to prevent concurrent recovery from control_task + heartbeat_task.
+//
+// IMPORTANT: can_twai_bus_ok() and ESP_LOG* must NOT be called inside
+// taskENTER_CRITICAL sections. On single-core ESP32-C6, critical sections
+// disable interrupts; calling into the TWAI driver or newlib fprintf with
+// interrupts disabled causes abort() in lock_acquire_generic.
 static void track_can_tx(esp_err_t err) {
     bool trigger_recovery = false;
+    bool check_bus = false;
 
     taskENTER_CRITICAL(&g_can_tx_lock);
     can_tx_track_inputs_t t = {
@@ -825,30 +1098,34 @@ static void track_can_tx(esp_err_t err) {
     can_tx_track_result_t r = control_track_can_tx(&t);
     g_recovery.can_tx_fail_count = r.new_fail_count;
     if (r.trigger_recovery) {
-        bool bus_ok = can_twai_bus_ok();
         g_recovery.can_tx_fail_count = 0;  // reset regardless
+        check_bus = true;
+    }
+    taskEXIT_CRITICAL(&g_can_tx_lock);
+
+    // Bus check and logging happen outside the critical section so that
+    // twai_get_status_info() and ESP_LOG (which use locks/semaphores)
+    // are called with interrupts enabled.
+    if (check_bus) {
+        bool bus_ok = can_twai_bus_ok();
         if (!bus_ok) {
+            taskENTER_CRITICAL(&g_can_tx_lock);
             if (!g_can_recovery_in_progress) {
                 g_can_recovery_in_progress = true;
                 trigger_recovery = true;
             }
-        } else {
-#ifdef CONFIG_LOG_CAN_RECOVERY
-            ESP_LOGI(TAG, "CAN TX failed %d times (bus OK, no partner?)",
-                     CAN_TX_CONSEC_FAIL_THRESHOLD);
-#endif
+            taskEXIT_CRITICAL(&g_can_tx_lock);
         }
+        // else: bus OK but TX still failing — no partner on bus, nothing to do.
     }
-    taskEXIT_CRITICAL(&g_can_tx_lock);
 
     if (trigger_recovery) {
 #ifdef CONFIG_LOG_CAN_RECOVERY
-        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures, initiating recovery",
-                 CAN_TX_CONSEC_FAIL_THRESHOLD);
+        ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures", CAN_TX_CONSEC_FAIL_THRESHOLD);
 #endif
-        mark_component_lost(&g_twai_ready, "TWAI", "runtime bus unhealthy after tx failures");
-        (void)attempt_can_recovery();
         taskENTER_CRITICAL(&g_can_tx_lock);
+        g_twai_ready = false;
+        // Recovery handled by retry_failed_components() at 500ms pace.
         g_can_recovery_in_progress = false;
         taskEXIT_CRITICAL(&g_can_tx_lock);
     }
@@ -861,22 +1138,53 @@ static void track_can_tx(esp_err_t err) {
 // Send the control heartbeat on CAN. Called from heartbeat_task (periodic)
 // and from control_task on state change (immediate).
 static void send_control_heartbeat(void) {
+    // Reserve an in-flight TX slot only when TWAI is ready and recovery is idle.
+    // This closes the check/send race with recovery teardown.
+    taskENTER_CRITICAL(&g_can_tx_lock);
+    if (!g_twai_ready || g_can_recovery_in_progress || g_can_tx_in_flight == UINT8_MAX) {
+        taskEXIT_CRITICAL(&g_can_tx_lock);
+        return;
+    }
+    g_can_tx_in_flight++;
+    taskEXIT_CRITICAL(&g_can_tx_lock);
+
+#ifdef CONFIG_LOG_CAN_RECOVERY
+    // Heap integrity diagnostic — detect corruption early (before ESP_LOG triggers abort).
+    // heap_caps_check_integrity_all returns true if heap is intact.
+    if (!heap_caps_check_integrity_all(true)) {
+        ESP_LOGE(TAG, "HEAP CORRUPTION detected in send_control_heartbeat! free=%lu",
+                 (unsigned long)esp_get_free_heap_size());
+    }
+#endif
+
     uint8_t hb_data[8] = {0};
 
+    uint8_t seq = 0;
+    uint8_t state = NODE_STATE_INIT;
+    uint8_t fault_code = NODE_FAULT_NONE;
+    uint8_t heartbeat_flags = 0;
     taskENTER_CRITICAL(&g_hb_seq_lock);
-    uint8_t seq = g_heartbeat_seq;
+    seq = g_heartbeat_seq;
     g_heartbeat_seq = (uint8_t)(seq + 1);
+    state = g_control_state;
+    fault_code = g_fault_code;
+    heartbeat_flags = g_heartbeat_flags;
     taskEXIT_CRITICAL(&g_hb_seq_lock);
 
     node_heartbeat_t hb_msg = {
         .sequence = seq,
-        .state = g_control_state,
-        .fault_code = g_fault_code,
-        .flags = g_heartbeat_flags,
+        .state = state,
+        .fault_code = fault_code,
+        .flags = heartbeat_flags,
     };
     can_encode_heartbeat(hb_data, &hb_msg);
 
     esp_err_t err = can_twai_send(CAN_ID_CONTROL_HEARTBEAT, hb_data, pdMS_TO_TICKS(10));
+
+    taskENTER_CRITICAL(&g_can_tx_lock);
+    if (g_can_tx_in_flight > 0) g_can_tx_in_flight--;
+    taskEXIT_CRITICAL(&g_can_tx_lock);
+
 #ifdef CONFIG_LOG_CAN_HEARTBEAT_TX
     if (err != ESP_OK) {
         if (!g_hb_tx_failing) {
@@ -888,9 +1196,9 @@ static void send_control_heartbeat(void) {
             ESP_LOGI(TAG_TX, "Heartbeat TX recovered");
             g_hb_tx_failing = false;
         }
-        ESP_LOGI(TAG_TX, "HB: seq=%u state=%s fault=%s flags=0x%02X",
-                 seq, node_state_to_string(g_control_state),
-                 node_fault_to_string(g_fault_code), g_heartbeat_flags);
+        ESP_LOGI(TAG_TX, "HB TX: seq=%u state=%s fault=%s flags=0x%02X",
+                 seq, node_state_to_string(state),
+                 node_fault_to_string(fault_code), heartbeat_flags);
     }
 #endif
     track_can_tx(err);
@@ -921,41 +1229,75 @@ static void send_control_heartbeat(void) {
     }
 }
 
+[[maybe_unused]] static const char *abort_reason_to_string(uint8_t reason) {
+    switch (reason) {
+        case CONTROL_ABORT_REASON_SAFETY_RETREAT: return "safety_retreat";
+        case CONTROL_ABORT_REASON_PEDAL_PRESSED: return "pedal_pressed";
+        case CONTROL_ABORT_REASON_FR_NOT_FORWARD: return "fr_not_forward";
+        case CONTROL_ABORT_REASON_MOTOR_FAULT: return "motor_fault";
+        case CONTROL_ABORT_REASON_SENSOR_INVALID: return "sensor_invalid";
+        case CONTROL_ABORT_REASON_NONE:
+        default: return "none";
+    }
+}
+
 // Immediately disable all autonomous actuators.
 static void disable_autonomous_actuators(void) {
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     handle_mux_runtime_error(multiplexer_dg408djz_disable(), "disable command failed");
     handle_mux_runtime_error(multiplexer_dg408djz_emergency_stop(), "emergency stop command failed");
+    handle_throttle_relay_runtime_error(
+        relay_srd05vdc_disable(&g_throttle_relay_cfg), "de-energize command failed");
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
     handle_relay_runtime_error(relay_jd2912_deenergize(), "de-energize command failed");
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-    stepper_motor_uim2852_emergency_stop(&g_steering_stepper);
+    handle_stepper_runtime_error(stepper_motor_uim2852_emergency_stop(&g_steering_stepper),
+                                 &g_stepper_steering_ready,
+                                 "STEPPER_STEERING",
+                                 "emergency stop command failed");
     // Engage brake before disabling driver (spec: ST -> brake -> MO=0)
     {
         uint8_t bdata[8];
         uint8_t bdl = stepper_uim2852_build_brake(bdata, true);
-        stepper_motor_uim2852_send_instruction(&g_steering_stepper, STEPPER_UIM2852_CW_MT, bdata, bdl);
+        handle_stepper_runtime_error(
+            stepper_motor_uim2852_send_instruction(&g_steering_stepper, STEPPER_UIM2852_CW_MT, bdata, bdl),
+            &g_stepper_steering_ready,
+            "STEPPER_STEERING",
+            "brake command failed");
     }
-    stepper_motor_uim2852_disable(&g_steering_stepper);
+    handle_stepper_runtime_error(stepper_motor_uim2852_disable(&g_steering_stepper),
+                                 &g_stepper_steering_ready,
+                                 "STEPPER_STEERING",
+                                 "disable command failed");
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-    stepper_motor_uim2852_emergency_stop(&g_braking_stepper);
+    handle_stepper_runtime_error(stepper_motor_uim2852_emergency_stop(&g_braking_stepper),
+                                 &g_stepper_braking_ready,
+                                 "STEPPER_BRAKING",
+                                 "emergency stop command failed");
     // Engage brake before disabling driver (spec: ST -> brake -> MO=0)
     {
         uint8_t bdata[8];
         uint8_t bdl = stepper_uim2852_build_brake(bdata, true);
-        stepper_motor_uim2852_send_instruction(&g_braking_stepper, STEPPER_UIM2852_CW_MT, bdata, bdl);
+        handle_stepper_runtime_error(
+            stepper_motor_uim2852_send_instruction(&g_braking_stepper, STEPPER_UIM2852_CW_MT, bdata, bdl),
+            &g_stepper_braking_ready,
+            "STEPPER_BRAKING",
+            "brake command failed");
     }
-    stepper_motor_uim2852_disable(&g_braking_stepper);
+    handle_stepper_runtime_error(stepper_motor_uim2852_disable(&g_braking_stepper),
+                                 &g_stepper_braking_ready,
+                                 "STEPPER_BRAKING",
+                                 "disable command failed");
 #endif
 }
 
 // Immediately disable all autonomous actuators.
 static void execute_trigger_override(uint8_t reason) {
 #ifdef CONFIG_LOG_CONTROL_OVERRIDE
-    ESP_LOGI(TAG, "OVERRIDE TRIGGERED (reason: %s)", override_reason_to_string(reason));
+    ESP_LOGI(TAG, "OVERRIDE TRIGGERED (reason=%s)", override_reason_to_string(reason));
 #else
     (void)reason;
 #endif
@@ -969,11 +1311,11 @@ static void execute_disable_autonomy(uint8_t reason,
                                      uint8_t control_fault_code) {
 #if defined(CONFIG_LOG_CONTROL_STATE_CHANGES) || defined(CONFIG_LOG_CONTROL_ENABLE_SEQUENCE)
     if (reason == CONTROL_DISABLE_REASON_SAFETY_RETREAT) {
-        ESP_LOGI(TAG, "AUTONOMY DISABLED (reason: %s, safety_fault: %s)",
+        ESP_LOGI(TAG, "AUTONOMY DISABLED (reason=%s, safety_fault=%s)",
                  disable_reason_to_string(reason),
                  node_fault_to_string(estop_fault_code));
     } else {
-        ESP_LOGI(TAG, "AUTONOMY DISABLED (reason: %s, control_fault: %s)",
+        ESP_LOGI(TAG, "AUTONOMY DISABLED (reason=%s, control_fault=%s)",
                  disable_reason_to_string(reason),
                  node_fault_to_string(control_fault_code));
     }
@@ -1031,11 +1373,20 @@ static void execute_complete_enable() {
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
         handle_relay_runtime_error(relay_jd2912_deenergize(), "de-energize command failed");
 #endif
+#ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
+        handle_throttle_relay_runtime_error(
+            relay_srd05vdc_disable(&g_throttle_relay_cfg), "de-energize command failed");
         handle_mux_runtime_error(multiplexer_dg408djz_disable(), "disable command failed");
+#endif
         return;
     }
 
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
+    // Energize throttle source relay and wait for contacts to settle
+    handle_throttle_relay_runtime_error(
+        relay_srd05vdc_enable(&g_throttle_relay_cfg), "energize command failed");
+    vTaskDelay(pdMS_TO_TICKS(50));  // relay contact settle time
+
     handle_mux_runtime_error(multiplexer_dg408djz_enable_autonomous(), "enable autonomous command failed");
 #endif
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
@@ -1044,14 +1395,18 @@ static void execute_complete_enable() {
 }
 
 // Abort the enable sequence (de-energize relay, disable mux)
-static void execute_abort_enable() {
+static void execute_abort_enable(uint8_t reason) {
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
-    ESP_LOGI(TAG, "Enable sequence aborted");
+    ESP_LOGI(TAG, "Enable sequence aborted (reason=%s)", abort_reason_to_string(reason));
+#else
+    (void)reason;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
     handle_relay_runtime_error(relay_jd2912_deenergize(), "de-energize command failed");
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
+    handle_throttle_relay_runtime_error(
+        relay_srd05vdc_disable(&g_throttle_relay_cfg), "de-energize command failed");
     handle_mux_runtime_error(multiplexer_dg408djz_disable(), "disable command failed");
 #endif
 }
@@ -1073,9 +1428,20 @@ static bool attempt_fault_recovery() {
 
 void can_rx_task(void *param) {
     (void)param;
+    task_wdt_add_self_or_log("can_rx_task");
+    bool wdt_reset_failed = false;
     twai_message_t msg{};
 
     while (true) {
+        task_wdt_reset_or_log("can_rx_task", &wdt_reset_failed);
+
+        // Skip TWAI API calls while driver is down or being recovered.
+        // Sleeping 100ms (not 5ms) prevents this priority-7 task from
+        // starving lower-priority tasks when the bus is unavailable.
+        if (!g_twai_ready) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         if (can_twai_receive(&msg, CAN_RX_TIMEOUT) != ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
@@ -1125,24 +1491,26 @@ void can_rx_task(void *param) {
 #endif
 
         // Process Planner command (0x111)
-        if (msg.identifier == CAN_ID_PLANNER_COMMAND && msg.data_length_code >= 6) {
+        if (msg.identifier == CAN_ID_PLANNER_COMMAND) {
             planner_command_t cmd;
-            can_decode_planner_command(msg.data, &cmd);
+            if (!can_decode_planner_command(msg.data, msg.data_length_code, &cmd)) {
+                continue;
+            }
             
             int8_t throttle_level = (int8_t)(cmd.throttle & 0x07);
 
-            g_last_planner_cmd_tick = xTaskGetTickCount();
+            taskENTER_CRITICAL(&g_cmd_lock);
+            g_cmd.last_planner_cmd_tick = xTaskGetTickCount();
 
             // Stale command detection: track sequence changes
-            if (cmd.sequence == g_planner_cmd_last_seq) {
-                if (g_planner_cmd_stale_count < 255)
-                    g_planner_cmd_stale_count = (uint8_t)(g_planner_cmd_stale_count + 1);
+            if (cmd.sequence == g_cmd.planner_cmd_last_seq) {
+                if (g_cmd.planner_cmd_stale_count < 255)
+                    g_cmd.planner_cmd_stale_count = (uint8_t)(g_cmd.planner_cmd_stale_count + 1);
             } else {
-                g_planner_cmd_last_seq = cmd.sequence;
-                g_planner_cmd_stale_count = 0;
+                g_cmd.planner_cmd_last_seq = cmd.sequence;
+                g_cmd.planner_cmd_stale_count = 0;
             }
 
-            taskENTER_CRITICAL(&g_cmd_lock);
             g_cmd.throttle_target = throttle_level;
             g_cmd.steering_cmd = cmd.steering_position;
             g_cmd.braking_cmd = cmd.braking_position;
@@ -1157,9 +1525,11 @@ void can_rx_task(void *param) {
         }
 
         // Process Safety heartbeat (0x100)
-        else if (msg.identifier == CAN_ID_SAFETY_HEARTBEAT && msg.data_length_code >= 4) {
+        else if (msg.identifier == CAN_ID_SAFETY_HEARTBEAT) {
             node_heartbeat_t hb;
-            can_decode_heartbeat(msg.data, &hb);
+            if (!can_decode_heartbeat(msg.data, msg.data_length_code, &hb)) {
+                continue;
+            }
 
             uint8_t new_target = sanitize_safety_target_state(hb.state);  // Safety system target
             uint8_t fault_code = hb.fault_code;     // Safety's fault = estop reason
@@ -1168,29 +1538,15 @@ void can_rx_task(void *param) {
             g_cmd.target_state = new_target;
             g_cmd.estop_fault_code = fault_code;
             taskEXIT_CRITICAL(&g_cmd_lock);
+
+            heartbeat_monitor_update(&g_hb_monitor, g_node_safety, hb.sequence, new_target);
             
             led_ws2812_mark_activity(now);
 
 #ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
-            static uint8_t prev_safety_target = 0xFF;
-            static uint8_t prev_safety_fault = 0xFF;
-            if (fault_code != 0 && prev_safety_fault == 0) {
-                ESP_LOGI(TAG_RX, "Safety FAULT: %s",
-                         node_fault_to_string(fault_code));
-            } else if (fault_code == 0 && prev_safety_fault != 0) {
-                ESP_LOGI(TAG_RX, "Safety fault cleared");
-            }
-            if (new_target != prev_safety_target) {
-                ESP_LOGI(TAG_RX, "Safety target: %s -> %s",
-                         node_state_to_string(prev_safety_target),
-                         node_state_to_string(new_target));
-            } else {
-                ESP_LOGI(TAG_RX, "Safety HB: seq=%u target=%s fault=%s",
-                         hb.sequence, node_state_to_string(new_target),
-                         node_fault_to_string(fault_code));
-            }
-            prev_safety_target = new_target;
-            prev_safety_fault = fault_code;
+            ESP_LOGI(TAG_RX, "Safety HB RX: seq=%u target=%s fault=%s",
+                     hb.sequence, node_state_to_string(new_target),
+                     node_fault_to_string(fault_code));
 #endif
         }
     }
@@ -1202,6 +1558,8 @@ void can_rx_task(void *param) {
 
 void control_task(void *param) {
     (void)param;
+    task_wdt_add_self_or_log("control_task");
+    bool wdt_reset_failed = false;
 
     // Declare loop-state variables before any goto to satisfy C++ scoping rules
 #ifdef CONFIG_LOG_CONTROL_STATE_CHANGES
@@ -1210,7 +1568,7 @@ void control_task(void *param) {
 #ifdef CONFIG_LOG_CONTROL_FAULT_CHANGES
     uint8_t prev_fault_code = 0xFF;
 #endif
-#ifdef CONFIG_LOG_CONTROL_SAFETY_MIRROR_CHANGES
+#ifdef CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES
     uint8_t prev_target_state = 0xFF;
     uint8_t prev_estop_fault = 0xFF;
 #endif
@@ -1225,9 +1583,11 @@ void control_task(void *param) {
 #ifdef CONFIG_LOG_CONTROL_FAULT_CHANGES
     prev_fault_code = g_fault_code;
 #endif
-#ifdef CONFIG_LOG_CONTROL_SAFETY_MIRROR_CHANGES
+#ifdef CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES
+    taskENTER_CRITICAL(&g_cmd_lock);
     prev_target_state = g_cmd.target_state;
     prev_estop_fault = g_cmd.estop_fault_code;
+    taskEXIT_CRITICAL(&g_cmd_lock);
 #endif
 
     while (true) {
@@ -1248,6 +1608,49 @@ void control_task(void *param) {
             mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "runtime communication fault");
         }
 
+        // Periodic stepper liveness probe: send MS[0] query at STEPPER_QUERY_INTERVAL_MS.
+        // The response updates last_response_tick inside process_frame (CAN RX task).
+#if !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING) || !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING)
+        // Avoid issuing liveness probes while TWAI is down/recovering.
+        // Otherwise we can false-positive motor comm faults during bus outages.
+        bool can_comm_ready = false;
+        taskENTER_CRITICAL(&g_can_tx_lock);
+        can_comm_ready = (g_twai_ready && !g_can_recovery_in_progress);
+        taskEXIT_CRITICAL(&g_can_tx_lock);
+
+        if (can_comm_ready && (now_ms - g_last_stepper_query_ms) >= STEPPER_QUERY_INTERVAL_MS) {
+            g_last_stepper_query_ms = now_ms;
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+            if (g_stepper_steering_ready)
+                stepper_motor_uim2852_query_status(&g_steering_stepper);
+#endif
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
+            if (g_stepper_braking_ready)
+                stepper_motor_uim2852_query_status(&g_braking_stepper);
+#endif
+        }
+
+        // Stepper liveness watchdog: if a motor hasn't responded within
+        // STEPPER_LIVENESS_TIMEOUT, treat it as a communication fault.
+        {
+            TickType_t now_tick = xTaskGetTickCount();
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+            if (can_comm_ready && g_stepper_steering_ready &&
+                stepper_motor_uim2852_check_liveness(&g_steering_stepper, now_tick, STEPPER_LIVENESS_TIMEOUT)) {
+                cmd_local.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+                mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "liveness timeout");
+            }
+#endif
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
+            if (can_comm_ready && g_stepper_braking_ready &&
+                stepper_motor_uim2852_check_liveness(&g_braking_stepper, now_tick, STEPPER_LIVENESS_TIMEOUT)) {
+                cmd_local.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+                mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "liveness timeout");
+            }
+#endif
+        }
+#endif
+
         update_driver_inputs(now_ms);
         fr_state_t fr_state = fr_state_debounced();
 
@@ -1267,12 +1670,22 @@ void control_task(void *param) {
         cmd_local.braking_cmd = 0;
 #endif
 
+        // Check Safety heartbeat timeout — retreat to READY if Safety is gone.
+        heartbeat_monitor_check_timeouts(&g_hb_monitor);
+        bool safety_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_safety);
+#ifdef CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS
+        safety_alive = true;
+#endif
+        if (!safety_alive) {
+            cmd_local.target_state = NODE_STATE_NOT_READY;  // retreat to safe state
+        }
+
         // Check Planner command freshness - zero throttle if stale
 #ifndef CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS
-        TickType_t planner_age = xTaskGetTickCount() - g_last_planner_cmd_tick;
+        TickType_t planner_age = xTaskGetTickCount() - cmd_local.last_planner_cmd_tick;
         bool planner_cmd_stale = false;
 
-        if (g_control_state == NODE_STATE_ACTIVE && g_last_planner_cmd_tick > 0) {
+        if (g_control_state == NODE_STATE_ACTIVE && cmd_local.last_planner_cmd_tick > 0) {
             // Timeout: no command received for PLANNER_CMD_TIMEOUT
             if (planner_age > PLANNER_CMD_TIMEOUT) {
                 planner_cmd_stale = true;
@@ -1282,11 +1695,11 @@ void control_task(void *param) {
 #endif
             }
             // Stale sequence: same sequence seen PLANNER_CMD_STALE_COUNT times
-            else if (g_planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT) {
+            else if (cmd_local.planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT) {
                 planner_cmd_stale = true;
 #ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
                 ESP_LOGI(TAG, "Planner command stale (seq=%u repeated %u times), zeroing throttle",
-                         g_planner_cmd_last_seq, g_planner_cmd_stale_count);
+                         cmd_local.planner_cmd_last_seq, cmd_local.planner_cmd_stale_count);
 #endif
             }
         }
@@ -1310,13 +1723,15 @@ void control_task(void *param) {
         bool steering_pos_err = false;
         bool braking_pos_err = false;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-        if (g_stepper_steering_ready && !g_steering_stepper.motion_in_progress) {
+        if (g_stepper_steering_ready &&
+            !stepper_motor_uim2852_is_motion_in_progress(&g_steering_stepper)) {
             steering_pos_err = (stepper_motor_uim2852_position_error(&g_steering_stepper)
                                 > STEPPER_POSITION_ERROR_THRESHOLD);
         }
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-        if (g_stepper_braking_ready && !g_braking_stepper.motion_in_progress) {
+        if (g_stepper_braking_ready &&
+            !stepper_motor_uim2852_is_motion_in_progress(&g_braking_stepper)) {
             braking_pos_err = (stepper_motor_uim2852_position_error(&g_braking_stepper)
                                 > STEPPER_POSITION_ERROR_THRESHOLD);
         }
@@ -1335,6 +1750,8 @@ void control_task(void *param) {
             .steering_position_error = steering_pos_err,
             .braking_position_error = braking_pos_err,
             .now_ms = now_ms,
+            .boot_start_ms = g_boot_start_ms,
+            .init_dwell_ms = INIT_DWELL_MS,
             .enable_start_ms = g_enable_start_ms,
             .enable_sequence_ms = ENABLE_SEQUENCE_MS,
             .enable_work_done = g_enable_work_done,
@@ -1343,6 +1760,10 @@ void control_task(void *param) {
             .throttle_slew_interval_ms = THROTTLE_SLEW_INTERVAL_MS,
             .last_steering_sent = last_steering_sent,
             .last_braking_sent = last_braking_sent,
+            .steering_min = STEERING_POSITION_MIN,
+            .steering_max = STEERING_POSITION_MAX,
+            .braking_min = BRAKING_POSITION_MIN,
+            .braking_max = BRAKING_POSITION_MAX,
         };
 
         // Compute next state (pure function — no side effects)
@@ -1356,6 +1777,24 @@ void control_task(void *param) {
                  fr_state, pedal_pressed_now, pedal_rearmed_now,
                  g_throttle_current, cmd_local.throttle_target,
                  step.actions, node_state_to_string(step.new_state));
+#endif
+
+        // Log precondition failures while not autonomy-ready (edge-triggered)
+#ifdef CONFIG_LOG_CONTROL_PRECONDITION_BLOCKED
+        {
+            static uint8_t prev_precondition_fail = PRECONDITION_OK;
+            if (step.precondition_fail != PRECONDITION_OK &&
+                step.precondition_fail != prev_precondition_fail) {
+                ESP_LOGW(TAG, "Enable blocked: fr=%s pedal_pressed=%d pedal_rearmed=%d fault=%s",
+                         fr_state_to_string(fr_state),
+                         pedal_pressed_now, pedal_rearmed_now,
+                         node_fault_to_string(g_fault_code));
+            } else if (step.precondition_fail == PRECONDITION_OK &&
+                       prev_precondition_fail != PRECONDITION_OK) {
+                ESP_LOGI(TAG, "Enable preconditions cleared");
+            }
+            prev_precondition_fail = step.precondition_fail;
+        }
 #endif
 
         // Execute hardware actions indicated by the step result
@@ -1381,7 +1820,7 @@ void control_task(void *param) {
 #endif
         }
         if (step.actions & CONTROL_ACTION_ABORT_ENABLE) {
-            execute_abort_enable();
+            execute_abort_enable(step.abort_reason);
         }
         if (step.actions & CONTROL_ACTION_APPLY_THROTTLE) {
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
@@ -1454,12 +1893,19 @@ void control_task(void *param) {
         }
 
         // Detect state change for immediate heartbeat send
-        uint8_t old_state = g_control_state;
+        uint8_t old_state = NODE_STATE_INIT;
+        uint8_t new_state = NODE_STATE_INIT;
 
-        // Apply state updates
+        // Apply state updates as an atomic group for heartbeat snapshots.
+        uint8_t heartbeat_flags = step.heartbeat_flags;
+        taskENTER_CRITICAL(&g_hb_seq_lock);
+        old_state = g_control_state;
         g_control_state = step.new_state;
         g_fault_code = step.new_fault_code;
-        g_heartbeat_flags = step.heartbeat_flags;
+        g_heartbeat_flags = heartbeat_flags;
+        new_state = g_control_state;
+        taskEXIT_CRITICAL(&g_hb_seq_lock);
+
         g_throttle_current = step.throttle_level;
         g_last_throttle_change_ms = step.throttle_change_ms;
         g_enable_start_ms = step.enable_start_ms;
@@ -1474,7 +1920,9 @@ void control_task(void *param) {
             mark_component_lost(&g_relay_ready, "PEDAL_RELAY", "runtime init fault");
         }
         if (step.new_fault_code == NODE_FAULT_SENSOR_INVALID && g_fr_inputs_ready) {
-            mark_component_lost(&g_fr_inputs_ready, "FR_INPUT", "runtime sensor invalid");
+            char fr_detail[64];
+            snprintf(fr_detail, sizeof(fr_detail), "runtime sensor invalid (fr=%s)", fr_state_to_string(fr_state));
+            mark_component_lost(&g_fr_inputs_ready, "FR_INPUT", fr_detail);
         }
         if (step.new_fault_code == NODE_FAULT_MOTOR_COMM) {
             mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "runtime motor communication fault");
@@ -1482,39 +1930,63 @@ void control_task(void *param) {
         }
 
         if (!all_required_components_ready()) {
+            taskENTER_CRITICAL(&g_hb_seq_lock);
             g_control_state = NODE_STATE_FAULT;
             g_fault_code = primary_fault_from_component_health();
+            g_heartbeat_flags = 0;
+            new_state = g_control_state;
+            taskEXIT_CRITICAL(&g_hb_seq_lock);
         } else if (g_control_state == NODE_STATE_FAULT) {
-            g_control_state = NODE_STATE_READY;
+            taskENTER_CRITICAL(&g_hb_seq_lock);
+            g_control_state = NODE_STATE_NOT_READY;
             g_fault_code = NODE_FAULT_NONE;
+            g_heartbeat_flags = 0;
+            new_state = g_control_state;
+            taskEXIT_CRITICAL(&g_hb_seq_lock);
         }
 
         // Send immediate heartbeat on state change
-        if (g_control_state != old_state) {
+        if (new_state != old_state) {
             send_control_heartbeat();
         }
 
         // Log control-local transitions only
 #ifdef CONFIG_LOG_CONTROL_STATE_CHANGES
         if (g_control_state != prev_state) {
-            const char *reason = "none";
-            if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE)
-                reason = override_reason_to_string(step.override_reason);
-            else if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY)
-                reason = disable_reason_to_string(step.disable_reason);
-            else if (step.actions & CONTROL_ACTION_START_ENABLE)
-                reason = "start_enable";
-            else if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
-                reason = "enable_complete";
-            else if (step.actions & CONTROL_ACTION_ABORT_ENABLE)
-                reason = "abort_enable";
-            else if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY)
-                reason = "attempt_recovery";
+            if (g_control_state == NODE_STATE_FAULT) {
+                const char *detail = fault_detail_string(g_fault_code, fr_state, true);
+                if (detail) {
+                    ESP_LOGI(TAG, "State: %s -> FAULT (fault=%s detail=%s)",
+                             node_state_to_string(prev_state),
+                             node_fault_to_string(g_fault_code), detail);
+                } else {
+                    ESP_LOGI(TAG, "State: %s -> FAULT (fault=%s)",
+                             node_state_to_string(prev_state),
+                             node_fault_to_string(g_fault_code));
+                }
+            } else if (prev_state == NODE_STATE_FAULT) {
+                ESP_LOGI(TAG, "State: FAULT -> %s (reason=recovery)",
+                         node_state_to_string(g_control_state));
+            } else {
+                const char *reason = "none";
+                if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE)
+                    reason = override_reason_to_string(step.override_reason);
+                else if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY)
+                    reason = disable_reason_to_string(step.disable_reason);
+                else if (step.actions & CONTROL_ACTION_START_ENABLE)
+                    reason = "start_enable";
+                else if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
+                    reason = "enable_complete";
+                else if (step.actions & CONTROL_ACTION_ABORT_ENABLE)
+                    reason = "abort_enable";
+                else if (step.actions & CONTROL_ACTION_ATTEMPT_RECOVERY)
+                    reason = "attempt_recovery";
 
-            ESP_LOGI(TAG, "State: %s -> %s (reason=%s)",
-                     node_state_to_string(prev_state),
-                     node_state_to_string(g_control_state),
-                     reason);
+                ESP_LOGI(TAG, "State: %s -> %s (reason=%s)",
+                         node_state_to_string(prev_state),
+                         node_state_to_string(g_control_state),
+                         reason);
+            }
         }
         prev_state = g_control_state;
 #endif
@@ -1537,7 +2009,7 @@ void control_task(void *param) {
 #endif
 
         // Log Safety mirrored state/fault changes separately
-#ifdef CONFIG_LOG_CONTROL_SAFETY_MIRROR_CHANGES
+#ifdef CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES
         if (cmd_local.target_state != prev_target_state) {
             ESP_LOGI(TAG, "Safety target: %s -> %s",
                      node_state_to_string(prev_target_state),
@@ -1553,6 +2025,7 @@ void control_task(void *param) {
         prev_estop_fault = cmd_local.estop_fault_code;
 #endif
 
+        task_wdt_reset_or_log("control_task", &wdt_reset_failed);
         vTaskDelay(CONTROL_LOOP_INTERVAL);
     }
 }
@@ -1563,8 +2036,11 @@ void control_task(void *param) {
 
 void heartbeat_task(void *param) {
     led_ws2812_config_t *cfg = static_cast<led_ws2812_config_t *>(param);
+    task_wdt_add_self_or_log("heartbeat_task");
+    bool wdt_reset_failed = false;
 
     while (true) {
+        task_wdt_reset_or_log("heartbeat_task", &wdt_reset_failed);
         TickType_t now = xTaskGetTickCount();
 
         update_control_led_mode();
@@ -1572,34 +2048,6 @@ void heartbeat_task(void *param) {
 
         // Send heartbeat (periodic 100ms)
         send_control_heartbeat();
-
-        // Check CAN bus health — recovery must happen OUTSIDE critical section
-        // because can_twai_recover_bus_off() calls vTaskDelay() internally.
-        taskENTER_CRITICAL(&g_can_tx_lock);
-        bool bus_unhealthy = !can_twai_bus_ok();
-        bool trigger_recovery = bus_unhealthy && !g_can_recovery_in_progress;
-        if (trigger_recovery) g_can_recovery_in_progress = true;
-        taskEXIT_CRITICAL(&g_can_tx_lock);
-        if (trigger_recovery) {
-#ifdef CONFIG_LOG_CAN_RECOVERY
-            ESP_LOGI(TAG, "CAN bus unhealthy, attempting recovery");
-#endif
-            esp_err_t err = can_twai_recover_bus_off();
-            if (err == ESP_OK) {
-                if (!g_twai_ready) {
-                    log_component_regained("TWAI");
-                }
-                g_twai_ready = true;
-            } else {
-                mark_component_lost(&g_twai_ready, "TWAI", "bus-off recovery failed");
-#ifdef CONFIG_LOG_CAN_RECOVERY
-                ESP_LOGE(TAG, "CAN bus-off recovery failed: %s", esp_err_to_name(err));
-#endif
-            }
-            taskENTER_CRITICAL(&g_can_tx_lock);
-            g_can_recovery_in_progress = false;
-            taskEXIT_CRITICAL(&g_can_tx_lock);
-        }
 
         vTaskDelay(HEARTBEAT_SEND_INTERVAL);
     }
@@ -1613,6 +2061,7 @@ void main_task(void *param) {
     (void)param;
 
     g_control_state = NODE_STATE_INIT;
+    g_boot_start_ms = get_time_ms();
 
     // Initialize TWAI once during startup. If it fails, mark FAULT and let
     // background per-component retries handle recovery.
@@ -1627,8 +2076,13 @@ void main_task(void *param) {
         led_ws2812_set_manual_color(LED_LEVEL, LED_ORANGE_GREEN, 0, "state_init");
     }
 
+    // Initialize heartbeat monitor to detect Safety heartbeat timeout.
+    heartbeat_monitor_config_t hb_cfg = { .name = "CONTROL" };
+    heartbeat_monitor_init(&g_hb_monitor, &hb_cfg);
+    g_node_safety = heartbeat_monitor_register(&g_hb_monitor, "Safety", HEARTBEAT_TIMEOUT_MS);
+
     // Start CAN RX first so stepper init checks can receive responses.
-    if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, nullptr) != pdPASS) {
+    if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, &g_can_rx_task_handle) != pdPASS) {
         ESP_LOGE(TAG_INIT, "Failed to create CAN RX task, restarting");
         esp_restart();
     }
@@ -1636,8 +2090,10 @@ void main_task(void *param) {
     // One startup attempt per component; retries happen later while faulted.
 #ifndef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
     g_mux_ready = (multiplexer_dg408djz_init(&g_mux_cfg) == ESP_OK);
+    g_throttle_relay_ready = (relay_srd05vdc_init(&g_throttle_relay_cfg) == ESP_OK);
 #else
     g_mux_ready = true;
+    g_throttle_relay_ready = true;
 #endif
 
 #ifndef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
@@ -1660,25 +2116,70 @@ void main_task(void *param) {
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
     g_stepper_steering_ready =
-        (init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING) == ESP_OK);
+        (init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING,
+                              STEERING_POSITION_MIN, STEERING_POSITION_MAX) == ESP_OK);
 #else
     g_stepper_steering_ready = true;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
     g_stepper_braking_ready =
-        (init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING) == ESP_OK);
+        (init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING,
+                              BRAKING_POSITION_MIN, BRAKING_POSITION_MAX) == ESP_OK);
 #else
     g_stepper_braking_ready = true;
 #endif
 
     log_startup_device_status(g_twai_ready,
                               g_mux_ready,
+                              g_throttle_relay_ready,
                               g_relay_ready,
                               g_pedal_input_ready,
                               g_fr_inputs_ready,
                               g_stepper_steering_ready,
                               g_stepper_braking_ready,
                               heartbeat_ready);
+
+    // Log all active test bypasses at boot so they are visible on the serial console.
+    // Any active bypass is a WARNING — this firmware should not be deployed to the vehicle.
+    {
+        bool any_bypass = false;
+#ifdef CONFIG_BYPASS_SAFETY_TARGET_MIRROR
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: SAFETY_TARGET_MIRROR (forcing ACTIVE)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_SAFETY_ESTOP_MIRROR
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: SAFETY_ESTOP_MIRROR (forcing e-stop clear)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: SAFETY_LIVENESS_CHECKS (ignoring Safety timeout)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_COMMAND_INPUTS
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: PLANNER_COMMAND_INPUTS (forcing zero commands)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: PLANNER_COMMAND_STALE_CHECKS (no stale timeout)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: INPUT_PEDAL_ADC (pedal forced released)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: INPUT_FR_SENSOR (forcing FORWARD)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_MULTIPLEXER
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_MULTIPLEXER (mux/throttle relay skipped)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_PEDAL_RELAY (pedal relay skipped)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_STEPPER_STEERING (steering skipped)"); any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
+        ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_STEPPER_BRAKING (braking skipped)"); any_bypass = true;
+#endif
+        if (any_bypass) {
+            ESP_LOGW(TAG_INIT, "*** TEST BYPASSES ACTIVE — DO NOT DEPLOY TO VEHICLE ***");
+        }
+    }
 
     update_control_state_from_component_health();
 
@@ -1695,9 +2196,7 @@ void main_task(void *param) {
                      node_fault_to_string(g_fault_code));
         }
     } else {
-        // Set state to READY so control_task starts in READY (not INIT).
-        // control_task owns all subsequent state transition logging.
-        g_control_state = NODE_STATE_READY;
+        ESP_LOGI(TAG_INIT, "State: INIT (dwell=%lums)", (unsigned long)INIT_DWELL_MS);
     }
 
     if (xTaskCreate(control_task, "control", CONTROL_TASK_STACK, nullptr, CONTROL_TASK_PRIO, nullptr) != pdPASS) {
@@ -1714,7 +2213,7 @@ void main_task(void *param) {
 }
 
 extern "C" void app_main(void) {
-    if (xTaskCreate(main_task, "main_task", 4096, nullptr, 5, nullptr) != pdPASS) {
+    if (xTaskCreate(main_task, "main_task", 8192, nullptr, 5, nullptr) != pdPASS) {
         ESP_LOGE("CONTROL_INIT", "Failed to create main_task, restarting");
         esp_restart();
     }

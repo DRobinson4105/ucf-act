@@ -96,7 +96,7 @@ static void test_planner_command_roundtrip(void) {
     can_encode_planner_command(data, &cmd_in);
     
     planner_command_t cmd_out = {0};
-    can_decode_planner_command(data, &cmd_out);
+    assert(can_decode_planner_command(data, 8, &cmd_out));
     
     assert(cmd_out.throttle == 5);
     assert(cmd_out.steering_position == 1500);
@@ -112,7 +112,7 @@ static void test_planner_command_zero(void) {
     can_encode_planner_command(data, &cmd_in);
     
     planner_command_t cmd_out = {0};
-    can_decode_planner_command(data, &cmd_out);
+    assert(can_decode_planner_command(data, 8, &cmd_out));
     
     assert(cmd_out.throttle == 0);
     assert(cmd_out.steering_position == 0);
@@ -132,7 +132,7 @@ static void test_planner_command_extremes(void) {
     can_encode_planner_command(data, &cmd_in);
     
     planner_command_t cmd_out = {0};
-    can_decode_planner_command(data, &cmd_out);
+    assert(can_decode_planner_command(data, 8, &cmd_out));
     
     assert(cmd_out.throttle == 7);
     assert(cmd_out.steering_position == INT16_MAX);
@@ -160,6 +160,39 @@ static void test_planner_command_wire_format(void) {
     assert(data[7] == 0);
 }
 
+static void test_planner_command_decode_rejects_short_dlc(void) {
+    uint8_t data[8] = {0};
+    planner_command_t cmd_out = {
+        .sequence = 0xAA,
+        .throttle = 0xBB,
+        .steering_position = 0x1234,
+        .braking_position = -1234,
+    };
+
+    assert(!can_decode_planner_command(data, 5, &cmd_out));
+    assert(cmd_out.sequence == 0xAA);
+    assert(cmd_out.throttle == 0xBB);
+    assert(cmd_out.steering_position == 0x1234);
+    assert(cmd_out.braking_position == -1234);
+}
+
+static void test_planner_command_decode_clamps_throttle(void) {
+    uint8_t data[8] = {0};
+    data[0] = 42;
+    data[1] = 0xFF;
+    data[2] = 0x64;
+    data[3] = 0x00;
+    data[4] = 0x9C;
+    data[5] = 0xFF;
+
+    planner_command_t cmd_out = {0};
+    assert(can_decode_planner_command(data, 8, &cmd_out));
+    assert(cmd_out.sequence == 42);
+    assert(cmd_out.throttle == 7);
+    assert(cmd_out.steering_position == 100);
+    assert(cmd_out.braking_position == -100);
+}
+
 // ============================================================================
 // Safety heartbeat encode/decode
 // ============================================================================
@@ -167,7 +200,7 @@ static void test_planner_command_wire_format(void) {
 static void test_safety_heartbeat_roundtrip_advancing(void) {
     node_heartbeat_t hb_in = {
         .sequence = 1,
-        .state = NODE_STATE_ENABLING,
+        .state = NODE_STATE_ENABLE,
         .fault_code = NODE_FAULT_NONE,
         .flags = 0,
     };
@@ -176,10 +209,10 @@ static void test_safety_heartbeat_roundtrip_advancing(void) {
     can_encode_heartbeat(data, &hb_in);
     
     node_heartbeat_t hb_out = {0};
-    can_decode_heartbeat(data, &hb_out);
+    assert(can_decode_heartbeat(data, 8, &hb_out));
     
     assert(hb_out.sequence == 1);
-    assert(hb_out.state == NODE_STATE_ENABLING);
+    assert(hb_out.state == NODE_STATE_ENABLE);
     assert(hb_out.fault_code == NODE_FAULT_NONE);
 }
 
@@ -195,7 +228,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void) {
     can_encode_heartbeat(data, &hb_in);
     
     node_heartbeat_t hb_out = {0};
-    can_decode_heartbeat(data, &hb_out);
+    assert(can_decode_heartbeat(data, 8, &hb_out));
     
     assert(hb_out.sequence == 55);
     assert(hb_out.state == NODE_STATE_READY);
@@ -235,7 +268,7 @@ static void test_heartbeat_roundtrip_basic(void) {
     can_encode_heartbeat(data, &hb_in);
     
     node_heartbeat_t hb_out = {0};
-    can_decode_heartbeat(data, &hb_out);
+    assert(can_decode_heartbeat(data, 8, &hb_out));
     
     assert(hb_out.sequence == 100);
     assert(hb_out.state == NODE_STATE_ACTIVE);
@@ -255,7 +288,7 @@ static void test_heartbeat_roundtrip_with_fault(void) {
     can_encode_heartbeat(data, &hb_in);
     
     node_heartbeat_t hb_out = {0};
-    can_decode_heartbeat(data, &hb_out);
+    assert(can_decode_heartbeat(data, 8, &hb_out));
     
     assert(hb_out.sequence == 99);
     assert(hb_out.state == NODE_STATE_FAULT);
@@ -266,7 +299,7 @@ static void test_heartbeat_roundtrip_with_fault(void) {
 static void test_heartbeat_roundtrip_enable_complete(void) {
     node_heartbeat_t hb_in = {
         .sequence = 50,
-        .state = NODE_STATE_ENABLING,
+        .state = NODE_STATE_ENABLE,
         .fault_code = NODE_FAULT_NONE,
         .flags = HEARTBEAT_FLAG_ENABLE_COMPLETE,
     };
@@ -275,10 +308,10 @@ static void test_heartbeat_roundtrip_enable_complete(void) {
     can_encode_heartbeat(data, &hb_in);
     
     node_heartbeat_t hb_out = {0};
-    can_decode_heartbeat(data, &hb_out);
+    assert(can_decode_heartbeat(data, 8, &hb_out));
     
     assert(hb_out.sequence == 50);
-    assert(hb_out.state == NODE_STATE_ENABLING);
+    assert(hb_out.state == NODE_STATE_ENABLE);
     assert(hb_out.fault_code == NODE_FAULT_NONE);
     assert(hb_out.flags == HEARTBEAT_FLAG_ENABLE_COMPLETE);
 }
@@ -295,12 +328,32 @@ static void test_heartbeat_roundtrip_autonomy_request(void) {
     can_encode_heartbeat(data, &hb_in);
 
     node_heartbeat_t hb_out = {0};
-    can_decode_heartbeat(data, &hb_out);
+    assert(can_decode_heartbeat(data, 8, &hb_out));
 
     assert(hb_out.sequence == 51);
     assert(hb_out.state == NODE_STATE_READY);
     assert(hb_out.fault_code == NODE_FAULT_NONE);
     assert(hb_out.flags == HEARTBEAT_FLAG_AUTONOMY_REQUEST);
+}
+
+static void test_heartbeat_roundtrip_reserved_bit2(void) {
+    node_heartbeat_t hb_in = {
+        .sequence = 52,
+        .state = NODE_STATE_READY,
+        .fault_code = NODE_FAULT_NONE,
+        .flags = 0x04,
+    };
+
+    uint8_t data[8];
+    can_encode_heartbeat(data, &hb_in);
+
+    node_heartbeat_t hb_out = {0};
+    assert(can_decode_heartbeat(data, 8, &hb_out));
+
+    assert(hb_out.sequence == 52);
+    assert(hb_out.state == NODE_STATE_READY);
+    assert(hb_out.fault_code == NODE_FAULT_NONE);
+    assert(hb_out.flags == 0x04);
 }
 
 static void test_heartbeat_reserved_bytes_zero(void) {
@@ -320,14 +373,32 @@ static void test_heartbeat_reserved_bytes_zero(void) {
     }
 }
 
+static void test_heartbeat_decode_rejects_short_dlc(void) {
+    uint8_t data[8] = {0};
+    node_heartbeat_t hb_out = {
+        .sequence = 0xAA,
+        .state = 0xBB,
+        .fault_code = 0xCC,
+        .flags = 0xDD,
+    };
+
+    assert(!can_decode_heartbeat(data, 3, &hb_out));
+    assert(!can_decode_heartbeat(data, 7, &hb_out));
+    assert(hb_out.sequence == 0xAA);
+    assert(hb_out.state == 0xBB);
+    assert(hb_out.fault_code == 0xCC);
+    assert(hb_out.flags == 0xDD);
+}
+
 // ============================================================================
 // String helpers
 // ============================================================================
 
 static void test_node_state_all_values(void) {
     assert(strcmp(node_state_to_string(NODE_STATE_INIT), "INIT") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_NOT_READY), "NOT_READY") == 0);
     assert(strcmp(node_state_to_string(NODE_STATE_READY), "READY") == 0);
-    assert(strcmp(node_state_to_string(NODE_STATE_ENABLING), "ENABLING") == 0);
+    assert(strcmp(node_state_to_string(NODE_STATE_ENABLE), "ENABLE") == 0);
     assert(strcmp(node_state_to_string(NODE_STATE_ACTIVE), "ACTIVE") == 0);
     assert(strcmp(node_state_to_string(NODE_STATE_OVERRIDE), "OVERRIDE") == 0);
     assert(strcmp(node_state_to_string(NODE_STATE_FAULT), "FAULT") == 0);
@@ -414,12 +485,14 @@ int main(void) {
     TEST(test_pack_unpack_le16s_min);
     TEST(test_pack_unpack_le16s_max);
     
-    // Planner command encode/decode (4)
+    // Planner command encode/decode (6)
     printf("\n--- Planner command encode/decode ---\n");
     TEST(test_planner_command_roundtrip);
     TEST(test_planner_command_zero);
     TEST(test_planner_command_extremes);
     TEST(test_planner_command_wire_format);
+    TEST(test_planner_command_decode_rejects_short_dlc);
+    TEST(test_planner_command_decode_clamps_throttle);
     
     // Safety heartbeat encode/decode (3)
     printf("\n--- Safety heartbeat encode/decode ---\n");
@@ -427,13 +500,15 @@ int main(void) {
     TEST(test_safety_heartbeat_roundtrip_retreating);
     TEST(test_safety_heartbeat_reserved_bytes_zero);
     
-    // Node heartbeat encode/decode (5)
+    // Node heartbeat encode/decode (6)
     printf("\n--- Heartbeat encode/decode ---\n");
     TEST(test_heartbeat_roundtrip_basic);
     TEST(test_heartbeat_roundtrip_with_fault);
     TEST(test_heartbeat_roundtrip_enable_complete);
     TEST(test_heartbeat_roundtrip_autonomy_request);
+    TEST(test_heartbeat_roundtrip_reserved_bit2);
     TEST(test_heartbeat_reserved_bytes_zero);
+    TEST(test_heartbeat_decode_rejects_short_dlc);
     
     // String helpers (2)
     printf("\n--- String helpers ---\n");
