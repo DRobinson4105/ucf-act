@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    rolling_size: 5
+    rolling_size: 1
     ray_dist_threshold: 0.5
     non_drivable_class_id: 0
     lidar_topic: "/livox/lidar_pc2"

@@ -19,9 +19,10 @@ def generate_launch_description():
         include("bringup", "static_tfs.launch.py"),
         include("bringup", "cameras.launch.py"),
         include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
+        include("perception", "lidar_filter.launch.py"),
         #include("bringup", "gps.launch.py"),
         include("fast_lio", "mapping.launch.py"),
-        include("bringup", "localization.launch.py"),
+        #include("bringup", "localization.launch.py"),
         include("perception", "seg_all.launch.py"),
-        include("perception", "lidar_filter.launch.py")
+        include("perception", "det_all.launch.py")
   ])

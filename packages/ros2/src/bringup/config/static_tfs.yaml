@@ -4,7 +4,16 @@
   y: 0
   z: 0.80
   roll: 0
-  pitch: 0.497
+  pitch: 0.4974
+  yaw: 0
+
+- frame-id: livox_frame
+  child-frame-id: imu_frame
+  x: 0.011
+  y: 0.02329
+  z: -0.04412
+  roll: 0
+  pitch: 0
   yaw: 0
 
 - frame-id: base_link
@@ -15,6 +24,7 @@
   roll: 0
   pitch: 0
   yaw: 0
+
 - frame-id: base_link
   child-frame-id: front_left
   x: 1.6574
@@ -23,6 +33,7 @@
   roll: 0
   pitch: 0
   yaw: 0
+
 - frame-id: base_link
   child-frame-id: front_right
   x: 1.6574
@@ -31,20 +42,21 @@
   roll: 0
   pitch: 0
   yaw: 0
+
 - frame-id: body
   child-frame-id: base_link
-  x: -1.232
+  x: -1.147
   y: -0.023
-  z: -1.415
+  z: -1.483
   roll: 0
-  pitch: 0.4974
+  pitch: -0.4974
   yaw: 0
 
 - frame-id: odom
   child-frame-id: camera_init
-  x: 0
-  y: 0
-  z: 0
+  x: 1.716
+  y: 0.023
+  z: 0.756
   roll: 0
   pitch: 0.4974
   yaw: 0

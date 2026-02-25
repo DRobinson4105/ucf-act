@@ -19,3 +19,7 @@ _build_sh_completion() {
 complete -F _build_sh_completion build.sh
 complete -F _build_sh_completion ./scripts/build.sh
 complete -F _build_sh_completion ${ACT_ROS_WS}/scripts/build.sh
+for ((i=0; i<=2; i+=2)); do
+  v4l2-ctl -d "/dev/video${i}" --set-ctrl=auto_exposure=1
+  v4l2-ctl -d "/dev/video${i}" --set-ctrl=exposure_time_absolute=10
+done
