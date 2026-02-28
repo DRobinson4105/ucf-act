@@ -97,16 +97,16 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 | GPIO | Function        | Direction | Notes                                                    |
 |------|-----------------|-----------|----------------------------------------------------------|
-| 0    | Pedal ADC       | Analog In | ADC1_CH0, voltage divider (270k/150k), threshold 360mV   |
+| 0    | Pedal ADC       | Analog In | ADC1_CH0, voltage divider (220k/100k), threshold 360mV   |
 | 2    | Throttle Mux A0 | Output    | DG408 address bit 0 (LSB)                                |
 | 3    | Throttle Mux A1 | Output    | DG408 address bit 1                                      |
 | 4    | CAN TX          | Output    | TWAI peripheral (SN65HVD230 transceiver)                 |
 | 5    | CAN RX          | Input     | TWAI peripheral (SN65HVD230 transceiver)                 |
 | 6    | Throttle Mux A2 | Output    | DG408 address bit 2 (MSB)                                |
 | 7    | Throttle Mux EN | Output    | DG408 enable (10k pull-down)                             |
-| 8    | Status LED      | Output    | WS2812 RGB LED                                           |
+| 8    | Status LED      | Output    | Onboard WS2812 RGB LED (no external wiring)              |
 | 9    | Throttle Relay  | Output    | AEDIKO relay module (NO=autonomous)                      |
-| 10   | Enable MOSFET   | Output    | IRLZ44N gate (10k pull-down), bypasses pedal microswitch |
+| 10   | Enable BJT      | Output    | S8050 base via 680R (10k pull-down), bypasses pedal microswitch |
 | 22   | F/R Forward     | Input     | PC817 optocoupler, pull-up, active LOW                   |
 | 23   | F/R Reverse     | Input     | PC817 optocoupler, pull-up, active LOW                   |
 
@@ -129,14 +129,50 @@ Each subsection covers production (on-cart) and bench wiring for Control ESP32 i
 |--------------------------------------------|-------------------------------------------------------------------|
 | CAN bus (SN65HVD230)                       | Same — see [root README](../README.md#can-bus-wiring)             |
 | Throttle system (DG408 mux + AEDIKO relay) | Same hardware — bench output unloaded (no Curtis controller)      |
-| Pedal bypass relay (JD-2912 via IRLZ44N)   | Same hardware — bench relay switches with no 48V load             |
+| Pedal bypass relay (JD-2912 via S8050)     | Same hardware — bench relay switches with no 48V load             |
 | Pedal ADC                                  | Same — bench divider floating reads ~0mV (safe default)           |
 | F/R optocouplers (PC817)                   | Cart wiring only — production-style 48V switch wiring via 4.7k    |
 | Status LED (WS2812)                        | Same                                                              |
 
 ### CAN Bus (SN65HVD230)
 
-GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module. Control ESP32's Waveshare board has the onboard termination resistor **removed** (termination is on Safety ESP32 and Planner/Orin). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module via a 4-pin JST-PH connector. Control ESP32's Waveshare board has the onboard termination resistor **removed** (termination is on Safety ESP32 and Planner/Orin). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+
+**ESP32-to-transceiver connector (4-pin JST-PH):**
+
+| Pin | Wire Color | Signal |
+|-----|------------|--------|
+| 1   | Yellow     | TXD (GPIO 4) |
+| 2   | Green      | RXD (GPIO 5) |
+| 3   | Red        | VCC (3.3V)   |
+| 4   | Black      | GND          |
+
+### Throttle Box Connectors
+
+All throttle-related components (DG408DJZ mux, resistor ladder, SRD-05VDC throttle relay, JD-2912 bypass relay, S8050, PC817 optocouplers, pedal ADC voltage divider) are housed in a separate throttle box perfboard powered from the cart's 12V fuse block. The Control ESP32 connects to the throttle box via four cables:
+
+**ESP32-side connectors:**
+
+| Label  | Connector     | Pin 1                   | Pin 2                      | Pin 3                    | Pin 4              |
+|--------|---------------|-------------------------|----------------------------|--------------------------|--------------------|
+| **J1** | 4-pin JST-PH | Mux A0 (GPIO 2) WHITE   | Mux A1 (GPIO 3) YELLOW    | Mux A2 (GPIO 6) GREEN   | Mux EN (GPIO 7) BLUE |
+| **J2** | 3-pin JST-PH | Relay IN (GPIO 9) WHITE | Bypass Base (GPIO 10) YELLOW | Pedal ADC (GPIO 0) GREEN |                    |
+| **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE | F/R Rev (GPIO 23) GREEN   |                          |                    |
+| **J9** | Single wire   | ESP32 GND BLACK         |                            |                          |                    |
+
+J9 is a single black wire connecting an ESP32 GND pin to the throttle box GND bus rail. Required for signal reference between the ESP32 and the throttle box.
+
+**Cart-side connectors (on the throttle box):**
+
+| Label  | Connector        | Pin 1                    | Pin 2                     | Pin 3                 | Pin 4                      |
+|--------|------------------|--------------------------|---------------------------|-----------------------|----------------------------|
+| **J4** | Anderson Powerpole | 12V+ RED               | GND BLACK                 |                       |                            |
+| **J5** | 4-pin JST-PH    | Curtis Pin 2 RED         | Curtis Pin 3 YELLOW       | Curtis B- BLUE        | Pedal pot wiper GREEN      |
+| **J6** | 2-pin JST-PH    | Bypass wire A YELLOW     | Bypass wire B WHITE       |                       |                            |
+| **J7** | 2-pin JST-PH    | Anti-arc switch YELLOW   | Anti-arc return GREEN     |                       |                            |
+| **J8** | 2-pin JST-PH    | Buzzer switch BLUE       | Buzzer return WHITE       |                       |                            |
+
+**Important:** J5 pin 3 (Curtis B-, blue wire) connects ONLY to the resistor ladder bottom — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal.
 
 ### Throttle System (DG408DJZ Mux + AEDIKO Relay)
 
@@ -159,17 +195,17 @@ Address lines A0-A2 (GPIO 2/3/6) select the channel; EN (GPIO 7) gates the outpu
 
 **Bench:** Same DG408 + resistor ladder + relay hardware. The mux output is unloaded (no Curtis controller connected). Useful for verifying channel selection with a DMM on the mux output. The relay will audibly click when energized — verifies GPIO 9 output.
 
-### Pedal Bypass Relay (JD-2912 via IRLZ44N)
+### Pedal Bypass Relay (JD-2912 via S8050)
 
-ESP32 GPIO 10 drives an IRLZ44N N-channel MOSFET gate, which switches the JD-2912 automotive relay coil. The relay bypasses the accelerator pedal microswitch so the Curtis controller accepts throttle input during autonomous mode. 10k pull-down on the MOSFET gate ensures the relay stays de-energized (manual pedal mode) on boot/reset.
+ESP32 GPIO 10 drives an S8050 NPN transistor base through a 680 ohm current-limiting resistor, which switches the JD-2912 automotive relay coil (12V). The relay bypasses the accelerator pedal microswitch so the Curtis controller accepts throttle input during autonomous mode. 10k pull-down on the transistor base ensures the relay stays de-energized (manual pedal mode) on boot/reset. A 1N4007 flyback diode across the relay coil protects the transistor from back-EMF.
 
-**Production:** MOSFET switches 12V to the JD-2912 coil. Relay contacts bypass the pedal microswitch in the cart's 48V throttle circuit.
+**Production:** Transistor switches 12V to the JD-2912 coil. Relay NO contacts wire across (in parallel with) the pedal microswitch in the cart's accelerator switch circuit.
 
-**Bench:** Same hardware. MOSFET/relay tested with 12V bench supply — relay clicks to verify switching. Without 12V, the GPIO output can be verified with a DMM on the MOSFET gate.
+**Bench:** Same hardware. Transistor/relay tested with 12V bench supply — relay clicks to verify switching. Without 12V, the GPIO output can be verified with a DMM on the transistor base.
 
 ### Pedal ADC
 
-GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider (270k/150k). Threshold for "pressed" is 360 mV.
+GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider (220k/100k). Threshold for "pressed" is 360 mV.
 
 **Production:** Voltage divider connected to the cart's accelerator pedal potentiometer wiper. Pedal pressed produces >360 mV; released reads ~0 mV.
 
@@ -201,7 +237,7 @@ Each PC817 provides galvanic isolation between the cart's 48V signal circuits an
 
 ### Status LED (WS2812)
 
-GPIO 8 drives the data input of the onboard WS2812 RGB status LED (no external wiring required).
+GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status LED data line (no external wiring required). LED color is determined by software state logic, not GPIO level — the GPIO serves only as the RMT data output.
 
 ## Components
 
@@ -209,7 +245,7 @@ GPIO 8 drives the data input of the onboard WS2812 RGB status LED (no external w
 |----------------------------|------------------------------------------------------------|
 | `multiplexer_dg408djz`     | DG408DJZ 8-channel analog mux for throttle level selection |
 | `stepper_motor_uim2852`    | UIM2852CA closed-loop stepper motor control API            |
-| `relay_jd2912`             | JD-2912 pedal bypass relay driver (via IRLZ44N MOSFET)     |
+| `relay_jd2912`             | JD-2912 pedal bypass relay driver (via S8050 NPN transistor) |
 | `adc_12bitsar`             | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper  |
 | `optocoupler_pc817`        | Dedicated F/R PC817 decode + debounce helper               |
 | `can_twai`                 | CAN bus driver wrapper (shared)                            |
@@ -225,7 +261,7 @@ Not all components can detect physical absence at init or runtime. Components th
 | Component               | Detects absence? | Why                                                                                                                                                                                                                                          |
 |-------------------------|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `multiplexer_dg408djz`  | No               | Output-only GPIO. Init readback tests the MCU output latch, not the external IC. The DG408DJZ is a purely analog device with no feedback path.                                                                                               |
-| `relay_jd2912`          | No               | Output-only GPIO. Same readback pattern as the mux -- verifies the MCU register, not whether the relay/MOSFET is physically present.                                                                                                         |
+| `relay_jd2912`          | No               | Output-only GPIO. Same readback pattern as the mux -- verifies the MCU register, not whether the relay/transistor is physically present.                                                                                                      |
 | `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled. |
 | `optocoupler_pc817`     | Yes              | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. `init_fr_inputs()` rejects NEUTRAL as invalid, triggering FAULT.                                                                                                        |
 | `stepper_motor_uim2852` | Yes              | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                        |

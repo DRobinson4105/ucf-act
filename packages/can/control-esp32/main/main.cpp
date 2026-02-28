@@ -170,7 +170,7 @@ constexpr gpio_num_t MUX_EN_GPIO = GPIO_NUM_7;
 
 // Relay outputs
 constexpr gpio_num_t THROTTLE_RELAY_GPIO = GPIO_NUM_9;   // AEDIKO module
-constexpr gpio_num_t ENABLE_MOSFET_GPIO = GPIO_NUM_10;   // IRLZ44N gate for JD-2912
+constexpr gpio_num_t ENABLE_BJT_GPIO    = GPIO_NUM_10;   // S8050 base (via 680R) for JD-2912
 
 // Pedal ADC (voltage divider from pot wiper)
 constexpr adc_channel_t PEDAL_ADC_CHANNEL = ADC_CHANNEL_0;  // GPIO 0
@@ -179,7 +179,7 @@ constexpr adc_channel_t PEDAL_ADC_CHANNEL = ADC_CHANNEL_0;  // GPIO 0
 constexpr gpio_num_t FR_FORWARD_GPIO = GPIO_NUM_22;  // forward contact optocoupler
 constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23;  // reverse contact optocoupler
 
-// Status LED (WS2812)
+// Status LED (WS2812) — RMT TX output, color is software-driven (not GPIO level)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
 constexpr uint8_t LED_LEVEL = 16;
 constexpr uint8_t LED_ORANGE_GREEN = 8;
@@ -203,7 +203,7 @@ static relay_srd05vdc_config_t g_throttle_relay_cfg = {
 };
 
 static relay_jd2912_config_t g_relay_cfg = {
-    .gpio = ENABLE_MOSFET_GPIO,
+    .gpio = ENABLE_BJT_GPIO,
     .active_high = true,
 };
 

@@ -1,6 +1,6 @@
 /**
  * @file relay_jd2912.cpp
- * @brief JD-2912 automotive relay driver implementation (via IRLZ44N MOSFET).
+ * @brief JD-2912 automotive relay driver implementation (via S8050 NPN transistor).
  */
 #include "relay_jd2912.hh"
 

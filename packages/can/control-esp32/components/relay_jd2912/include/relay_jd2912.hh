@@ -1,6 +1,6 @@
 /**
  * @file relay_jd2912.hh
- * @brief JD-2912 automotive relay driver (via IRLZ44N MOSFET).
+ * @brief JD-2912 automotive relay driver (via S8050 NPN transistor).
  *
  * Controls the pedal bypass relay that allows the Curtis motor controller
  * to accept autonomous throttle input without the accelerator pedal
@@ -18,14 +18,15 @@ extern "C" {
 #endif
 
 // ============================================================================
-// Pedal Bypass Relay Driver (JD-2912 via IRLZ44N)
+// Pedal Bypass Relay Driver (JD-2912 via S8050)
 // ============================================================================
 // Controls a relay that bypasses the accelerator pedal microswitch.
 //
 // Hardware:
-//   - ESP32 GPIO drives an IRLZ44N logic-level N-channel MOSFET gate
-//   - MOSFET switches the JD-2912 automotive relay coil (12V)
-//   - 10k pull-down on gate ensures safe default (relay off at boot/reset)
+//   - ESP32 GPIO drives an S8050 NPN transistor base via 680R current limiter
+//   - Transistor switches the JD-2912 automotive relay coil (12V)
+//   - 10k pull-down on base ensures safe default (relay off at boot/reset)
+//   - 1N4007 flyback diode across coil protects transistor from back-EMF
 //   - Golf cart throttle requires pedal microswitch to be closed before
 //     motor controller accepts throttle input
 //   - This relay bypasses the microswitch during autonomous operation
@@ -43,7 +44,7 @@ extern "C" {
 // ============================================================================
 
 // relay_jd2912_config_t - relay control pin configuration
-//   gpio:        GPIO pin controlling MOSFET gate (drives relay coil)
+//   gpio:        GPIO pin controlling transistor base (via 680R, drives relay coil)
 //   active_high: true = HIGH energizes relay, false = LOW energizes relay
 typedef struct {
     gpio_num_t gpio;

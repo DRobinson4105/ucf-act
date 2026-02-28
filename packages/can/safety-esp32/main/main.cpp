@@ -152,7 +152,7 @@ constexpr int ULTRASONIC_A02YYUW_RX_GPIO = GPIO_NUM_11;  // Sensor TX (data outp
 constexpr int ULTRASONIC_A02YYUW_BAUD_RATE = 9600;
 constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 1000;
 
-// Status LED (WS2812)
+// Status LED (WS2812) — RMT TX output, color is software-driven (not GPIO level)
 constexpr gpio_num_t HEARTBEAT_LED_GPIO = GPIO_NUM_8;
 constexpr uint8_t LED_LEVEL = 16;
 constexpr uint8_t LED_ORANGE_GREEN = 8;
@@ -199,7 +199,9 @@ static volatile bool g_ultrasonic_init_ok = false;
 static bool g_ultrasonic_health_prev = false;
 static bool g_ultrasonic_health_seen = false;
 static uint8_t g_ultrasonic_health_counter = 0;  // hysteresis counter
+#ifndef CONFIG_BYPASS_INPUT_ULTRASONIC
 static TickType_t g_ultrasonic_init_tick = 0;    // for startup grace period
+#endif
 static volatile bool g_relay_init_ok = false;
 static volatile bool g_twai_ready = false;
 
@@ -256,6 +258,7 @@ static void task_wdt_reset_or_log(const char *task_name, bool *had_failure) {
     }
 }
 
+#if !defined(CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS) || !defined(CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS)
 static bool wait_for_heartbeat_alive(int node_id, TickType_t timeout, TickType_t poll_interval) {
     TickType_t start_tick = xTaskGetTickCount();
     while (!heartbeat_monitor_is_alive(&g_hb_monitor, node_id) &&
@@ -264,6 +267,7 @@ static bool wait_for_heartbeat_alive(int node_id, TickType_t timeout, TickType_t
     }
     return heartbeat_monitor_is_alive(&g_hb_monitor, node_id);
 }
+#endif
 
 static void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbeat_ready) {
     if (twai_ready) {
@@ -1460,8 +1464,10 @@ void main_task(void *param) {
     }
 
     // Wait for Planner/Control heartbeats (if not bypassed)
+#if !defined(CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS) || !defined(CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS)
     static constexpr TickType_t HB_INIT_WAIT = pdMS_TO_TICKS(1000);
     static constexpr TickType_t HB_INIT_POLL = pdMS_TO_TICKS(50);
+#endif
 
 #ifndef CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS
     {

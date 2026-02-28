@@ -1,4 +1,4 @@
-# relay_jd2912: JD-2912 pedal bypass relay control (via IRLZ44N MOSFET)
+# relay_jd2912: JD-2912 pedal bypass relay control (via S8050 NPN transistor)
 
 idf_component_register(
     SRCS "relay_jd2912.cpp"

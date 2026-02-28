@@ -27,13 +27,12 @@ Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Pl
 
 ### Physical Connections Per Node
 
-Each CAN node requires three wires to the bus:
+Each CAN node connects to the bus with two signal wires. A separate GND wire is not run between nodes — all nodes already share a common ground through the cart's chassis/power ground.
 
-| Wire  | Description                               |
-|-------|-------------------------------------------|
-| CAN-H | CAN high signal                           |
-| CAN-L | CAN low signal                            |
-| GND   | Common ground reference between all nodes |
+| Wire  | Wire Color | Description      |
+|-------|------------|------------------|
+| CAN-H | Yellow     | CAN high signal |
+| CAN-L | Green      | CAN low signal  |
 
 ### Bus Termination
 
@@ -41,8 +40,8 @@ Each CAN node requires three wires to the bus:
 
 ### Wiring Notes
 
-- Twisted-pair wiring recommended for CAN-H/CAN-L runs to the stepper motors (several feet)
-- Common GND between all five nodes (ESP32 boards and Planner share cart chassis ground)
+- Twisted-pair wiring recommended for CAN-H (Yellow) / CAN-L (Green) runs to the stepper motors (several feet)
+- No dedicated CAN GND wire — all five nodes share ground through the cart chassis/power ground
 - SN65HVD230 modules powered from their respective ESP32 3.3V rail
 - Stepper motors powered from the 24V autonomous power rail (switched by Safety's power relay)
 
