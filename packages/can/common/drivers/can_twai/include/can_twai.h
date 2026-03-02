@@ -1,5 +1,5 @@
 /**
- * @file can_twai.hh
+ * @file can_twai.h
  * @brief CAN bus TWAI driver wrapper for ESP-IDF.
  */
 #pragma once
@@ -11,7 +11,8 @@
 #include "esp_err.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // ============================================================================
@@ -30,48 +31,95 @@ extern "C" {
 // Initialization
 // ============================================================================
 
-// Initialize TWAI peripheral with 1 Mbps timing and accept-all filter
+/**
+ * @brief Initialize TWAI peripheral with 1 Mbps timing and accept-all filter.
+ *
+ * Configures the ESP-IDF TWAI driver in normal mode at 1 Mbps with no
+ * message filtering. Must be called before any transmit or receive operation.
+ *
+ * @param tx_gpio  GPIO pin for CAN TX
+ * @param rx_gpio  GPIO pin for CAN RX
+ * @return ESP_OK on success, or an error code if driver installation fails
+ */
 esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio);
 
 // ============================================================================
 // Transmit Functions
 // ============================================================================
 
-// Transmit standard 11-bit CAN frame with 8-byte payload
-// Returns ESP_OK on success, ESP_ERR_TIMEOUT if TX queue full
+/**
+ * @brief Transmit a standard 11-bit CAN frame with 8-byte payload.
+ *
+ * Queues a standard CAN frame for transmission. Blocks up to @p timeout
+ * ticks if the TX queue is full.
+ *
+ * @param identifier  11-bit CAN identifier
+ * @param data        Pointer to 8-byte payload
+ * @param timeout     Maximum ticks to wait for space in the TX queue
+ * @return ESP_OK on success, ESP_ERR_TIMEOUT if TX queue full
+ */
 esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t timeout);
 
-// Transmit extended 29-bit CAN frame with variable payload length
-// Used for UIM2852CA motor protocol (SimpleCAN)
+/**
+ * @brief Transmit an extended 29-bit CAN frame with variable payload length.
+ *
+ * Queues an extended CAN frame for transmission. Used for protocols that
+ * require 29-bit identifiers, such as the UIM2852CA motor protocol (SimpleCAN).
+ *
+ * @param identifier  29-bit extended CAN identifier
+ * @param data        Pointer to payload data
+ * @param dlc         Data length code (0–8)
+ * @param timeout     Maximum ticks to wait for space in the TX queue
+ * @return ESP_OK on success, or an error code on failure
+ */
 esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8_t dlc, TickType_t timeout);
 
 // ============================================================================
 // Receive Functions
 // ============================================================================
 
-// Receive next CAN frame with timeout
-// Returns ESP_OK if frame received, ESP_ERR_TIMEOUT if no frame available
-// Check msg->extd to determine frame type: 0=standard 11-bit, 1=extended 29-bit
+/**
+ * @brief Receive the next CAN frame with timeout.
+ *
+ * Blocks until a frame is available or @p timeout ticks elapse. Check
+ * msg->extd to determine frame type: 0 = standard 11-bit, 1 = extended 29-bit.
+ *
+ * @param msg      Pointer to message structure to fill with received frame
+ * @param timeout  Maximum ticks to wait for an incoming frame
+ * @return ESP_OK if a frame was received, ESP_ERR_TIMEOUT if no frame available
+ */
 esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout);
 
 // ============================================================================
 // Bus Health
 // ============================================================================
 
-// Check TWAI bus status for error states. Returns true if bus is healthy.
-// When bus-off is detected, caller should invoke can_twai_recover_bus_off().
+/**
+ * @brief Check TWAI bus health status.
+ *
+ * Queries the TWAI driver for error states. When bus-off is detected,
+ * the caller should invoke can_twai_recover() to attempt recovery.
+ *
+ * @return true if the bus is healthy (running), false if in an error state
+ */
 bool can_twai_bus_ok(void);
 
-// Attempt recovery from bus-off state.
-// Calls twai_initiate_recovery() and twai_start() with a brief delay.
-// Returns ESP_OK on successful recovery.
-esp_err_t can_twai_recover_bus_off(void);
-
-// Attempt full communication recovery.
-// Tries TWAI stop/start first, then escalates to full driver reinstall.
-// Returns ESP_OK when communication is restored.
-// log_tag identifies the caller device in optional recovery logs.
-esp_err_t can_twai_recover_with_reinit(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag);
+/**
+ * @brief Attempt CAN bus recovery with 3-tier escalation.
+ *
+ * Tries progressively more aggressive recovery strategies:
+ *   1. Bus-off recovery (CAN protocol: twai_initiate_recovery)
+ *   2. Stop/start (soft driver reset)
+ *   3. Full driver uninstall/reinstall
+ *
+ * Returns ESP_OK as soon as any tier succeeds.
+ *
+ * @param tx_gpio   GPIO pin for CAN TX (needed for tier-3 reinstall)
+ * @param rx_gpio   GPIO pin for CAN RX (needed for tier-3 reinstall)
+ * @param log_tag   Caller identifier for recovery log messages (e.g., "SAFETY")
+ * @return ESP_OK on successful recovery, or an error code if all tiers fail
+ */
+esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag);
 
 #ifdef __cplusplus
 }

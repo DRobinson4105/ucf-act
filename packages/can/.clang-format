@@ -1,0 +1,35 @@
+---
+BasedOnStyle: LLVM
+
+# Indentation
+UseTab: AlignWithSpaces
+TabWidth: 4
+IndentWidth: 4
+IndentExternBlock: NoIndent
+IndentCaseLabels: false
+IndentPPDirectives: None
+
+# Braces
+BreakBeforeBraces: Allman
+
+# Line length
+ColumnLimit: 120
+
+# Alignment
+AlignTrailingComments:
+    Kind: Always
+    OverEmptyLines: 0
+AlignConsecutiveMacros: Consecutive
+AlignEscapedNewlines: Left
+
+# Pointers / references
+PointerAlignment: Right
+
+# Spaces
+SpaceBeforeParens: ControlStatements
+
+# Includes
+SortIncludes: Never
+
+# Functions
+AllowShortFunctionsOnASingleLine: None

@@ -2,269 +2,204 @@
  * @file led_ws2812.cpp
  * @brief WS2812 status LED driver implementation.
  */
-#include "led_ws2812.hh"
+#include "led_ws2812.h"
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "driver/rmt_tx.h"
 
-#include <string.h>
+namespace
+{
 
-namespace {
+const char *TAG = "LED";
 
-static const char *TAG = "HEARTBEAT_LED";
+// ============================================================================
+// Hardware Constants
+// ============================================================================
+
+// Onboard WS2812 RGB LED pin on ESP32-C6 dev board
+constexpr gpio_num_t LED_GPIO = GPIO_NUM_8;
+
+// Minimum interval between hardware updates (avoids flooding the RMT peripheral)
+constexpr TickType_t UPDATE_INTERVAL = pdMS_TO_TICKS(500);
+
+// ============================================================================
+// State-to-Color Mapping
+// ============================================================================
+
+constexpr uint8_t LED_BRIGHTNESS = 16;
+
+struct rgb_t
+{
+	uint8_t r, g, b;
+};
+
+/**
+ * @brief Map a node state to its corresponding LED color.
+ *
+ * Returns the RGB values used to indicate the current system state
+ * on the onboard WS2812 LED: green for READY, blue for ACTIVE,
+ * red for FAULT, and yellow for all other states (INIT, NOT_READY,
+ * ENABLE, OVERRIDE).
+ *
+ * @param state  Current node state
+ * @return RGB color struct at LED_BRIGHTNESS intensity
+ */
+rgb_t state_to_rgb(node_state_t state)
+{
+	switch (state)
+	{
+	case NODE_STATE_READY:
+		return {0, LED_BRIGHTNESS, 0}; // Green
+	case NODE_STATE_ACTIVE:
+		return {0, 0, LED_BRIGHTNESS}; // Blue
+	case NODE_STATE_FAULT:
+		return {LED_BRIGHTNESS, 0, 0}; // Red
+	case NODE_STATE_INIT:
+	case NODE_STATE_NOT_READY:
+	case NODE_STATE_ENABLE:
+	case NODE_STATE_OVERRIDE:
+	default:
+		return {LED_BRIGHTNESS, LED_BRIGHTNESS, 0}; // Yellow
+	}
+}
 
 // ============================================================================
 // Module State
 // ============================================================================
 
-static bool s_initialized = false;
-static TickType_t s_last_update = 0;
-static volatile TickType_t s_last_activity = 0;
-static TickType_t s_activity_window = 0;
-static volatile bool s_error = false;
-static bool s_manual_mode = false;
-
-// Color configuration
-static uint8_t s_idle_red = 0, s_idle_green = 0, s_idle_blue = 0;
-static uint8_t s_activity_red = 0, s_activity_green = 0, s_activity_blue = 0;
-static uint8_t s_error_red = 0, s_error_green = 0, s_error_blue = 0;
-static uint8_t s_manual_red = 0, s_manual_green = 0, s_manual_blue = 0;
-
-constexpr size_t LED_REASON_MAX_LEN = 48;
-static char s_manual_reason[LED_REASON_MAX_LEN] = "manual";
-
-#if defined(CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES) || defined(CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES)
-static const char *led_color_name(uint8_t red, uint8_t green, uint8_t blue) {
-    if (red == 0 && green == 0 && blue == 0) return "OFF";
-    if (red > 0 && green == 0 && blue == 0) return "RED";
-    if (red == 0 && green > 0 && blue == 0) return "GREEN";
-    if (red > 0 && green > 0 && blue == 0) return "ORANGE";
-    if (red == 0 && green == 0 && blue > 0) return "BLUE";
-    return "CUSTOM";
-}
-#endif
+bool s_initialized = false;
+TickType_t s_last_update = 0;
+volatile node_state_t s_node_state = NODE_STATE_INIT;
 
 // ============================================================================
 // WS2812 RMT Driver
 // ============================================================================
 
-static rmt_channel_handle_t s_rmt_channel = nullptr;
-static rmt_encoder_handle_t s_rmt_encoder = nullptr;
+rmt_channel_handle_t s_rmt_channel = nullptr;
+rmt_encoder_handle_t s_rmt_encoder = nullptr;
 
 // WS2812 timing at 10 MHz RMT clock (0.1 us per tick)
 constexpr uint32_t WS2812_RESOLUTION_HZ = 10 * 1000 * 1000;
-constexpr uint16_t WS2812_T0H = 4;   // 0.4us high for '0' bit
-constexpr uint16_t WS2812_T0L = 8;   // 0.8us low for '0' bit
-constexpr uint16_t WS2812_T1H = 7;   // 0.7us high for '1' bit
-constexpr uint16_t WS2812_T1L = 6;   // 0.6us low for '1' bit
+constexpr uint16_t WS2812_T0H = 4; // 0.4us high for '0' bit
+constexpr uint16_t WS2812_T0L = 8; // 0.8us low for '0' bit
+constexpr uint16_t WS2812_T1H = 7; // 0.7us high for '1' bit
+constexpr uint16_t WS2812_T1L = 6; // 0.6us low for '1' bit
 
-// ============================================================================
-// WS2812 Internal Functions
-// ============================================================================
+/**
+ * @brief Transmit a 24-bit color to the WS2812 LED via RMT.
+ *
+ * Converts the RGB struct into 24 RMT symbols in GRB byte order
+ * (MSB first) and transmits them through the configured RMT channel.
+ * No-op if the RMT channel or encoder has not been initialized.
+ *
+ * @param c  RGB color to display
+ */
+void ws2812_set_rgb(const rgb_t &c)
+{
+	if (!s_rmt_channel || !s_rmt_encoder)
+		return;
 
-// Initialize RMT peripheral for WS2812 single-wire protocol
-static esp_err_t ws2812_init(gpio_num_t gpio) {
-    rmt_tx_channel_config_t tx_cfg = {};
-    tx_cfg.gpio_num = gpio;
-    tx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
-    tx_cfg.resolution_hz = WS2812_RESOLUTION_HZ;
-    tx_cfg.mem_block_symbols = 64;
-    tx_cfg.trans_queue_depth = 4;
-    tx_cfg.intr_priority = 0;
-    tx_cfg.flags.invert_out = 0;
-    tx_cfg.flags.with_dma = 0;
-    tx_cfg.flags.io_loop_back = 0;
-    tx_cfg.flags.io_od_mode = 0;
-    tx_cfg.flags.allow_pd = 0;
+	rmt_symbol_word_t symbols[24];
+	rmt_symbol_word_t one = {.duration0 = WS2812_T1H, .level0 = 1, .duration1 = WS2812_T1L, .level1 = 0};
+	rmt_symbol_word_t zero = {.duration0 = WS2812_T0H, .level0 = 1, .duration1 = WS2812_T0L, .level1 = 0};
 
-    esp_err_t err = rmt_new_tx_channel(&tx_cfg, &s_rmt_channel);
-    if (err != ESP_OK) return err;
+	// WS2812 expects GRB order, MSB first
+	int idx = 0;
+	uint8_t grb[3] = {c.g, c.r, c.b};
+	for (int ch = 0; ch < 3; ++ch)
+		for (int bit = 7; bit >= 0; --bit)
+			symbols[idx++] = (grb[ch] & (1 << bit)) ? one : zero;
 
-    rmt_copy_encoder_config_t encoder_cfg = {};
-    err = rmt_new_copy_encoder(&encoder_cfg, &s_rmt_encoder);
-    if (err != ESP_OK) {
-        rmt_del_channel(s_rmt_channel);
-        s_rmt_channel = nullptr;
-        return err;
-    }
+	rmt_transmit_config_t tx_cfg = {};
+	tx_cfg.loop_count = 0;
+	tx_cfg.flags.eot_level = 0;
 
-    err = rmt_enable(s_rmt_channel);
-    if (err != ESP_OK) {
-        rmt_del_encoder(s_rmt_encoder);
-        s_rmt_encoder = nullptr;
-        rmt_del_channel(s_rmt_channel);
-        s_rmt_channel = nullptr;
-        return err;
-    }
-    return ESP_OK;
+	rmt_transmit(s_rmt_channel, s_rmt_encoder, symbols, sizeof(symbols), &tx_cfg);
 }
 
-// Transmit 24-bit color to WS2812 LED (GRB byte order)
-static esp_err_t ws2812_set_rgb(uint8_t red, uint8_t green, uint8_t blue) {
-    if (!s_rmt_channel || !s_rmt_encoder) return ESP_ERR_INVALID_STATE;
+} // namespace
 
-    // Build RMT symbols for each bit - WS2812 uses pulse width encoding
-    rmt_symbol_word_t symbols[24];
-    rmt_symbol_word_t one = {.duration0 = WS2812_T1H, .level0 = 1, .duration1 = WS2812_T1L, .level1 = 0};
-    rmt_symbol_word_t zero = {.duration0 = WS2812_T0H, .level0 = 1, .duration1 = WS2812_T0L, .level1 = 0};
+// ============================================================================
+// Public API
+// ============================================================================
 
-    // WS2812 expects GRB order, MSB first
-    int idx = 0;
-    uint8_t grb[3] = {green, red, blue};
-    for (int c = 0; c < 3; ++c) 
-        for (int bit = 7; bit >= 0; --bit)
-        	symbols[idx++] = (grb[c] & (1 << bit)) ? one : zero;
+esp_err_t led_ws2812_init(void)
+{
+	if (s_initialized)
+	{
+		ESP_LOGW(TAG, "Already initialized, skipping re-init");
+		return ESP_OK;
+	}
 
-    rmt_transmit_config_t tx_cfg = {};
-    tx_cfg.loop_count = 0;
-    tx_cfg.flags.eot_level = 0;
+	rmt_tx_channel_config_t tx_cfg = {};
+	tx_cfg.gpio_num = LED_GPIO;
+	tx_cfg.clk_src = RMT_CLK_SRC_DEFAULT;
+	tx_cfg.resolution_hz = WS2812_RESOLUTION_HZ;
+	tx_cfg.mem_block_symbols = 64;
+	tx_cfg.trans_queue_depth = 4;
+	tx_cfg.intr_priority = 0;
+	tx_cfg.flags.invert_out = 0;
+	tx_cfg.flags.with_dma = 0;
+	tx_cfg.flags.io_loop_back = 0;
+	tx_cfg.flags.io_od_mode = 0;
+	tx_cfg.flags.allow_pd = 0;
 
-    esp_err_t err = rmt_transmit(s_rmt_channel, s_rmt_encoder, symbols, sizeof(symbols), &tx_cfg);
-    if (err != ESP_OK) return err;
-    return ESP_OK;
+	esp_err_t err = rmt_new_tx_channel(&tx_cfg, &s_rmt_channel);
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG, "RMT channel init failed: %s", esp_err_to_name(err));
+		return err;
+	}
+
+	rmt_copy_encoder_config_t encoder_cfg = {};
+	err = rmt_new_copy_encoder(&encoder_cfg, &s_rmt_encoder);
+	if (err != ESP_OK)
+	{
+		rmt_del_channel(s_rmt_channel);
+		s_rmt_channel = nullptr;
+		ESP_LOGE(TAG, "RMT encoder init failed: %s", esp_err_to_name(err));
+		return err;
+	}
+
+	err = rmt_enable(s_rmt_channel);
+	if (err != ESP_OK)
+	{
+		rmt_del_encoder(s_rmt_encoder);
+		s_rmt_encoder = nullptr;
+		rmt_del_channel(s_rmt_channel);
+		s_rmt_channel = nullptr;
+		ESP_LOGE(TAG, "RMT enable failed: %s", esp_err_to_name(err));
+		return err;
+	}
+
+	ws2812_set_rgb({0, 0, 0});
+
+	s_last_update = xTaskGetTickCount();
+	s_initialized = true;
+
+	return ESP_OK;
 }
 
-}  // namespace
+void led_ws2812_set_state(node_state_t node_state)
+{
+	if (!s_initialized)
+		return;
 
-// ============================================================================
-// Initialization
-// ============================================================================
+	bool state_changed = (node_state != s_node_state);
+	s_node_state = node_state;
 
-esp_err_t led_ws2812_init(const led_ws2812_config_t *config) {
-    if (!config) return ESP_ERR_INVALID_ARG;
+	TickType_t now = xTaskGetTickCount();
+	if (!state_changed && (now - s_last_update) < UPDATE_INTERVAL)
+		return;
 
-    if (s_initialized) {
-        ESP_LOGW(TAG, "Already initialized, skipping re-init");
-        return ESP_OK;
-    }
-
-    // Store color configuration
-    s_idle_red = config->idle_red;
-    s_idle_green = config->idle_green;
-    s_idle_blue = config->idle_blue;
-    s_activity_red = config->activity_red;
-    s_activity_green = config->activity_green;
-    s_activity_blue = config->activity_blue;
-    s_error_red = config->error_red;
-    s_error_green = config->error_green;
-    s_error_blue = config->error_blue;
-
-    // Initialize WS2812 via RMT peripheral
-    esp_err_t err = ws2812_init(config->gpio);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "WS2812 init failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    ws2812_set_rgb(0, 0, 0);
-
-    s_last_update = xTaskGetTickCount();
-    s_last_activity = s_last_update;
-    s_activity_window = config->activity_window_ticks;
-    s_initialized = true;
-
-    return ESP_OK;
-}
-
-// ============================================================================
-// Runtime Control
-// ============================================================================
-
-void led_ws2812_tick(const led_ws2812_config_t *config, TickType_t now_ticks) {
-    if (!config || !s_initialized) return;
-    if (now_ticks - s_last_update < config->interval_ticks) return;
-
-    bool activity = s_activity_window > 0 && (now_ticks - s_last_activity <= s_activity_window);
-
-    uint8_t red = 0;
-    uint8_t green = 0;
-    uint8_t blue = 0;
-    const char *reason = "idle";
-
-    if (s_manual_mode) {
-        red = s_manual_red;
-        green = s_manual_green;
-        blue = s_manual_blue;
-        reason = s_manual_reason;
-    } else if (s_error) {
-        red = s_error_red;
-        green = s_error_green;
-        blue = s_error_blue;
-        reason = "error";
-    } else if (activity) {
-        red = s_activity_red;
-        green = s_activity_green;
-        blue = s_activity_blue;
-        reason = "activity";
-    } else {
-        red = s_idle_red;
-        green = s_idle_green;
-        blue = s_idle_blue;
-        reason = "idle";
-    }
-
-    ws2812_set_rgb(red, green, blue);
+	rgb_t c = state_to_rgb(node_state);
+	ws2812_set_rgb(c);
+	s_last_update = now;
 
 #ifdef CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES
-    ESP_LOGI(TAG, "LED: color=%s rgb=(%u,%u,%u) reason=%s",
-             led_color_name(red, green, blue),
-             red, green, blue, reason);
-#else
-    (void)reason;
-#endif
-
-    s_last_update = now_ticks;
-}
-
-// Record CAN activity - triggers activity color for activity_window duration
-void led_ws2812_mark_activity(TickType_t now_ticks) {
-    if (!s_initialized) return;
-    s_last_activity = now_ticks;
-}
-
-// Set error state - shows error color until cleared
-void led_ws2812_set_error(bool active) {
-    if (!s_initialized) return;
-    s_error = active;
-}
-
-void led_ws2812_set_manual_mode(bool enabled) {
-    if (!s_initialized) return;
-    if (s_manual_mode == enabled) return;
-    s_manual_mode = enabled;
-
-#ifdef CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES
-    ESP_LOGI(TAG, "Manual mode %s", enabled ? "ENABLED" : "DISABLED");
-#endif
-}
-
-void led_ws2812_set_manual_color(uint8_t red,
-                                 uint8_t green,
-                                 uint8_t blue,
-                                 const char *reason) {
-    if (!s_initialized) return;
-
-    const char *new_reason = (reason && reason[0] != '\0') ? reason : "manual";
-
-#ifdef CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES
-    bool changed = (s_manual_red != red) ||
-                   (s_manual_green != green) ||
-                   (s_manual_blue != blue) ||
-                   (strncmp(s_manual_reason, new_reason, sizeof(s_manual_reason)) != 0);
-#endif
-
-    s_manual_red = red;
-    s_manual_green = green;
-    s_manual_blue = blue;
-    strncpy(s_manual_reason, new_reason, sizeof(s_manual_reason) - 1);
-    s_manual_reason[sizeof(s_manual_reason) - 1] = '\0';
-
-#ifdef CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES
-    if (changed) {
-        ESP_LOGI(TAG, "Mode: color=%s rgb=(%u,%u,%u) reason=%s",
-                 led_color_name(red, green, blue),
-                 red, green, blue, s_manual_reason);
-    }
+	ESP_LOGI(TAG, "LED: state=%s rgb=(%u,%u,%u)", node_state_to_string(node_state), c.r, c.g, c.b);
 #endif
 }

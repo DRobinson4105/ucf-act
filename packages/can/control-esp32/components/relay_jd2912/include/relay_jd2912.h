@@ -1,5 +1,5 @@
 /**
- * @file relay_jd2912.hh
+ * @file relay_jd2912.h
  * @brief JD-2912 automotive relay driver (via S8050 NPN transistor).
  *
  * Controls the pedal bypass relay that allows the Curtis motor controller
@@ -14,7 +14,8 @@
 #include "esp_err.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // ============================================================================
@@ -44,31 +45,65 @@ extern "C" {
 // ============================================================================
 
 // relay_jd2912_config_t - relay control pin configuration
-//   gpio:        GPIO pin controlling transistor base (via 680R, drives relay coil)
-//   active_high: true = HIGH energizes relay, false = LOW energizes relay
-typedef struct {
-    gpio_num_t gpio;
-    bool active_high;
+//   gpio: GPIO pin controlling transistor base (via 680R, drives relay coil)
+//
+// Polarity is hardcoded active-high (HIGH = base current = transistor on =
+// coil energized) to match the S8050 NPN circuit. External 10k pull-down on
+// the base keeps the relay safely de-energized during boot/reset.
+typedef struct
+{
+	gpio_num_t gpio;
 } relay_jd2912_config_t;
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
-// Initialize GPIO and set relay to de-energized state (safe default)
+/**
+ * @brief Initialize GPIO and set the relay to de-energized state (safe default).
+ *
+ * Configures the transistor-base GPIO as a push-pull output and drives it
+ * LOW to ensure the relay starts de-energized (normal pedal operation).
+ *
+ * @param config  Pointer to relay configuration (GPIO pin)
+ * @return ESP_OK on success, or an error code if GPIO configuration fails
+ */
 esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config);
 
 // ============================================================================
 // Relay Control
 // ============================================================================
 
-// Energize relay - bypasses pedal microswitch (for autonomous mode)
+/**
+ * @brief Energize the relay, bypassing the pedal microswitch.
+ *
+ * Drives the transistor base HIGH, energizing the JD-2912 relay coil.
+ * This closes the NO contact and allows the Curtis motor controller
+ * to accept autonomous throttle input without the pedal being pressed.
+ *
+ * @return ESP_OK on success, or an error code if GPIO write fails
+ */
 esp_err_t relay_jd2912_energize(void);
 
-// De-energize relay - restores normal pedal operation (safe state)
+/**
+ * @brief De-energize the relay, restoring normal pedal operation.
+ *
+ * Drives the transistor base LOW, de-energizing the relay coil.
+ * The NC contact returns the microswitch to the circuit, requiring
+ * physical pedal press for throttle input (safe state).
+ *
+ * @return ESP_OK on success, or an error code if GPIO write fails
+ */
 esp_err_t relay_jd2912_deenergize(void);
 
-// Check if relay is currently energized
+/**
+ * @brief Check if the relay is currently energized.
+ *
+ * Reads the GPIO output level to determine whether the relay coil
+ * is energized (pedal microswitch bypassed).
+ *
+ * @return true if the relay is energized, false otherwise
+ */
 bool relay_jd2912_is_energized(void);
 
 #ifdef __cplusplus

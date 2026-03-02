@@ -1,5 +1,5 @@
 /**
- * @file relay_srd05vdc.hh
+ * @file relay_srd05vdc.h
  * @brief GPIO-driven AEDIKO SRD-05VDC-SL-C relay module driver.
  */
 #pragma once
@@ -10,7 +10,8 @@
 #include "esp_err.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // ============================================================================
@@ -40,35 +41,65 @@ extern "C" {
 // ============================================================================
 
 // relay_srd05vdc_config_t - relay control pin configuration
-//   gpio:            GPIO pin controlling relay trigger (IN pin)
-//   active_high:     true = HIGH energizes relay, false = LOW energizes relay
-//   enable_pullup:   true to enable internal pull-up on GPIO
-//   enable_pulldown: true to enable internal pull-down on GPIO
-typedef struct {
-    gpio_num_t gpio;
-    bool active_high;
-    bool enable_pullup;
-    bool enable_pulldown;
+//   gpio: GPIO pin controlling relay trigger (IN pin)
+//
+// Polarity is hardcoded active-high (HIGH energizes relay) to match the
+// AEDIKO module hardware. Internal pull-down is always enabled to keep the
+// relay safely de-energized during boot/reset before firmware configures GPIO.
+typedef struct
+{
+	gpio_num_t gpio;
 } relay_srd05vdc_config_t;
 
 // ============================================================================
 // Initialization
 // ============================================================================
 
-// Initialize GPIO and set relay to OFF state (safe default)
+/**
+ * @brief Initialize GPIO and set relay to OFF state (safe default).
+ *
+ * Configures the relay control pin as a push-pull output with internal
+ * pull-down and drives it LOW to ensure the relay starts de-energized.
+ *
+ * @param config  Pointer to relay configuration (GPIO pin)
+ * @return ESP_OK on success, or an error code if GPIO configuration fails
+ */
 esp_err_t relay_srd05vdc_init(const relay_srd05vdc_config_t *config);
 
 // ============================================================================
 // Relay Control
 // ============================================================================
 
-// Enable relay - energizes coil, closes NO contact
+/**
+ * @brief Energize the relay coil, closing the NO contact.
+ *
+ * Drives the control GPIO HIGH to energize the relay coil, which closes
+ * the normally-open contact and connects the load.
+ *
+ * @param config  Pointer to relay configuration (GPIO pin)
+ * @return ESP_OK on success, or an error code if GPIO write fails
+ */
 esp_err_t relay_srd05vdc_enable(const relay_srd05vdc_config_t *config);
 
-// Disable relay - de-energizes coil, opens NO contact (safe state)
+/**
+ * @brief De-energize the relay coil, opening the NO contact (safe state).
+ *
+ * Drives the control GPIO LOW to de-energize the relay coil, which opens
+ * the normally-open contact and disconnects the load.
+ *
+ * @param config  Pointer to relay configuration (GPIO pin)
+ * @return ESP_OK on success, or an error code if GPIO write fails
+ */
 esp_err_t relay_srd05vdc_disable(const relay_srd05vdc_config_t *config);
 
-// Check if relay is currently enabled (reads GPIO state directly)
+/**
+ * @brief Check if the relay is currently enabled.
+ *
+ * Reads the GPIO output level directly to determine relay state.
+ *
+ * @param config  Pointer to relay configuration (GPIO pin)
+ * @return true if the relay is energized (coil ON), false otherwise
+ */
 bool relay_srd05vdc_is_enabled(const relay_srd05vdc_config_t *config);
 
 #ifdef __cplusplus
