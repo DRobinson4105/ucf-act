@@ -15,33 +15,38 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "can_protocol.h"
+
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // ============================================================================
 // Safety Inputs (all sensor / heartbeat state, read by the caller)
 // ============================================================================
 
-typedef struct {
-    bool push_button_active;     // Physical push button e-stop pressed
-    bool rf_remote_active;       // RF remote e-stop engaged
-    bool ultrasonic_too_close;   // Obstacle within stop distance
-    bool ultrasonic_healthy;     // Sensor responding within timeout
-    bool planner_alive;          // Planner heartbeat received within timeout
-    bool control_alive;          // Control ESP32 heartbeat within timeout
-    bool planner_error;          // Planner reported FAULT state
-    bool control_error;          // Control reported FAULT state
+typedef struct
+{
+	bool push_button_active;   // Physical push button e-stop pressed
+	bool rf_remote_active;     // RF remote e-stop engaged
+	bool ultrasonic_too_close; // Obstacle within stop distance
+	bool ultrasonic_healthy;   // Sensor responding within timeout
+	bool planner_alive;        // Planner heartbeat received within timeout
+	bool control_alive;        // Control ESP32 heartbeat within timeout
+	bool planner_error;        // Planner reported FAULT state
+	bool control_error;        // Control reported FAULT state
 } safety_inputs_t;
 
 // ============================================================================
 // Safety Decision (output of the evaluation)
 // ============================================================================
 
-typedef struct {
-    bool estop_active;           // true = e-stop condition present
-    uint8_t fault_code;          // NODE_FAULT_ESTOP_* from can_protocol.hh (0 when safe)
-    bool relay_enable;           // true = power relay should be ON
+typedef struct
+{
+	bool estop_active;       // true = e-stop condition present
+	node_fault_t fault_code; // NODE_FAULT_ESTOP_* from can_protocol.h (0 when safe)
+	bool relay_enable;       // true = power relay should be ON
 } safety_decision_t;
 
 // ============================================================================
