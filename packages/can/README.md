@@ -23,11 +23,9 @@ Two UIM2852CA stepper motors (steering node 5, braking node 6) also share the bu
 
 ## CAN Bus Wiring
 
-Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Planner, Control) are physically co-located. The two stepper motors are mounted several feet away on the cart chassis. Both ESP32-C6 boards use Waveshare SN65HVD230 transceivers (TWAI TX=GPIO4, RX=GPIO5); Planner uses its own CAN interface; the stepper motors have built-in CAN transceivers.
+Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Planner, Control) are physically co-located in the left dashboard compartment. The two stepper motors are mounted several feet away on the cart chassis. Both ESP32-C6 boards use Waveshare SN65HVD230 transceivers (TWAI 3V3, GND, TX=GPIO4, RX=GPIO5); Planner uses its own CAN interface; the stepper motors have built-in CAN transceivers (CAN-H, CAN-L).
 
-### Physical Connections Per Node
-
-Each CAN node connects to the bus with two signal wires. A separate GND wire is not run between nodes — all nodes already share a common ground through the cart's chassis/power ground.
+Each CAN node connects to the bus with two signal wires:
 
 | Wire  | Wire Color | Description      |
 |-------|------------|------------------|
@@ -36,14 +34,13 @@ Each CAN node connects to the bus with two signal wires. A separate GND wire is 
 
 ### Bus Termination
 
-120 ohm termination resistors between CAN-H and CAN-L, enabled on the Waveshare transceiver boards at **Safety** and **Planner** (both have onboard solder-jumper options for termination). **Control's** Waveshare board has termination **disabled**. The stepper motors do not provide termination.
+120 ohm termination resistors between CAN-H and CAN-L on the Waveshare transceiver boards at **Safety** and **Planner**. **Control's** Waveshare transceiver board has termination disabled by desoldering and removing the resistor. The stepper motors do not provide termination. This setup provides the correct 60 ohms of resistance across the CAN bus.
 
 ### Wiring Notes
 
 - Twisted-pair wiring recommended for CAN-H (Yellow) / CAN-L (Green) runs to the stepper motors (several feet)
 - No dedicated CAN GND wire — all five nodes share ground through the cart chassis/power ground
-- SN65HVD230 modules powered from their respective ESP32 3.3V rail
-- Stepper motors powered from the 24V autonomous power rail (switched by Safety's power relay)
+- SN65HVD230 modules powered from their respective devices.
 
 ### Message Traffic
 
