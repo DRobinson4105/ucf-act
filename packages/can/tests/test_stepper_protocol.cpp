@@ -464,6 +464,17 @@ static void test_parse_ms0_null(void)
 	assert(!stepper_uim2852_parse_ms0(data, 8, NULL));
 }
 
+static void test_parse_ms0_wrong_index(void)
+{
+	uint8_t data[8] = {};
+	data[0] = 1; // MS[1] index — wrong for parse_ms0
+	data[1] = 0x04;
+	data[2] = 0x01;
+
+	stepper_uim2852_status_t status = {};
+	assert(!stepper_uim2852_parse_ms0(data, 8, &status));
+}
+
 // ============================================================================
 // MS[1] parse
 // ============================================================================
@@ -511,6 +522,18 @@ static void test_parse_ms1_null(void)
 	assert(!stepper_uim2852_parse_ms1(NULL, 8, NULL, NULL));
 	uint8_t data[4] = {};
 	assert(!stepper_uim2852_parse_ms1(data, 4, NULL, NULL));
+}
+
+static void test_parse_ms1_wrong_index(void)
+{
+	uint8_t data[8] = {};
+	data[0] = 0; // MS[0] index — wrong for parse_ms1
+	data[1] = 0xDC;
+	data[2] = 0x05;
+	data[3] = 0x00;
+
+	int32_t speed = 0, pos = 0;
+	assert(!stepper_uim2852_parse_ms1(data, 8, &speed, &pos));
 }
 
 // ============================================================================
@@ -1008,11 +1031,13 @@ int main(void)
 	TEST(test_parse_ms0_negative_position);
 	TEST(test_parse_ms0_too_short);
 	TEST(test_parse_ms0_null);
+	TEST(test_parse_ms0_wrong_index);
 
 	// MS[1] parse
 	TEST(test_parse_ms1_full);
 	TEST(test_parse_ms1_negative_speed);
 	TEST(test_parse_ms1_null);
+	TEST(test_parse_ms1_wrong_index);
 
 	// Notification parse
 	TEST(test_parse_notification_ptp_complete);

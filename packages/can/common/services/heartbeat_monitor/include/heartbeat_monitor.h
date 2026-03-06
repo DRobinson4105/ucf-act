@@ -48,6 +48,7 @@ extern "C"
 //   name:          Human-readable node identifier
 //   timeout_ticks: Maximum time between heartbeats before node is dead
 //   last_seen:     Tick count when last heartbeat received
+//   seen_heartbeat:true after first heartbeat has been received
 //   last_sequence: Most recent sequence number from node
 //   last_state:    Most recent state value from node
 //   active:        true if node is registered
@@ -57,6 +58,7 @@ typedef struct
 	char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN];
 	TickType_t timeout_ticks;
 	TickType_t last_seen;
+	bool seen_heartbeat;
 	heartbeat_seq_t last_sequence;
 	node_state_t last_state;
 	bool active;
@@ -186,6 +188,7 @@ bool heartbeat_monitor_get_status(heartbeat_monitor_t *mon, int node_id, heartbe
  * @brief Get a bitmask of timed-out nodes.
  *
  * Returns a bitmask where bit N is set if node N has timed out.
+ * Nodes that have never sent a heartbeat are excluded.
  * Useful for compact status reporting and fault aggregation.
  *
  * @param mon  Pointer to the monitor instance

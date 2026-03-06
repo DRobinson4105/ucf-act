@@ -102,6 +102,55 @@ void test_timeout_transition_and_mask(void)
 	assert((heartbeat_monitor_get_timeout_mask(&mon) & 0x01) == 0);
 }
 
+void test_tick_zero_update_not_immediately_timed_out(void)
+{
+	mock_reset_all();
+
+	heartbeat_monitor_t mon = {};
+	heartbeat_monitor_config_t cfg = {.name = "SAFETY"};
+	heartbeat_monitor_init(&mon, &cfg);
+	int node_id = heartbeat_monitor_register(&mon, "Planner", 100);
+	assert(node_id == 0);
+
+	mock_tick_count = 0;
+	heartbeat_monitor_update(&mon, node_id, 1, 2);
+	assert(heartbeat_monitor_is_alive(&mon, node_id));
+
+	// At the same tick, this must not false-timeout.
+	heartbeat_monitor_check_timeouts(&mon);
+	assert(heartbeat_monitor_is_alive(&mon, node_id));
+	assert((heartbeat_monitor_get_timeout_mask(&mon) & 0x01) == 0);
+}
+
+void test_timeout_mask_excludes_never_seen_nodes(void)
+{
+	mock_reset_all();
+
+	heartbeat_monitor_t mon = {};
+	heartbeat_monitor_config_t cfg = {.name = "SAFETY"};
+	heartbeat_monitor_init(&mon, &cfg);
+	int n0 = heartbeat_monitor_register(&mon, "Seen", 100);
+	int n1 = heartbeat_monitor_register(&mon, "NeverSeen", 100);
+	assert(n0 == 0);
+	assert(n1 == 1);
+
+	mock_tick_count = 10;
+	heartbeat_monitor_update(&mon, n0, 1, 0);
+
+	mock_tick_count = 200;
+	heartbeat_monitor_check_timeouts(&mon);
+
+	uint8_t mask = heartbeat_monitor_get_timeout_mask(&mon);
+	assert((mask & 0x01) != 0); // n0 timed out
+	assert((mask & 0x02) == 0); // n1 was never seen, not timed out
+}
+
+void test_timeout_mask_null_monitor_returns_zero(void)
+{
+	mock_reset_all();
+	assert(heartbeat_monitor_get_timeout_mask(nullptr) == 0);
+}
+
 void test_register_fails_when_full(void)
 {
 	mock_reset_all();
@@ -254,6 +303,9 @@ int main(void)
 	TEST(test_register_null_name_uses_unknown);
 	TEST(test_register_copies_node_name);
 	TEST(test_timeout_transition_and_mask);
+	TEST(test_tick_zero_update_not_immediately_timed_out);
+	TEST(test_timeout_mask_excludes_never_seen_nodes);
+	TEST(test_timeout_mask_null_monitor_returns_zero);
 	TEST(test_register_fails_when_full);
 
 	printf("\n  --- all_alive ---\n");

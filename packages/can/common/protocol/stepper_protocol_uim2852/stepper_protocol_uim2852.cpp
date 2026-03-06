@@ -209,11 +209,6 @@ uint8_t stepper_uim2852_build_st(uint8_t *data)
 	return build_nodata(data);
 }
 
-uint8_t stepper_uim2852_build_emergency_stop(uint8_t *data)
-{
-	return build_nodata(data);
-}
-
 uint8_t stepper_uim2852_build_sd(uint8_t *data, uint32_t decel_rate)
 {
 	return build_val32(data, (int32_t)decel_rate);
@@ -396,6 +391,10 @@ bool stepper_uim2852_parse_ms0(const uint8_t *data, uint8_t dl, stepper_uim2852_
 	if (!data || !status || dl < 8)
 		return false;
 
+	// Verify this is an MS[0] response (index must be 0)
+	if (data[0] != STEPPER_UIM2852_MS_FLAGS_RELPOS)
+		return false;
+
 	// d1: status flags byte 1
 	uint8_t d1 = data[1];
 	status->mode = d1 & 0x03;              // bits 0-1
@@ -423,6 +422,10 @@ bool stepper_uim2852_parse_ms0(const uint8_t *data, uint8_t dl, stepper_uim2852_
 bool stepper_uim2852_parse_ms1(const uint8_t *data, uint8_t dl, int32_t *speed_pps, int32_t *abs_position)
 {
 	if (!data || dl < 8)
+		return false;
+
+	// Verify this is an MS[1] response (index must be 1)
+	if (data[0] != STEPPER_UIM2852_MS_SPEED_ABSPOS)
 		return false;
 
 	// d1-d3: current speed (24-bit signed, little-endian)

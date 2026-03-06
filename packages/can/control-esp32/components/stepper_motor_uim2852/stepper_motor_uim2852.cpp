@@ -427,6 +427,10 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 	if (!motor || !motor->initialized)
 		return ESP_ERR_INVALID_STATE;
 
+	// Reject waypoint feeds when PT mode hasn't been started
+	if (!motor->pt_mode_active)
+		return ESP_ERR_INVALID_STATE;
+
 	uint8_t data[8];
 	uint8_t dl = stepper_uim2852_build_qf(data, position, time_ms);
 	esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_QF, data, dl);

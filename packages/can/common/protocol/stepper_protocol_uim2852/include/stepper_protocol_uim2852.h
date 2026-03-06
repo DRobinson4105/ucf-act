@@ -29,7 +29,11 @@ extern "C"
 //   CW = EID & 0x00FF
 // ============================================================================
 
-// Host controller producer ID: see UIM2852_MASTER_ID in can_protocol.h (= 4)
+// Common node IDs used by this project.
+#define UIM2852_MASTER_ID     4 // Producer ID for host controller
+#define UIM2852_NODE_STEERING 5 // Steering motor node ID
+#define UIM2852_NODE_BRAKING  6 // Braking motor node ID
+#define UIM2852_GLOBAL_ID     0 // Broadcast to all motors
 
 /**
  * @brief Calculate the 29-bit extended CAN ID for sending an instruction to a motor.
@@ -347,18 +351,6 @@ uint8_t stepper_uim2852_build_bg(uint8_t *data);
  * @return Data length (DL) for the CAN frame (0)
  */
 uint8_t stepper_uim2852_build_st(uint8_t *data);
-
-/**
- * @brief Build an Emergency Stop frame (ST with high SD rate).
- *
- * Issues a stop command intended for emergency situations.  The caller
- * should configure a high stop deceleration rate with build_sd() beforehand
- * to achieve the fastest possible stop.
- *
- * @param data  [out] Frame data buffer (at least 8 bytes)
- * @return Data length (DL) for the CAN frame (0)
- */
-uint8_t stepper_uim2852_build_emergency_stop(uint8_t *data);
 
 /**
  * @brief Build a Set Stop Deceleration frame (SD instruction, CW 0x1C).

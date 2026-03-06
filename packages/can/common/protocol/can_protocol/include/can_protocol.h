@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -35,9 +36,6 @@ typedef uint8_t node_state_t;      // NODE_STATE_* values
 typedef uint8_t node_fault_t;      // NODE_FAULT_* values (scalar or estop bitmask)
 typedef uint8_t heartbeat_flags_t; // HEARTBEAT_FLAG_* bitmask
 typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
-typedef uint8_t fr_state_t;        // FR_STATE_* values
-typedef uint8_t override_reason_t; // OVERRIDE_REASON_* values
-
 // ============================================================================
 // CAN Message ID Allocation
 // ============================================================================
@@ -51,13 +49,6 @@ typedef uint8_t override_reason_t; // OVERRIDE_REASON_* values
 
 // Control ESP32 (0x120-0x12F)
 #define CAN_ID_CONTROL_HEARTBEAT 0x120 // Control heartbeat (seq, state, fault_code, flags)
-
-// UIM2852CA Motors - use CAN 2.0B extended 29-bit frames with SimpleCAN protocol
-// See stepper_protocol_uim2852.h for CAN ID calculation and protocol details
-#define UIM2852_MASTER_ID     4 // Producer ID for host controller
-#define UIM2852_NODE_STEERING 5 // Steering motor node ID
-#define UIM2852_NODE_BRAKING  6 // Braking motor node ID
-#define UIM2852_GLOBAL_ID     0 // Broadcast to all motors
 
 // ============================================================================
 // Timing Constants
@@ -173,31 +164,6 @@ typedef struct
 	int16_t steering_position;
 	int16_t braking_position;
 } planner_command_t;
-
-// ============================================================================
-// F/R Switch States (used internally by Control, shared for protocol reference)
-// ============================================================================
-
-#define FR_STATE_NEUTRAL 0x00
-#define FR_STATE_FORWARD 0x01
-#define FR_STATE_REVERSE 0x02
-#define FR_STATE_INVALID 0x03
-
-// ============================================================================
-// Override Reasons (internal to Control — NOT transmitted over CAN)
-// ============================================================================
-
-#define OVERRIDE_REASON_NONE       0x00
-#define OVERRIDE_REASON_PEDAL      0x01
-#define OVERRIDE_REASON_FR_CHANGED 0x02
-#define OVERRIDE_REASON_STEERING   0x03
-#define OVERRIDE_REASON_BRAKING    0x04
-
-// ============================================================================
-// Stale Command Detection
-// ============================================================================
-
-#define PLANNER_CMD_STALE_COUNT 10 // same sequence N times = stale
 
 // ============================================================================
 // Helper Functions — Pack/Unpack
@@ -352,7 +318,7 @@ static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, 
 	if (!data || !cmd || dlc < 6)
 		return false;
 	cmd->sequence = data[0];
-	cmd->throttle = (uint8_t)(data[1] & 0x07); // 3-bit field, max = THROTTLE_LEVEL_MAX (7)
+	cmd->throttle = (uint8_t)(data[1] & 0x07); // 3-bit field, max = 7
 	cmd->steering_position = can_unpack_le16s(&data[2]);
 	cmd->braking_position = can_unpack_le16s(&data[4]);
 	return true;
@@ -414,15 +380,7 @@ static inline const char *node_estop_to_string_r(node_fault_t fault, char *buf, 
 		return "";
 	if (fault == NODE_FAULT_NONE)
 	{
-		const char *none = "none";
-		char *p = buf;
-		char *end = buf + buf_len;
-		while (*none && p < end - 1)
-			*p++ = *none++;
-		if (p < end)
-			*p = '\0';
-		else
-			buf[buf_len - 1] = '\0';
+		snprintf(buf, buf_len, "none");
 		return buf;
 	}
 
@@ -471,11 +429,7 @@ static inline const char *node_estop_to_string_r(node_fault_t fault, char *buf, 
  */
 static inline const char *node_estop_to_string(node_fault_t fault)
 {
-#if defined(__cplusplus)
 	static thread_local char buf[80];
-#else
-	static _Thread_local char buf[80];
-#endif
 	return node_estop_to_string_r(fault, buf, sizeof(buf));
 }
 

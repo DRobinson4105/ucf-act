@@ -152,7 +152,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 	if (tag)
 		ESP_LOGI(tag, "CAN recovery: bus-off failed, attempting stop/start");
 #endif
-	twai_stop();
+	(void)twai_stop();
 	vTaskDelay(pdMS_TO_TICKS(RECOVERY_STOP_SETTLE_MS));
 
 	err = twai_start();
@@ -171,7 +171,31 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 		ESP_LOGI(tag, "CAN recovery: stop/start failed (%s), reinstalling TWAI driver", esp_err_to_name(err));
 #endif
 
-	twai_driver_uninstall();
+	// Ensure driver is stopped before uninstall. Ignore invalid-state here:
+	// it can mean already stopped or not installed.
+	(void)twai_stop();
+
+	esp_err_t uninstall_err = twai_driver_uninstall();
+	if (uninstall_err == ESP_ERR_INVALID_STATE)
+	{
+		// Distinguish "already uninstalled" from "still installed in wrong state".
+		// If status query succeeds, driver is still present; attempt one more
+		// stop/uninstall cycle before giving up.
+		twai_status_info_t status;
+		if (twai_get_status_info(&status) == ESP_OK)
+		{
+			(void)twai_stop();
+			vTaskDelay(pdMS_TO_TICKS(RECOVERY_STOP_SETTLE_MS));
+			uninstall_err = twai_driver_uninstall();
+			if (uninstall_err != ESP_OK)
+				return uninstall_err;
+		}
+	}
+	else if (uninstall_err != ESP_OK)
+	{
+		return uninstall_err;
+	}
+
 	vTaskDelay(pdMS_TO_TICKS(RECOVERY_REINSTALL_SETTLE_MS));
 	err = can_twai_init_default(tx_gpio, rx_gpio);
 

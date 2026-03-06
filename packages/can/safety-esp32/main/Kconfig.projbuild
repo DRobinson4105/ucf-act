@@ -47,6 +47,18 @@ menu "Test Bypasses"
 
     endmenu
 
+    menu "CAN"
+
+        config BYPASS_CAN_TWAI
+            bool "Bypass CAN/TWAI entirely"
+            default n
+            help
+                Disable TWAI usage in Safety firmware for bench bring-up.
+                Skips TWAI init/recovery and suppresses CAN heartbeat TX/RX.
+                Use when no transceiver/bus peers are connected.
+
+    endmenu
+
     menu "Sensor Inputs"
 
         config BYPASS_INPUT_PUSH_BUTTON

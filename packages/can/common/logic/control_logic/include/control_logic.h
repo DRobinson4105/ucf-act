@@ -17,23 +17,13 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include <limits.h>
-
 #include "can_protocol.h"
+#include "control_domain_types.h"
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-
-// ============================================================================
-// Sentinel & Range Constants
-// ============================================================================
-
-// Sentinel value for stepper dedup trackers — forces the next command to
-// always be sent (no deduplication). Using INT16_MIN because it is outside
-// any valid stepper position range and will never match a real command.
-#define STEPPER_DEDUP_RESET INT16_MIN
 
 // Valid throttle level range for the DG408DJZ multiplexer (3-bit, 0-7).
 #define THROTTLE_LEVEL_MIN 0
@@ -43,21 +33,9 @@ extern "C"
 // Enable Preconditions
 // ============================================================================
 
-// Enable precondition failure flags (bitmask for diagnostics).
-// Indicates which preconditions block autonomy readiness/entry.
-#define PRECONDITION_OK                     0x00
-#define PRECONDITION_FAIL_FR_NOT_FORWARD    0x01
-#define PRECONDITION_FAIL_PEDAL_PRESSED     0x02
-#define PRECONDITION_FAIL_PEDAL_NOT_REARMED 0x04
-#define PRECONDITION_FAIL_ACTIVE_FAULT      0x08
-#define PRECONDITION_FAIL_ALL                                                                                   \
-	(PRECONDITION_FAIL_FR_NOT_FORWARD | PRECONDITION_FAIL_PEDAL_PRESSED | PRECONDITION_FAIL_PEDAL_NOT_REARMED | \
-	 PRECONDITION_FAIL_ACTIVE_FAULT)
-typedef uint8_t precondition_fail_t; // PRECONDITION_FAIL_* bitmask
-
 typedef struct
 {
-	fr_state_t fr_state;     // FR_STATE_* from can_protocol.h
+	fr_state_t fr_state;     // FR_STATE_* from control_domain_types.h
 	bool pedal_pressed;      // true if pedal above threshold
 	bool pedal_rearmed;      // true if pedal below threshold for 500ms
 	node_fault_t fault_code; // NODE_FAULT_* from can_protocol.h
@@ -106,34 +84,6 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 // ============================================================================
 // Control State Machine
 // ============================================================================
-
-// Actions the caller must execute after compute_control_step().
-// Multiple actions can be OR'd together as a bitmask.
-#define CONTROL_ACTION_NONE             0x0000
-#define CONTROL_ACTION_START_ENABLE     0x0001 // Begin enable sequence (relay, mux level 0)
-#define CONTROL_ACTION_COMPLETE_ENABLE  0x0002 // Finish enable (steppers on, mux autonomous)
-#define CONTROL_ACTION_ABORT_ENABLE     0x0004 // Cancel enable (relay off, mux disable)
-#define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008 // Emergency disable all actuators
-#define CONTROL_ACTION_ATTEMPT_RECOVERY 0x0010 // Try fault recovery
-#define CONTROL_ACTION_APPLY_THROTTLE   0x0020 // Update DG408DJZ mux to new throttle level
-#define CONTROL_ACTION_DISABLE_AUTONOMY 0x0040 // Disable actuators (non-override retreat/fault)
-typedef uint16_t control_actions_t;            // CONTROL_ACTION_* bitmask
-
-// Reasons for CONTROL_ACTION_DISABLE_AUTONOMY.
-#define CONTROL_DISABLE_REASON_NONE           0x00
-#define CONTROL_DISABLE_REASON_SAFETY_RETREAT 0x01
-#define CONTROL_DISABLE_REASON_MOTOR_FAULT    0x02
-#define CONTROL_DISABLE_REASON_SENSOR_INVALID 0x03
-typedef uint8_t disable_reason_t; // CONTROL_DISABLE_REASON_* values
-
-// Reasons for CONTROL_ACTION_ABORT_ENABLE.
-#define CONTROL_ABORT_REASON_NONE           0x00
-#define CONTROL_ABORT_REASON_SAFETY_RETREAT 0x01
-#define CONTROL_ABORT_REASON_PEDAL_PRESSED  0x02
-#define CONTROL_ABORT_REASON_FR_NOT_FORWARD 0x03
-#define CONTROL_ABORT_REASON_MOTOR_FAULT    0x04
-#define CONTROL_ABORT_REASON_SENSOR_INVALID 0x05
-typedef uint8_t abort_reason_t; // CONTROL_ABORT_REASON_* values
 
 // --- Input / Output Structs ---
 

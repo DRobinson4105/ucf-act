@@ -8,7 +8,8 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -Werror -std=c++17 -g -O0
 INCLUDES = -I../common/protocol/stepper_protocol_uim2852/include \
-           -I../common/protocol/can_protocol/include
+           -I../common/protocol/can_protocol/include \
+           -I../common/logic/control_domain_types/include
 
 STEPPER_SRC = ../common/protocol/stepper_protocol_uim2852/stepper_protocol_uim2852.cpp
 MOTOR_SRC   = ../control-esp32/components/stepper_motor_uim2852/stepper_motor_uim2852.cpp
@@ -123,7 +124,7 @@ test_heartbeat_monitor: test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_
 	@$(CXX) $(CXXFLAGS) -Imocks -I../common/services/heartbeat_monitor/include $(INCLUDES) -o $@ test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
 
 test_driver_inputs: test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
-	@$(CXX) $(DRIVER_INPUTS_CXXFLAGS) -Imocks -I../control-esp32/components/adc_12bitsar/include -I../control-esp32/components/optocoupler_pc817/include -I../common/protocol/can_protocol/include -o $@ test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
+	@$(CXX) $(DRIVER_INPUTS_CXXFLAGS) -Imocks -I../control-esp32/components/adc_12bitsar/include -I../control-esp32/components/optocoupler_pc817/include $(INCLUDES) -o $@ test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
 
 clean:
 	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs esp_idf_mock.o

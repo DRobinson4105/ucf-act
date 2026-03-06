@@ -57,6 +57,9 @@
 #ifdef CONFIG_BYPASS_INPUT_ULTRASONIC
 #error "PRODUCTION_BUILD: CONFIG_BYPASS_INPUT_ULTRASONIC must be disabled"
 #endif
+#ifdef CONFIG_BYPASS_CAN_TWAI
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_CAN_TWAI must be disabled"
+#endif
 #endif // CONFIG_PRODUCTION_BUILD
 
 // Safety ESP32 - System state authority and e-stop monitoring
@@ -289,6 +292,9 @@ bool wait_for_heartbeat_alive(int node_id, TickType_t timeout, TickType_t poll_i
  */
 void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbeat_ready)
 {
+#ifdef CONFIG_BYPASS_CAN_TWAI
+	ESP_LOGW(TAG_INIT, "TWAI: BYPASSED: disabled");
+#else
 	if (twai_ready)
 	{
 		ESP_LOGI(TAG_INIT, "TWAI: CONFIGURED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
@@ -297,6 +303,7 @@ void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbe
 	{
 		ESP_LOGE(TAG_INIT, "TWAI: FAILED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
 	}
+#endif
 
 #ifdef CONFIG_BYPASS_INPUT_PUSH_BUTTON
 	ESP_LOGW(TAG_INIT, "PUSH_BUTTON: BYPASSED: disabled (input_gpio=%d active_level=%s)", g_push_button_cfg.gpio,
@@ -534,6 +541,7 @@ void retry_failed_components(void)
 	}
 #endif
 
+#ifndef CONFIG_BYPASS_CAN_TWAI
 	if (!g_twai_ready)
 	{
 		[[maybe_unused]] static uint16_t s_retry_count = 0;
@@ -606,6 +614,7 @@ void retry_failed_components(void)
 		g_can_recovery_in_progress = false;
 		taskEXIT_CRITICAL(&g_can_tx_lock);
 	}
+#endif
 }
 
 /**
@@ -614,7 +623,8 @@ void retry_failed_components(void)
  * Increments a consecutive-failure counter on TX errors and resets it
  * on success.  When the counter reaches CAN_TX_FAIL_THRESHOLD, checks
  * bus health via can_twai_bus_ok().  If the bus is unhealthy, marks
- * g_twai_ready = false to initiate recovery in retry_failed_components().
+ * g_twai_ready = false to initiate recovery in retry_failed_components(),
+ * unless CONFIG_BYPASS_CAN_TWAI is enabled.
  *
  * Bus health checks and logging are performed outside critical sections
  * because can_twai_bus_ok() and ESP_LOG use locks/semaphores that
@@ -650,6 +660,9 @@ void track_can_tx(esp_err_t err)
 		bool bus_ok = can_twai_bus_ok();
 		if (!bus_ok)
 		{
+#ifdef CONFIG_BYPASS_CAN_TWAI
+			return;
+#else
 			taskENTER_CRITICAL(&g_can_tx_lock);
 			if (!g_can_recovery_in_progress)
 			{
@@ -657,6 +670,7 @@ void track_can_tx(esp_err_t err)
 				trigger_recovery = true;
 			}
 			taskEXIT_CRITICAL(&g_can_tx_lock);
+#endif
 		}
 		// else: bus OK but TX still failing — no partner on bus, nothing to do.
 	}
@@ -1212,6 +1226,11 @@ void safety_task(void *param)
 
 		system_state_result_t ss_out = system_state_step(&ss_in);
 
+		// Relay power is allowed only when e-stop is clear and target is
+		// in the autonomy power window (ENABLE/ACTIVE).
+		bool relay_should_enable =
+			decision.relay_enable && (ss_out.new_target == NODE_STATE_ENABLE || ss_out.new_target == NODE_STATE_ACTIVE);
+
 #ifndef CONFIG_BYPASS_PLANNER_AUTONOMY_GATE
 		if (ss_out.target_changed && current_target == NODE_STATE_READY && ss_out.new_target == NODE_STATE_ENABLE &&
 		    request_latched)
@@ -1282,7 +1301,7 @@ void safety_task(void *param)
 		// Control power relay based on safety decision
 		if (g_relay_init_ok)
 		{
-			if (decision.relay_enable)
+			if (relay_should_enable)
 			{
 				esp_err_t relay_err = relay_srd05vdc_enable(&g_relay_cfg);
 				if (relay_err != ESP_OK)
@@ -1324,7 +1343,7 @@ void safety_task(void *param)
 #endif
 			}
 #ifdef CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE
-			prev_relay_enabled = decision.relay_enable;
+			prev_relay_enabled = relay_should_enable;
 #endif
 		}
 
@@ -1490,13 +1509,17 @@ void main_task(void *param)
 	}
 #endif
 
-	// Initialize TWAI for CAN communication. Retries continue in safety loop.
+	// Initialize TWAI for CAN communication unless explicitly bypassed.
+#ifdef CONFIG_BYPASS_CAN_TWAI
+	g_twai_ready = false;
+#else
 	err = can_twai_init_default(TWAI_TX_GPIO, TWAI_RX_GPIO);
 	g_twai_ready = (err == ESP_OK);
 	if (err != ESP_OK)
 	{
 		ESP_LOGE(TAG_INIT, "TWAI init failed: %s (will retry in background)", esp_err_to_name(err));
 	}
+#endif
 
 	// Initialize heartbeat LED (WS2812 on GPIO8)
 	err = led_ws2812_init();
@@ -1556,27 +1579,34 @@ void main_task(void *param)
 		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: INPUT_ULTRASONIC (forced clear and healthy)");
 		any_bypass = true;
 #endif
+#ifdef CONFIG_BYPASS_CAN_TWAI
+		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: CAN_TWAI (CAN/TWAI disabled)");
+		any_bypass = true;
+#endif
 		if (any_bypass)
 		{
 			ESP_LOGW(TAG_INIT, "*** TEST BYPASSES ACTIVE — DO NOT DEPLOY TO VEHICLE ***");
 		}
 	}
 
-	// Start CAN RX task first so heartbeat frames can be received during init wait
+	// Start CAN RX task first so heartbeat frames can be received during init wait.
+#ifndef CONFIG_BYPASS_CAN_TWAI
 	if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, &g_can_rx_task_handle) !=
 	    pdPASS)
 	{
 		ESP_LOGE(TAG_INIT, "Failed to create CAN RX task, restarting");
 		esp_restart();
 	}
+#endif
 
-	// Wait for Planner/Control heartbeats (if not bypassed)
-#if !defined(CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS) || !defined(CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS)
+	// Wait for Planner/Control heartbeats (if not bypassed and CAN/TWAI enabled)
+#if !defined(CONFIG_BYPASS_CAN_TWAI) && \
+	(!defined(CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS) || !defined(CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS))
 	static constexpr TickType_t HB_INIT_WAIT = pdMS_TO_TICKS(1000);
 	static constexpr TickType_t HB_INIT_POLL = pdMS_TO_TICKS(50);
 #endif
 
-#ifndef CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS
+#if !defined(CONFIG_BYPASS_CAN_TWAI) && !defined(CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS)
 	{
 		if (wait_for_heartbeat_alive(g_node_planner, HB_INIT_WAIT, HB_INIT_POLL))
 			ESP_LOGI(TAG_INIT, "PLANNER: OK: heartbeat detected");
@@ -1585,7 +1615,7 @@ void main_task(void *param)
 	}
 #endif
 
-#ifndef CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS
+#if !defined(CONFIG_BYPASS_CAN_TWAI) && !defined(CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS)
 	{
 		if (wait_for_heartbeat_alive(g_node_control, HB_INIT_WAIT, HB_INIT_POLL))
 			ESP_LOGI(TAG_INIT, "CONTROL: OK: heartbeat detected");

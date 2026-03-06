@@ -8,7 +8,7 @@
 
 #include "driver/gpio.h"
 #include "esp_err.h"
-#include "can_protocol.h"
+#include "control_domain_types.h"
 
 #ifdef __cplusplus
 extern "C"

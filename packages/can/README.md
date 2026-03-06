@@ -39,7 +39,7 @@ Each CAN node connects to the bus with two signal wires:
 ### Wiring Notes
 
 - Twisted-pair wiring recommended for CAN-H (Yellow) / CAN-L (Green) runs to the stepper motors (several feet)
-- No dedicated CAN GND wire — all five nodes share ground through the cart chassis/power ground
+- No dedicated CAN GND wire. All buck converters (5V ESP32, 12V Orin, 24V motors) are non-isolated with inputs fed from the same 48V- bus bar, so all output GNDs are inherently common. A separate CAN GND wire would be redundant.
 - SN65HVD230 modules powered from their respective devices.
 
 ### Message Traffic

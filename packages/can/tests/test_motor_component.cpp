@@ -990,6 +990,7 @@ static void test_target_position_set_by_pt_feed(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
+	motor.pt_mode_active = true;
 
 	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 3200, 20);
 	assert(err == ESP_OK);
@@ -1037,6 +1038,7 @@ static void test_target_position_not_set_on_feed_failure(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
+	motor.pt_mode_active = true;
 	assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
 
 	mock_twai_send_result = ESP_FAIL;
@@ -1330,10 +1332,27 @@ static void test_pt_feed_sends_qf_frame(void)
 	assert(motor.target_position == 1600);
 }
 
+static void test_pt_feed_rejects_when_not_active(void)
+{
+	stepper_motor_uim2852_t motor;
+	init_default_motor(&motor);
+	motor.target_position = 42;
+	motor.pt_fifo_empty = true;
+	motor.pt_fifo_low = true;
+
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 1600, 20);
+	assert(err == ESP_ERR_INVALID_STATE);
+	assert(mock_sent_count == 0);
+	assert(motor.target_position == 42);
+	assert(motor.pt_fifo_empty == true);
+	assert(motor.pt_fifo_low == true);
+}
+
 static void test_pt_feed_clears_fifo_flags(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
+	motor.pt_mode_active = true;
 	motor.pt_fifo_empty = true;
 	motor.pt_fifo_low = true;
 
@@ -1575,6 +1594,7 @@ int main(void)
 	TEST(test_pt_start_sends_pv_and_sets_active);
 	TEST(test_pt_stop_sends_pv_stop_then_st);
 	TEST(test_pt_feed_sends_qf_frame);
+	TEST(test_pt_feed_rejects_when_not_active);
 	TEST(test_pt_feed_clears_fifo_flags);
 	TEST(test_process_frame_fifo_empty_notification);
 	TEST(test_process_frame_fifo_low_notification);
