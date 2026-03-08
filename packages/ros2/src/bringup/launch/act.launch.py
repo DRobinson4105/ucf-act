@@ -17,6 +17,10 @@ def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_argum
 def generate_launch_description():
     return LaunchDescription([
         include("bringup", "static_tfs.launch.py"),
+        include(
+          "ros2_socketcan", "socket_can_bridge.launch.xml",
+          launch_arguments={"interface": "can0"}
+        ),
         include("bringup", "cameras.launch.py"),
         include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
         include("perception", "lidar_filter.launch.py"),

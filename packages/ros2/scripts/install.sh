@@ -30,6 +30,7 @@ PKGS=(
     ros-humble-image-pipeline
     ros-humble-pcl-conversions
     ros-humble-pcl-ros
+    ros-humble-ros2-socketcan
 )
 
 sudo apt-get install -y "${PKGS[@]}"
