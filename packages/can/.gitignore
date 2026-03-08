@@ -14,7 +14,5 @@ tests/**
 !tests/README.md
 !tests/mocks/
 !tests/mocks/**
-!tests/test_*.c
 !tests/test_*.cpp
 !tests/test_*.h
-!tests/test_*.hh

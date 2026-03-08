@@ -28,21 +28,25 @@ Autonomy request handling is one-shot for entry and level-hold for run:
 ## Safety Logic
 
 The Safety ESP32 continuously monitors:
+
 1. **Hardware e-stops**: Push button (HB2-ES544), RF remote (EV1527)
 2. **Obstacle detection**: Ultrasonic sensor A02YYUW (threshold: 1000mm ~3.3ft)
 3. **Node liveness**: Planner and Control heartbeats (timeout: 500ms)
 4. **Node health**: Planner and Control state fields (FAULT/OVERRIDE triggers retreat)
 
 **Power relay behavior:**
-- ENABLED when all inputs are clear (no e-stop)
-- DISABLED immediately when any e-stop condition detected
+
+- ENABLED only in target `ENABLE` or `ACTIVE`, and only when all e-stop inputs are clear
+- DISABLED in `INIT`/`NOT_READY`/`READY`, or immediately when any e-stop condition is detected
 
 **Input debounce:**
+
 - Push-button and RF remote engage is immediate (safety-critical, no debounce)
 - Push-button and RF remote disengage requires 3 consecutive clear reads (~150ms at 50ms loop) to filter contact bounce
 - Ultrasonic health transitions require 3 consecutive agreeing samples (~150ms) to prevent flap around the 500ms timeout boundary
 
 **E-stop fault sources** (OR'ed into a bitmask):
+
 1. Push button pressed (HB2-ES544)
 2. RF remote kill (EV1527)
 3. Ultrasonic triggered (A02YYUW obstacle detected OR sensor not responding)
@@ -56,31 +60,31 @@ The Safety ESP32 continuously monitors:
 ### Receives
 
 | ID    | Name              | Description                                   |
-|-------|-------------------|-----------------------------------------------|
+| ----- | ----------------- | --------------------------------------------- |
 | 0x110 | PLANNER_HEARTBEAT | Planner alive (seq, state, fault_code, flags) |
 | 0x120 | CONTROL_HEARTBEAT | Control alive (seq, state, fault_code, flags) |
 
 ### Sends
 
 | ID    | Name             | Rate                              | Description                                                                           |
-|-------|------------------|-----------------------------------|---------------------------------------------------------------------------------------|
+| ----- | ---------------- | --------------------------------- | ------------------------------------------------------------------------------------- |
 | 0x100 | SAFETY_HEARTBEAT | 100ms + immediate on state change | System target state + e-stop fault code (same `node_heartbeat_t` format as all nodes) |
 
-Safety's heartbeat `state` field = system target state (NODE_STATE_*). Its `fault_code` field = e-stop reason (NODE_FAULT_ESTOP_*, 0 when safe).
+Safety's heartbeat `state` field = system target state (NODE*STATE*_). Its `fault_code` field = e-stop reason (NODE*FAULT_ESTOP*_, 0 when safe).
 
 ### Heartbeat Monitoring
 
 | Node    | Timeout | Tracked Fields                          |
-|---------|---------|-----------------------------------------|
+| ------- | ------- | --------------------------------------- |
 | Planner | 500ms   | sequence, state (FAULT triggers e-stop) |
 | Control | 500ms   | sequence, state (FAULT triggers e-stop) |
 
-## E-stop Fault Bitmask (NODE_FAULT_ESTOP_*)
+## E-stop Fault Bitmask (NODE*FAULT_ESTOP*\*)
 
 The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can be set simultaneously when multiple e-stop conditions are active. For example, if both the push button and RF remote are active, fault_code = 0x03 (0x01 | 0x02).
 
 | Bit | Code | Constant              | Trigger                                                 |
-|-----|------|-----------------------|---------------------------------------------------------|
+| --- | ---- | --------------------- | ------------------------------------------------------- |
 | -   | 0x00 | NONE                  | System OK                                               |
 | 0   | 0x01 | ESTOP_BUTTON          | Push button HB2-ES544 pressed                           |
 | 1   | 0x02 | ESTOP_REMOTE          | RF remote EV1527 kill signal active                     |
@@ -93,21 +97,21 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 
 ## Pin Configuration
 
-| GPIO | Function              | Direction | Notes                                           |
-|------|-----------------------|-----------|-------------------------------------------------|
-| 2    | Power Relay           | Output    | Active HIGH, pull-down, SRD-05VDC-SL-C module   |
-| 4    | CAN TX                | Output    | TWAI peripheral (SN65HVD230 transceiver)        |
-| 5    | CAN RX                | Input     | TWAI peripheral (SN65HVD230 transceiver)        |
-| 6    | Push Button HB2-ES544 | Input     | Pull-up, active HIGH (NC switch opens on press) |
-| 7    | RF Remote EV1527      | Input     | Pull-up, active HIGH                            |
-| 8    | Status LED            | Output    | WS2812 RGB LED                                  |
-| 10   | Ultrasonic A02YYUW TX | Output    | UART1 TX (sensor RX, mode select)               |
-| 11   | Ultrasonic A02YYUW RX | Input     | UART1 RX, 9600 baud (sensor TX)                 |
+| GPIO | Function              | Direction | Notes                                              |
+| ---- | --------------------- | --------- | -------------------------------------------------- |
+| 2    | Power Relay           | Output    | Active HIGH, pull-down, SRD-05VDC-SL-C module      |
+| 4    | CAN TX                | Output    | TWAI peripheral (SN65HVD230 transceiver)           |
+| 5    | CAN RX                | Input     | TWAI peripheral (SN65HVD230 transceiver)           |
+| 6    | Push Button HB2-ES544 | Input     | Pull-up, active HIGH (NC switch opens on press)    |
+| 7    | RF Remote EV1527      | Input     | Pull-up, active HIGH (NC relay output, COM to GND) |
+| 8    | Status LED            | Output    | Onboard WS2812 RGB LED (no external wiring)        |
+| 10   | Ultrasonic A02YYUW TX | Output    | UART1 TX (sensor RX, mode select)                  |
+| 11   | Ultrasonic A02YYUW RX | Input     | UART1 RX, 9600 baud (sensor TX)                    |
 
 ### LED Behavior
 
 | Color        | State                                 |
-|--------------|---------------------------------------|
+| ------------ | ------------------------------------- |
 | Solid green  | Target state READY (no e-stop active) |
 | Solid orange | Target state ENABLE                   |
 | Solid blue   | Target state ACTIVE                   |
@@ -120,7 +124,7 @@ Each subsection covers production (on-cart) and bench wiring for Safety ESP32 in
 ### Wiring Summary
 
 | Interface               | Bench vs Production                                         |
-|-------------------------|-------------------------------------------------------------|
+| ----------------------- | ----------------------------------------------------------- |
 | CAN bus (SN65HVD230)    | Same — see [root README](../README.md#can-bus-wiring)       |
 | Push button (HB2-ES544) | Same                                                        |
 | RF remote (EV1527)      | **Different** — receiver needs separate 12V supply on bench |
@@ -128,27 +132,82 @@ Each subsection covers production (on-cart) and bench wiring for Safety ESP32 in
 | Power relay (SRD-05VDC) | Same hardware — bench relay switches with no 24V load       |
 | Status LED (WS2812)     | Same                                                        |
 
+### Ground Distribution (Safety ESP32)
+
+Safety wiring uses all three ESP32 GND pins:
+
+- **GND pin A (dedicated):** Main 5V I/O rail return only
+- **GND pin B (clean inputs):** CAN transceiver, push button, ultrasonic
+- **GND pin C (relay/noisy):** Power relay module and RF receiver relay return
+
+Use a small harness splice/star point for each branch (or a small terminal block), then run one wire per ESP32 GND pin. Do not stack multiple wires into a single ESP32 header hole.
+
 ### CAN Bus (SN65HVD230)
 
-GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module. Safety ESP32's Waveshare board has onboard termination **enabled** (120 ohm). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module via a 4-pin JST-PH connector. Safety ESP32's Waveshare board has onboard termination **enabled** (120 ohm). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+
+**ESP32-to-transceiver connector (4-pin JST-PH):**
+
+| Wire Color | Signal                   |
+| ---------- | ------------------------ |
+| Black      | GND (clean-input branch) |
+| Red        | VCC (3.3V)               |
+| Yellow     | TXD (GPIO 4)             |
+| Green      | RXD (GPIO 5)             |
 
 ### Push Button E-Stop (HB2-ES544)
 
 GPIO 6 reads a normally-closed (NC) mxuteek HB2-ES544 22mm emergency stop push button. Internal pull-up enabled, active HIGH — the NC switch holds GPIO LOW in normal operation; pressing the button opens the switch and GPIO reads HIGH (e-stop active). NC design is fail-safe: a broken wire also triggers e-stop.
 
+**Wiring (2-pin):**
+
+| Wire Color | ESP32 Pin                | Button Terminal |
+| ---------- | ------------------------ | --------------- |
+| Black      | GND (clean-input branch) | COM terminal    |
+| White      | GPIO 6                   | NC terminal     |
+
 **Same wiring for bench and production.** On the bench, use the same HB2-ES544 switch or any NC momentary button wired between GPIO 6 and GND (pull-up keeps it HIGH when open).
 
 ### RF Remote E-Stop (EV1527)
 
-GPIO 7 reads the output of a DieseRC 433MHz RF receiver module (EV1527 learning code). Internal pull-up enabled, active HIGH. When the remote button is pressed, the receiver output goes HIGH.
+GPIO 7 reads the NC (normally closed) relay output of a DieseRC 433MHz RF receiver module (DC 12V 1CH relay, EV1527 learning code). Internal pull-up enabled, active HIGH. The receiver's onboard relay NC and COM terminals connect to GPIO 7 and ESP32 GND respectively. When the remote button is not pressed (relay de-energized), NC-COM is closed, pulling GPIO 7 to GND (LOW, safe). When pressed (relay energizes), NC-COM opens, internal pull-up pulls GPIO 7 HIGH (e-stop active). This is fail-safe: receiver power loss or broken wire also opens NC-COM, triggering e-stop.
 
-**Production:** The receiver module is powered from 12V on the cart and mounted near the Safety ESP32. Its digital output connects to GPIO 7.
+Use two 2-pin connectors instead of one mixed 4-pin harness:
 
-**Bench:** Same GPIO 7 connection to the receiver output. The receiver module requires its own 12V supply (bench power supply or 12V adapter).
+**Connector A (RF power, 2-pin):**
+
+| Wire Color | From           | To                 |
+| ---------- | -------------- | ------------------ |
+| Black      | 12V supply (-) | Receiver GND       |
+| Red        | 12V supply (+) | Receiver VCC (12V) |
+
+**Connector B (RF e-stop signal, 2-pin):**
+
+| Wire Color | From                           | To                    |
+| ---------- | ------------------------------ | --------------------- |
+| Black      | ESP32 GND (relay/noisy branch) | Receiver COM terminal |
+| White      | ESP32 GPIO 7                   | Receiver NC terminal  |
+
+Receiver power GND and ESP32 signal GND are spliced together in the relay/noisy ground branch so NC/COM has a valid reference.
+
+**Production:** The receiver module is powered from 12V on the cart and mounted near the Safety ESP32.
+
+**Bench:** Same wiring. The receiver module requires its own 12V supply (bench power supply or 12V adapter).
 
 ### Ultrasonic Sensor (A02YYUW)
 
 UART1: GPIO 10 (TX to sensor RX/mode select), GPIO 11 (RX from sensor TX). 9600 baud, 4-byte frames. The A02YYUW is a waterproof ultrasonic rangefinder operating at 3.3-5V with a direct UART output — no level shifting or isolation needed.
+
+**Wiring (4-pin):**
+
+| Wire Color | ESP32 Pin                | Sensor Wire             |
+| ---------- | ------------------------ | ----------------------- |
+| Red        | 3.3V                     | VCC (red wire)          |
+| Black      | GND (clean-input branch) | GND (black wire)        |
+| Blue       | GPIO 10 (TX)             | Sensor RX (mode select) |
+| Green      | GPIO 11 (RX)             | Sensor TX (data output) |
+
+Note the TX/RX crossover: ESP32 TX -> Sensor RX, ESP32 RX -> Sensor TX.
 
 **Same wiring for bench and production.** The sensor connects directly to the ESP32 UART pins in both environments. On the bench, point the sensor at a wall or object to test obstacle detection. Stop threshold is 1000mm (~3.3 ft).
 
@@ -156,20 +215,26 @@ UART1: GPIO 10 (TX to sensor RX/mode select), GPIO 11 (RX from sensor TX). 9600 
 
 GPIO 2 drives an AEDIKO 1-channel 5V relay module (SRD-05VDC-SL-C, optocoupler-isolated trigger). The relay's NO (normally open) terminal switches the 24V autonomous power rail that feeds the stepper motor drivers. Pull-down on GPIO 2 ensures the relay stays de-energized (24V cut, vehicle stopped) on boot/reset.
 
+**Wiring (3-pin):**
+
+| Wire Color | From                           | To                        |
+| ---------- | ------------------------------ | ------------------------- |
+| White      | ESP32 GPIO 2                   | Relay module IN (trigger) |
+| Red        | ESP32 5V                       | Relay module VCC          |
+| Black      | ESP32 GND (relay/noisy branch) | Relay module GND          |
+
 **Production:** Relay NO terminal connects the 24V power rail to the stepper motor drivers. Energized = 24V flows to motors (vehicle can move). De-energized = 24V cut (fail-safe stop).
 
 **Bench:** Same hardware. Relay clicks audibly when toggled — useful for verifying GPIO 2 output. Without a 24V load, the relay opens/closes its contacts with no effect.
 
 ### Status LED (WS2812)
 
-GPIO 8 drives a WS2812 RGB LED for state indication. Direct connection to GPIO 8, powered from ESP32 3.3V rail.
-
-**Same wiring for bench and production.**
+GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status LED data line (no external wiring required). LED color is determined by software state logic, not GPIO level — the GPIO serves only as the RMT data output.
 
 ## Components
 
 | Component            | Description                                                         |
-|----------------------|---------------------------------------------------------------------|
+| -------------------- | ------------------------------------------------------------------- |
 | `gpio_input`         | Generic GPIO digital input driver (push button, RF remote)          |
 | `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor                           |
 | `relay_srd05vdc`     | AEDIKO SRD-05VDC-SL-C 5V relay module for 24V autonomous power rail |
@@ -193,12 +258,13 @@ GPIO 8 drives a WS2812 RGB LED for state indication. Direct connection to GPIO 8
 Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under **Test Bypasses** (top-level), or add to `sdkconfig.defaults`:
 
 | Flag                                    | Effect                                                            |
-|-----------------------------------------|-------------------------------------------------------------------|
+| --------------------------------------- | ----------------------------------------------------------------- |
 | `CONFIG_BYPASS_PLANNER_AUTONOMY_GATE`   | Force autonomy request true (bench mode without Orin)             |
 | `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner FAULT checks           |
 | `CONFIG_BYPASS_PLANNER_STATE_MIRROR`    | Simulate Planner state/enable_complete by mirroring Safety target |
 | `CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS` | Ignore Control heartbeat timeout + Control FAULT checks           |
 | `CONFIG_BYPASS_CONTROL_STATE_MIRROR`    | Simulate Control state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_CAN_TWAI`                | Disable CAN/TWAI entirely (skip TWAI init/recovery and heartbeat TX/RX) |
 | `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button e-stop to inactive (not pressed)                |
 | `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote e-stop to inactive (not engaged)                  |
 | `CONFIG_BYPASS_INPUT_ULTRASONIC`        | Force ultrasonic clear and healthy (skip sensor)                  |
@@ -210,14 +276,14 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 ### CAN I/O
 
 | Flag                          | Default | Effect                                               |
-|-------------------------------|---------|------------------------------------------------------|
+| ----------------------------- | ------- | ---------------------------------------------------- |
 | `CONFIG_LOG_CAN_HEARTBEAT_TX` | off     | Log every periodic heartbeat TX (very verbose)       |
 | `CONFIG_LOG_CAN_HEARTBEAT_RX` | off     | Log every received heartbeat, not just state changes |
 
 ### Component Health & Recovery
 
 | Flag                                       | Default | Effect                                                       |
-|--------------------------------------------|---------|--------------------------------------------------------------|
+| ------------------------------------------ | ------- | ------------------------------------------------------------ |
 | `CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS`  | on      | Log component LOST/REGAINED edge transitions                 |
 | `CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS` | on      | Log Planner/Control heartbeat monitor lost/regained events   |
 | `CONFIG_LOG_CAN_RECOVERY`                  | off     | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
@@ -233,16 +299,16 @@ HEARTBEAT_LED is non-critical and initialized once at startup.
 ### Safety Logic
 
 | Flag                              | Default | Effect                                                        |
-|-----------------------------------|---------|---------------------------------------------------------------|
+| --------------------------------- | ------- | ------------------------------------------------------------- |
 | `CONFIG_LOG_SAFETY_ESTOP_INPUTS`  | off     | Log all e-stop inputs every 50ms cycle (extremely verbose)    |
 | `CONFIG_LOG_SAFETY_STATE_CHANGES` | on      | Log target-state transitions and autonomy-request gate events |
-| `CONFIG_LOG_SAFETY_FAULT_CHANGES` | on      | Log e-stop fault code transitions                              |
+| `CONFIG_LOG_SAFETY_FAULT_CHANGES` | on      | Log e-stop fault code transitions                             |
 | `CONFIG_LOG_SAFETY_STATE_TICK`    | off     | Log state-machine evaluation every 50ms cycle (very verbose)  |
 
 ### Inputs
 
 | Flag                                       | Default | Effect                                                  |
-|--------------------------------------------|---------|---------------------------------------------------------|
+| ------------------------------------------ | ------- | ------------------------------------------------------- |
 | `CONFIG_LOG_INPUT_PUSH_BUTTON`             | off     | Log push-button state changes (pressed/released)        |
 | `CONFIG_LOG_INPUT_RF_REMOTE`               | off     | Log RF remote state changes (engaged/disengaged)        |
 | `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE`     | off     | Log every valid ultrasonic distance reading (~5-10/sec) |
@@ -252,12 +318,12 @@ HEARTBEAT_LED is non-critical and initialized once at startup.
 ### Actuators
 
 | Flag                                    | Default | Effect                                     |
-|-----------------------------------------|---------|--------------------------------------------|
+| --------------------------------------- | ------- | ------------------------------------------ |
 | `CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE` | off     | Log power relay enable/disable transitions |
 
 ### HEARTBEAT_LED
 
 | Flag                                     | Default | Effect                                                                |
-|------------------------------------------|---------|-----------------------------------------------------------------------|
+| ---------------------------------------- | ------- | --------------------------------------------------------------------- |
 | `CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES` | off     | Log HEARTBEAT_LED color/reason mode changes                           |
 | `CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES` | off     | Log every HEARTBEAT_LED color update with color/reason (very verbose) |

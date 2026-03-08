@@ -1,5 +1,8 @@
+# Target
+CONFIG_IDF_TARGET="esp32c6"
+
 # Flash configuration
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_SPI_FLASH_SUPPORT_GD_CHIP=y
 
 # Task watchdog and stack overflow detection

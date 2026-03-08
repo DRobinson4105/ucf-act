@@ -1,28 +1,32 @@
 # Makefile — Host-native unit test build rules for CAN bus libraries.
+#
+# NOTE: Include paths in the build rules below must stay in sync with the
+# corresponding CMakeLists.txt REQUIRES / INCLUDE_DIRS for each component.
+# If a component adds a new dependency in its CMakeLists.txt, add the
+# matching -I flag here so host tests see the same headers.
 
-CC = gcc
 CXX = g++
-CFLAGS = -Wall -Wextra -Werror -std=c11 -g -O0
 CXXFLAGS = -Wall -Wextra -Werror -std=c++17 -g -O0
 INCLUDES = -I../common/protocol/stepper_protocol_uim2852/include \
-           -I../common/protocol/can_protocol/include
+           -I../common/protocol/can_protocol/include \
+           -I../common/logic/control_domain_types/include
 
-STEPPER_SRC = ../common/protocol/stepper_protocol_uim2852/stepper_protocol_uim2852.c
-MOTOR_SRC   = ../control-esp32/components/stepper_motor_uim2852/stepper_motor_uim2852.c
-MOCK_SRC    = mocks/esp_idf_mock.c
-SAFETY_SRC  = ../common/logic/safety_logic/safety_logic.c
-CONTROL_SRC = ../common/logic/control_logic/control_logic.c
-SYSTEM_STATE_SRC = ../common/logic/system_state/system_state.c
+STEPPER_SRC = ../common/protocol/stepper_protocol_uim2852/stepper_protocol_uim2852.cpp
+MOTOR_SRC   = ../control-esp32/components/stepper_motor_uim2852/stepper_motor_uim2852.cpp
+MOCK_SRC    = mocks/esp_idf_mock.cpp
+SAFETY_SRC  = ../common/logic/safety_logic/safety_logic.cpp
+CONTROL_SRC = ../common/logic/control_logic/control_logic.cpp
+SYSTEM_STATE_SRC = ../common/logic/system_state/system_state.cpp
 HEARTBEAT_MON_SRC = ../common/services/heartbeat_monitor/heartbeat_monitor.cpp
 ADC_12BITSAR_SRC = ../control-esp32/components/adc_12bitsar/adc_12bitsar.cpp
 OPTOCOUPLER_PC817_SRC = ../control-esp32/components/optocoupler_pc817/optocoupler_pc817.cpp
 
-# Mock include path must come FIRST so esp_log.h, can_twai.hh, etc. resolve to mocks
+# Mock include path must come FIRST so esp_log.h, can_twai.h, etc. resolve to mocks
 MOCK_INCLUDES = -Imocks \
                 -I../control-esp32/components/stepper_motor_uim2852/include
 
 # Motor component has an unused TAG variable when logging is mocked out
-MOTOR_CFLAGS = $(CFLAGS) -Wno-unused-variable
+MOTOR_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 DRIVER_INPUTS_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 
 all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs
@@ -95,32 +99,32 @@ all: test_stepper_protocol test_can_protocol test_motor_component test_safety_lo
 		exit 1; \
 	fi
 
-test_stepper_protocol: test_stepper_protocol.c $(STEPPER_SRC)
-	@$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+test_stepper_protocol: test_stepper_protocol.cpp $(STEPPER_SRC)
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^
 
-test_can_protocol: test_can_protocol.c
-	@$(CC) $(CFLAGS) $(INCLUDES) -o $@ $^
+test_can_protocol: test_can_protocol.cpp
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $^
 
-test_motor_component: test_motor_component.c $(STEPPER_SRC) $(MOTOR_SRC) $(MOCK_SRC)
-	@$(CC) $(MOTOR_CFLAGS) $(MOCK_INCLUDES) $(INCLUDES) -o $@ $^
+test_motor_component: test_motor_component.cpp $(STEPPER_SRC) $(MOTOR_SRC) $(MOCK_SRC)
+	@$(CXX) $(MOTOR_CXXFLAGS) $(MOCK_INCLUDES) $(INCLUDES) -o $@ $^
 
-test_safety_logic: test_safety_logic.c $(SAFETY_SRC)
-	@$(CC) $(CFLAGS) -I../common/logic/safety_logic/include $(INCLUDES) -o $@ $^
+test_safety_logic: test_safety_logic.cpp $(SAFETY_SRC)
+	@$(CXX) $(CXXFLAGS) -I../common/logic/safety_logic/include $(INCLUDES) -o $@ $^
 
-test_control_logic: test_control_logic.c $(CONTROL_SRC)
-	@$(CC) $(CFLAGS) -I../common/logic/control_logic/include $(INCLUDES) -o $@ $^
+test_control_logic: test_control_logic.cpp $(CONTROL_SRC)
+	@$(CXX) $(CXXFLAGS) -I../common/logic/control_logic/include -I../common/logic/can_tx_track/include $(INCLUDES) -o $@ $^
 
-test_system_state: test_system_state.c $(SYSTEM_STATE_SRC)
-	@$(CC) $(CFLAGS) -I../common/logic/system_state/include $(INCLUDES) -o $@ $^
+test_system_state: test_system_state.cpp $(SYSTEM_STATE_SRC)
+	@$(CXX) $(CXXFLAGS) -I../common/logic/system_state/include $(INCLUDES) -o $@ $^
 
-esp_idf_mock.o: mocks/esp_idf_mock.c
-	@$(CC) $(CFLAGS) -Imocks -c $< -o $@
+esp_idf_mock.o: mocks/esp_idf_mock.cpp
+	@$(CXX) $(CXXFLAGS) -Imocks -c $< -o $@
 
 test_heartbeat_monitor: test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
-	@$(CXX) $(CXXFLAGS) -Imocks -I../common/services/heartbeat_monitor/include -o $@ test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
+	@$(CXX) $(CXXFLAGS) -Imocks -I../common/services/heartbeat_monitor/include $(INCLUDES) -o $@ test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_mock.o
 
 test_driver_inputs: test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
-	@$(CXX) $(DRIVER_INPUTS_CXXFLAGS) -Imocks -I../control-esp32/components/adc_12bitsar/include -I../control-esp32/components/optocoupler_pc817/include -I../common/protocol/can_protocol/include -o $@ test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
+	@$(CXX) $(DRIVER_INPUTS_CXXFLAGS) -Imocks -I../control-esp32/components/adc_12bitsar/include -I../control-esp32/components/optocoupler_pc817/include $(INCLUDES) -o $@ test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
 
 clean:
 	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs esp_idf_mock.o

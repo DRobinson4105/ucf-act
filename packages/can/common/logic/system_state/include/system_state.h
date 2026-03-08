@@ -15,56 +15,61 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "can_protocol.h"
+
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // ============================================================================
 // System State Machine Inputs
 // ============================================================================
 
-typedef struct {
-    // Current target state (what Safety last commanded)
-    uint8_t current_target;
+typedef struct
+{
+	// Current target state (what Safety last commanded)
+	node_state_t current_target;
 
-    // Timing for INIT -> NOT_READY dwell
-    uint32_t now_ms;
-    uint32_t boot_start_ms;
-    uint32_t init_dwell_ms;
+	// Timing for INIT -> NOT_READY dwell
+	uint32_t now_ms;
+	uint32_t boot_start_ms;
+	uint32_t init_dwell_ms;
 
-    // E-stop evaluation result (from safety_logic)
-    bool estop_active;
+	// E-stop evaluation result (from safety_logic)
+	bool estop_active;
 
-    // Node actual states (from heartbeats)
-    uint8_t planner_state;
-    uint8_t control_state;
+	// Node actual states (from heartbeats)
+	node_state_t planner_state;
+	node_state_t control_state;
 
-    // Heartbeat liveness
-    bool planner_alive;
-    bool control_alive;
+	// Heartbeat liveness
+	bool planner_alive;
+	bool control_alive;
 
-    // Enable completion flags (from heartbeat flags field)
-    bool planner_enable_complete;
-    bool control_enable_complete;
+	// Enable completion flags (from heartbeat flags field)
+	bool planner_enable_complete;
+	bool control_enable_complete;
 
-    // Planner/Orin autonomy-enable request gate (from Planner heartbeat flags)
-    bool autonomy_request;
+	// Planner/Orin autonomy-enable request gate (from Planner heartbeat flags)
+	bool autonomy_request;
 
-    // Planner/Orin autonomy hold level (from Planner heartbeat flags level).
-    // If this drops while target is ENABLE or ACTIVE, Safety retreats target.
-    bool autonomy_hold;
+	// Planner/Orin autonomy hold level (from Planner heartbeat flags level).
+	// If this drops while target is ENABLE or ACTIVE, Safety retreats target.
+	bool autonomy_hold;
 } system_state_inputs_t;
 
 // ============================================================================
 // System State Machine Output
 // ============================================================================
 
-typedef struct {
-    // New target state to broadcast
-    uint8_t new_target;
+typedef struct
+{
+	// New target state to broadcast
+	node_state_t new_target;
 
-    // Whether the target changed (caller should broadcast immediately)
-    bool target_changed;
+	// Whether the target changed (caller should broadcast immediately)
+	bool target_changed;
 } system_state_result_t;
 
 // ============================================================================

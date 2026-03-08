@@ -23,28 +23,24 @@ Two UIM2852CA stepper motors (steering node 5, braking node 6) also share the bu
 
 ## CAN Bus Wiring
 
-Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Planner, Control) are physically co-located. The two stepper motors are mounted several feet away on the cart chassis. Both ESP32-C6 boards use Waveshare SN65HVD230 transceivers (TWAI TX=GPIO4, RX=GPIO5); Planner uses its own CAN interface; the stepper motors have built-in CAN transceivers.
+Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Planner, Control) are physically co-located in the left dashboard compartment. The two stepper motors are mounted several feet away on the cart chassis. Both ESP32-C6 boards use Waveshare SN65HVD230 transceivers (TWAI 3V3, GND, TX=GPIO4, RX=GPIO5); Planner uses its own CAN interface; the stepper motors have built-in CAN transceivers (CAN-H, CAN-L).
 
-### Physical Connections Per Node
+Each CAN node connects to the bus with two signal wires:
 
-Each CAN node requires three wires to the bus:
-
-| Wire  | Description                               |
-|-------|-------------------------------------------|
-| CAN-H | CAN high signal                           |
-| CAN-L | CAN low signal                            |
-| GND   | Common ground reference between all nodes |
+| Wire  | Wire Color | Description      |
+|-------|------------|------------------|
+| CAN-H | Yellow     | CAN high signal |
+| CAN-L | Green      | CAN low signal  |
 
 ### Bus Termination
 
-120 ohm termination resistors between CAN-H and CAN-L, enabled on the Waveshare transceiver boards at **Safety** and **Planner** (both have onboard solder-jumper options for termination). **Control's** Waveshare board has termination **disabled**. The stepper motors do not provide termination.
+120 ohm termination resistors between CAN-H and CAN-L on the Waveshare transceiver boards at **Safety** and **Planner**. **Control's** Waveshare transceiver board has termination disabled by desoldering and removing the resistor. The stepper motors do not provide termination. This setup provides the correct 60 ohms of resistance across the CAN bus.
 
 ### Wiring Notes
 
-- Twisted-pair wiring recommended for CAN-H/CAN-L runs to the stepper motors (several feet)
-- Common GND between all five nodes (ESP32 boards and Planner share cart chassis ground)
-- SN65HVD230 modules powered from their respective ESP32 3.3V rail
-- Stepper motors powered from the 24V autonomous power rail (switched by Safety's power relay)
+- Twisted-pair wiring recommended for CAN-H (Yellow) / CAN-L (Green) runs to the stepper motors (several feet)
+- No dedicated CAN GND wire. All buck converters (5V ESP32, 12V Orin, 24V motors) are non-isolated with inputs fed from the same 48V- bus bar, so all output GNDs are inherently common. A separate CAN GND wire would be redundant.
+- SN65HVD230 modules powered from their respective devices.
 
 ### Message Traffic
 

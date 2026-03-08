@@ -4,6 +4,36 @@
  *
  * High-level API for controlling UIM2852CA integrated servo stepper motors
  * over CAN 2.0B using the SimpleCAN protocol.
+ *
+ * ## Safe Power-On Sequence
+ *
+ * The motor driver can be in an unknown state when 24V power is applied
+ * (hot-start scenario: ESP32 rebooted while relay was on, or motor flash
+ * has auto-enable IC[0]=1 from factory). The required init sequence is:
+ *
+ *   1. CAN bus must be initialized and running (TWAI driver started).
+ *   2. **MO=0** (driver off) — immediately de-energize coils.
+ *   3. **MT[5]=1** (brake engage) — mechanically lock the shaft.
+ *   4. **IC[0]=0** (disable auto-enable) — prevent driver from enabling
+ *      on future power cycles before host configures the motor.
+ *   5. **IC[8]=1** (brake safety interlock) — motor controller refuses
+ *      MO=1 unless brake is explicitly released first.
+ *   6. Configure motion parameters: SP, AC, DC, SD.
+ *   7. Configure software limits: LM[1], LM[2], IC[7]=1.
+ *   8. **MO=0** (redundant disable) — ensure driver stays off.
+ *
+ * Steps 2-8 are performed by init_stepper_checked() in main.cpp.
+ * The ENABLE transition later performs:
+ *
+ *   9. **MT[5]=0** (brake release)
+ *  10. **MO=1** (driver enable)
+ *  11. Begin accepting position commands.
+ *
+ * The DISABLE / E-STOP sequence reverses this:
+ *
+ *  12. **ST** (deceleration stop)
+ *  13. **MT[5]=1** (brake engage)
+ *  14. **MO=0** (driver off)
  */
 
 #pragma once
@@ -19,78 +49,85 @@
 #include "stepper_protocol_uim2852.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
-typedef struct {
-    uint8_t node_id;            // Motor's CAN node ID (default 5)
-    uint8_t producer_id;        // Host controller ID (for logging only, not used in CAN ID)
-    int32_t default_speed;      // Default PTP speed in pulses/sec
-    uint32_t default_accel;     // Default acceleration in pulses/sec^2
-    uint32_t default_decel;     // Default deceleration in pulses/sec^2
-    uint32_t stop_decel;        // Emergency stop deceleration rate
-    bool request_ack;           // Request ACK for commands (recommended)
+typedef struct
+{
+	uint8_t node_id;        // Motor's CAN node ID (default 5)
+	uint8_t producer_id;    // Host controller ID (for logging only, not used in CAN ID)
+	uint32_t default_accel; // Default acceleration in pulses/sec^2
+	uint32_t default_decel; // Default deceleration in pulses/sec^2
+	uint32_t stop_decel;    // Emergency stop deceleration rate
+	bool request_ack;       // Request ACK for commands (recommended)
 } stepper_motor_uim2852_config_t;
 
 // Default configuration
-#define STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT() { \
-    .node_id = 5, \
-    .producer_id = 4, \
-    .default_speed = 3200, \
-    .default_accel = 50000, \
-    .default_decel = 50000, \
-    .stop_decel = 200000, \
-    .request_ack = true, \
-}
+#define STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT() \
+	{                                          \
+		.node_id = 5,                          \
+		.producer_id = 4,                      \
+		.default_accel = 50000,                \
+		.default_decel = 50000,                \
+		.stop_decel = 200000,                  \
+		.request_ack = true,                   \
+	}
 
 // ============================================================================
 // Motor State
 // ============================================================================
 
-typedef struct stepper_motor_uim2852 {
-    stepper_motor_uim2852_config_t config;
-    
-    // Status from last MS[0] query
-    stepper_uim2852_status_t status;
-    
-    // Speed and position from last MS[1] query
-    int32_t current_speed;      // pulses/sec
-    int32_t absolute_position;  // pulses
-    int32_t target_position;    // last commanded absolute position (from go_absolute)
-    
-    // Tracking
-    TickType_t last_response_tick;
-    TickType_t last_command_tick;
-    
-    // Configuration (queried from motor)
-    uint8_t microstep_resolution;  // From PP[5]
-    int32_t pulses_per_rev;        // microstep * 200
-    
-    // Flags
-    bool initialized;
-    bool driver_enabled;
-    bool motion_in_progress;
-    bool ack_pending;
-    uint8_t last_cw_sent;       // Last control word sent
+typedef struct stepper_motor_uim2852
+{
+	stepper_motor_uim2852_config_t config;
 
-    // Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
-    // Forward-declared as void* to avoid circular typedef; actual type matches
-    // stepper_motor_uim2852_notify_cb_t which takes (stepper_motor_uim2852_t *, notif *).
-    void (*notify_callback)(struct stepper_motor_uim2852 *motor, const stepper_uim2852_notification_t *notif);
+	// Status from last MS[0] query
+	stepper_uim2852_status_t status;
 
-    // Synchronous query support (used by query_param to block until response)
-    SemaphoreHandle_t query_sem;        // Binary semaphore signaled when param response arrives
-    uint8_t           query_pending_cw; // CW of the pending query (0 = none)
-    uint8_t           query_pending_idx;// Subindex of the pending query
-    int32_t           query_result;     // Value parsed from param response
+	// Speed and position from last MS[1] query
+	int32_t current_speed;     // pulses/sec
+	int32_t absolute_position; // pulses
+	int32_t target_position;   // last commanded absolute position (from pt_feed)
 
-    // Thread-safety: protects status/motion_in_progress/absolute_position
-    // which are written by process_frame (CAN RX task) and read by control task.
-    portMUX_TYPE      lock;
+	// Tracking
+	TickType_t last_response_tick;
+	TickType_t last_command_tick;
+
+	// Configuration (queried from motor)
+	uint16_t microstep_resolution; // From PP[5] (uint16_t to support 256 microsteps)
+	int32_t pulses_per_rev;        // microstep * 200
+
+	// Flags
+	bool initialized;
+	bool driver_enabled;
+	bool motion_in_progress;
+	bool ack_pending;
+	uint8_t last_cw_sent; // Last control word sent
+
+	// PT (Position-Time) interpolation mode state
+	bool pt_mode_active; // true while PT interpolation is running
+	bool pt_fifo_empty;  // set by PVT FIFO empty notification (0x2A)
+	bool pt_fifo_low;    // set by PVT FIFO low warning notification (0x2B)
+
+	// Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
+	// Forward-declared as void* to avoid circular typedef; actual type matches
+	// stepper_motor_uim2852_notify_cb_t which takes (stepper_motor_uim2852_t *, notif *).
+	void (*notify_callback)(struct stepper_motor_uim2852 *motor, const stepper_uim2852_notification_t *notif);
+
+	// Synchronous query support (used by query_param to block until response)
+	SemaphoreHandle_t query_sem; // Binary semaphore signaled when param response arrives
+	uint8_t query_pending_cw;    // CW of the pending query (0 = none)
+	uint8_t query_pending_idx;   // Subindex of the pending query
+	int32_t query_result;        // Value parsed from param response
+
+	// Thread-safety: protects status/motion_in_progress/absolute_position
+	// which are written by process_frame (CAN RX task) and read by control task.
+	portMUX_TYPE lock;
 } stepper_motor_uim2852_t;
 
 // ============================================================================
@@ -136,9 +173,7 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor);
  * @param upper_limit Upper working limit in pulses (signed)
  * @return ESP_OK on success
  */
-esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor,
-                                            int32_t lower_limit,
-                                            int32_t upper_limit);
+esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t lower_limit, int32_t upper_limit);
 
 // ============================================================================
 // Basic Control
@@ -165,14 +200,8 @@ esp_err_t stepper_motor_uim2852_stop(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_emergency_stop(stepper_motor_uim2852_t *motor);
 
 // ============================================================================
-// Position Control (PTP Mode)
+// Motion Parameters
 // ============================================================================
-
-/**
- * @brief Set speed for position moves
- * @param speed_pps Speed in pulses/sec (positive value, direction from position)
- */
-esp_err_t stepper_motor_uim2852_set_speed(stepper_motor_uim2852_t *motor, int32_t speed_pps);
 
 /**
  * @brief Set acceleration rate
@@ -187,23 +216,64 @@ esp_err_t stepper_motor_uim2852_set_accel(stepper_motor_uim2852_t *motor, uint32
 esp_err_t stepper_motor_uim2852_set_decel(stepper_motor_uim2852_t *motor, uint32_t decel_rate);
 
 /**
- * @brief Move to absolute position
- * @param position Target position in pulses
- * @note Automatically calls BG to begin motion
- */
-esp_err_t stepper_motor_uim2852_go_absolute(stepper_motor_uim2852_t *motor, int32_t position);
-
-/**
- * @brief Move by relative displacement
- * @param displacement Distance to move in pulses (signed for direction)
- * @note Automatically calls BG to begin motion
- */
-esp_err_t stepper_motor_uim2852_go_relative(stepper_motor_uim2852_t *motor, int32_t displacement);
-
-/**
  * @brief Set current position as origin (zero)
  */
 esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
+
+// ============================================================================
+// Position-Time (PT) Interpolation Mode
+// ============================================================================
+// PT mode queues (position, time) waypoints in the motor's internal FIFO.
+// The motor smoothly interpolates between waypoints for jerk-free motion.
+// Each control loop tick feeds one (position, time_ms) waypoint via pt_feed().
+
+/**
+ * @brief Configure PT mode: enable FIFO notifications (IE[10], IE[11])
+ *
+ * Enables PVT FIFO empty and FIFO low warning notifications so the host
+ * can detect when the motor's waypoint buffer needs refilling.
+ * Call once during enable sequence, before pt_start().
+ *
+ * @param motor Motor instance
+ * @return ESP_OK on success
+ */
+esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor);
+
+/**
+ * @brief Start PT interpolation (PV mode=1, start=true)
+ *
+ * Begins consuming queued waypoints from the motor's internal FIFO.
+ * The host should begin feeding waypoints via pt_feed() immediately.
+ *
+ * @param motor Motor instance
+ * @return ESP_OK on success
+ */
+esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor);
+
+/**
+ * @brief Stop PT interpolation (PV mode=1, start=false, then ST)
+ *
+ * Stops consuming waypoints and decelerates to a stop.
+ * Clears pt_mode_active flag.
+ *
+ * @param motor Motor instance
+ * @return ESP_OK on success
+ */
+esp_err_t stepper_motor_uim2852_pt_stop(stepper_motor_uim2852_t *motor);
+
+/**
+ * @brief Feed a position+time waypoint into the PT FIFO (QF quick feed)
+ *
+ * Sends a single packed CAN frame containing the target position and
+ * the time interval to reach it.  Call this at the control loop rate
+ * (e.g. every 20ms with time_ms=20).
+ *
+ * @param motor    Motor instance
+ * @param position Absolute target position in pulses (signed)
+ * @param time_ms  Time to reach position in milliseconds
+ * @return ESP_OK on success
+ */
+esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t position, uint32_t time_ms);
 
 // ============================================================================
 // Status Query
@@ -233,86 +303,100 @@ esp_err_t stepper_motor_uim2852_clear_status(stepper_motor_uim2852_t *motor);
 /**
  * @brief Check if motor is at target position (PAIF flag)
  */
-static inline bool stepper_motor_uim2852_in_position(const stepper_motor_uim2852_t *motor) {
-    return motor->status.in_position;
+static inline bool stepper_motor_uim2852_in_position(const stepper_motor_uim2852_t *motor)
+{
+	return motor->status.in_position;
 }
 
 /**
  * @brief Check if motor is stopped
  */
-static inline bool stepper_motor_uim2852_is_stopped(const stepper_motor_uim2852_t *motor) {
-    return motor->status.stopped;
+static inline bool stepper_motor_uim2852_is_stopped(const stepper_motor_uim2852_t *motor)
+{
+	return motor->status.stopped;
 }
 
 /**
  * @brief Check if stall was detected (TLIF flag)
  */
-static inline bool stepper_motor_uim2852_stall_detected(const stepper_motor_uim2852_t *motor) {
-    return motor->status.stall_detected;
+static inline bool stepper_motor_uim2852_stall_detected(const stepper_motor_uim2852_t *motor)
+{
+	return motor->status.stall_detected;
 }
 
 /**
  * @brief Check if motor driver is enabled
  */
-static inline bool stepper_motor_uim2852_is_enabled(const stepper_motor_uim2852_t *motor) {
-    return motor->status.driver_on;
+static inline bool stepper_motor_uim2852_is_enabled(const stepper_motor_uim2852_t *motor)
+{
+	return motor->status.driver_on;
 }
 
 /**
  * @brief Check if any error flag is set
  */
-static inline bool stepper_motor_uim2852_has_error(const stepper_motor_uim2852_t *motor) {
-    return motor->status.error_detected;
+static inline bool stepper_motor_uim2852_has_error(const stepper_motor_uim2852_t *motor)
+{
+	return motor->status.error_detected;
 }
 
 /**
  * @brief Get current absolute position (from last query)
  */
-static inline int32_t stepper_motor_uim2852_get_position(const stepper_motor_uim2852_t *motor) {
-    return motor->absolute_position;
+static inline int32_t stepper_motor_uim2852_get_position(const stepper_motor_uim2852_t *motor)
+{
+	return motor->absolute_position;
 }
 
 /**
  * @brief Get current speed (from last query)
  */
-static inline int32_t stepper_motor_uim2852_get_speed(const stepper_motor_uim2852_t *motor) {
-    return motor->current_speed;
+static inline int32_t stepper_motor_uim2852_get_speed(const stepper_motor_uim2852_t *motor)
+{
+	return motor->current_speed;
 }
 
 /**
- * @brief Get last commanded target position (from go_absolute)
+ * @brief Get last commanded target position (from pt_feed)
  */
-static inline int32_t stepper_motor_uim2852_get_target_position(const stepper_motor_uim2852_t *motor) {
-    return motor->target_position;
+static inline int32_t stepper_motor_uim2852_get_target_position(const stepper_motor_uim2852_t *motor)
+{
+	return motor->target_position;
 }
 
 /**
  * @brief Check if motion is currently in progress
  */
-static inline bool stepper_motor_uim2852_is_motion_in_progress(const stepper_motor_uim2852_t *motor) {
-    if (!motor) return false;
-    stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
-    taskENTER_CRITICAL(&m->lock);
-    bool in_progress = m->motion_in_progress;
-    taskEXIT_CRITICAL(&m->lock);
-    return in_progress;
+static inline bool stepper_motor_uim2852_is_motion_in_progress(const stepper_motor_uim2852_t *motor)
+{
+	if (!motor)
+		return false;
+	stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
+	taskENTER_CRITICAL(&m->lock);
+	bool in_progress = m->motion_in_progress;
+	taskEXIT_CRITICAL(&m->lock);
+	return in_progress;
 }
 
 /**
  * @brief Compute absolute position error (|target - actual|)
  * @return Position error in pulses (always >= 0)
  */
-static inline int32_t stepper_motor_uim2852_position_error(const stepper_motor_uim2852_t *motor) {
-    if (!motor) return 0;
-    stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
-    taskENTER_CRITICAL(&m->lock);
-    int32_t target = m->target_position;
-    int32_t actual = m->absolute_position;
-    taskEXIT_CRITICAL(&m->lock);
-    int64_t err = (int64_t)target - (int64_t)actual;
-    if (err < 0) err = -err;
-    if (err > INT32_MAX) return INT32_MAX;
-    return (int32_t)err;
+static inline int32_t stepper_motor_uim2852_position_error(const stepper_motor_uim2852_t *motor)
+{
+	if (!motor)
+		return 0;
+	stepper_motor_uim2852_t *m = (stepper_motor_uim2852_t *)motor;
+	taskENTER_CRITICAL(&m->lock);
+	int32_t target = m->target_position;
+	int32_t actual = m->absolute_position;
+	taskEXIT_CRITICAL(&m->lock);
+	int64_t err = (int64_t)target - (int64_t)actual;
+	if (err < 0)
+		err = -err;
+	if (err > INT32_MAX)
+		return INT32_MAX;
+	return (int32_t)err;
 }
 
 // ============================================================================
@@ -331,9 +415,8 @@ static inline int32_t stepper_motor_uim2852_position_error(const stepper_motor_u
  * @param timeout_ticks Maximum allowed silence (e.g. pdMS_TO_TICKS(500))
  * @return true if the motor is unresponsive (timed out), false otherwise
  */
-bool stepper_motor_uim2852_check_liveness(const stepper_motor_uim2852_t *motor,
-                                           TickType_t now_tick,
-                                           TickType_t timeout_ticks);
+bool stepper_motor_uim2852_check_liveness(const stepper_motor_uim2852_t *motor, TickType_t now_tick,
+                                          TickType_t timeout_ticks);
 
 // ============================================================================
 // CAN Frame Processing
@@ -356,14 +439,14 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
  * @param motor Motor that generated the notification
  * @param notif Notification details
  */
-typedef void (*stepper_motor_uim2852_notify_cb_t)(stepper_motor_uim2852_t *motor, 
-                                                   const stepper_uim2852_notification_t *notif);
+typedef void (*stepper_motor_uim2852_notify_cb_t)(stepper_motor_uim2852_t *motor,
+                                                  const stepper_uim2852_notification_t *notif);
 
 /**
  * @brief Set notification callback for a motor
  */
-void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor, 
-                                                stepper_motor_uim2852_notify_cb_t callback);
+void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor,
+                                               stepper_motor_uim2852_notify_cb_t callback);
 
 // ============================================================================
 // Low-Level Access
@@ -377,8 +460,8 @@ void stepper_motor_uim2852_set_notify_callback(stepper_motor_uim2852_t *motor,
  * @param dl Data length
  * @return ESP_OK on successful transmit
  */
-esp_err_t stepper_motor_uim2852_send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw,
-                                                  const uint8_t *data, uint8_t dl);
+esp_err_t stepper_motor_uim2852_send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, const uint8_t *data,
+                                                 uint8_t dl);
 
 /**
  * @brief Query a parameter value
@@ -388,8 +471,7 @@ esp_err_t stepper_motor_uim2852_send_instruction(stepper_motor_uim2852_t *motor,
  * @param value Output value (NULL to skip)
  * @return ESP_OK on success
  */
-esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint8_t cw, 
-                                             uint8_t index, int32_t *value);
+esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint8_t cw, uint8_t index, int32_t *value);
 
 /**
  * @brief Set a parameter value
@@ -399,8 +481,7 @@ esp_err_t stepper_motor_uim2852_query_param(stepper_motor_uim2852_t *motor, uint
  * @param value Value to set
  * @return ESP_OK on success
  */
-esp_err_t stepper_motor_uim2852_set_param(stepper_motor_uim2852_t *motor, uint8_t cw,
-                                           uint8_t index, int32_t value);
+esp_err_t stepper_motor_uim2852_set_param(stepper_motor_uim2852_t *motor, uint8_t cw, uint8_t index, int32_t value);
 
 #ifdef __cplusplus
 }

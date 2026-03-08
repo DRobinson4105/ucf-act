@@ -153,6 +153,8 @@ Internal to Control — NOT transmitted over CAN.
 | 0x00 | NONE       | No override                   |
 | 0x01 | PEDAL      | Accelerator pedal pressed     |
 | 0x02 | FR_CHANGED | F/R switch moved from Forward |
+| 0x03 | STEERING   | Steering wheel override        |
+| 0x04 | BRAKING    | Brake pedal override           |
 
 ## Stale Command Detection
 
