@@ -15,6 +15,10 @@
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
 
+#ifdef CONFIG_THROTTLE_TEST_MODE
+#include <fcntl.h>
+#endif
+
 #include "can_protocol.h"
 #include "can_twai.h"
 #include "led_ws2812.h"
@@ -67,6 +71,9 @@
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 #error "PRODUCTION_BUILD: CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING must be disabled"
+#endif
+#ifdef CONFIG_THROTTLE_TEST_MODE
+#error "PRODUCTION_BUILD: CONFIG_THROTTLE_TEST_MODE must be disabled"
 #endif
 #endif // CONFIG_PRODUCTION_BUILD
 
@@ -290,7 +297,9 @@ volatile bool g_stepper_steering_ready = false;
 volatile bool g_stepper_braking_ready = false;
 
 // CAN RX task handle — used to verify quiesce during recovery.
+#ifndef CONFIG_THROTTLE_TEST_MODE
 TaskHandle_t g_can_rx_task_handle = nullptr;
+#endif
 
 // Spinlock for CAN TX tracking / recovery (used by control_task + heartbeat_task)
 portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -516,6 +525,7 @@ fr_state_t fr_state_debounced(void)
 	return optocoupler_pc817_get_state();
 }
 
+#ifndef CONFIG_THROTTLE_TEST_MODE
 /**
  * @brief Log the initialization status of all Control ESP32 peripherals.
  *
@@ -648,6 +658,7 @@ void log_startup_device_status(bool twai_ready, bool mux_ready, bool throttle_re
 	else
 		ESP_LOGW(TAG_INIT, "HEARTBEAT_LED: UNAVAILABLE (non-critical)");
 }
+#endif // !CONFIG_THROTTLE_TEST_MODE
 
 /**
  * @brief Initialize and configure a stepper motor with hot-start protection.
@@ -1759,6 +1770,7 @@ bool attempt_fault_recovery()
 	return all_required_components_ready();
 }
 
+#ifndef CONFIG_THROTTLE_TEST_MODE
 // ============================================================================
 // CAN RX Task
 // ============================================================================
@@ -2474,6 +2486,217 @@ void heartbeat_task(void *param)
 		vTaskDelay(HEARTBEAT_SEND_INTERVAL);
 	}
 }
+#endif // !CONFIG_THROTTLE_TEST_MODE
+
+// ============================================================================
+// Throttle Test Task (CONFIG_THROTTLE_TEST_MODE)
+// ============================================================================
+
+#ifdef CONFIG_THROTTLE_TEST_MODE
+/**
+ * @brief Standalone throttle test task — serial-controlled throttle levels.
+ *
+ * Replaces the normal CAN-based control loop when CONFIG_THROTTLE_TEST_MODE
+ * is enabled.  Reads single keypresses from USB serial (0-7, d, q) and
+ * directly drives the DG408DJZ mux / relay hardware.  No CAN, steppers,
+ * or Safety/Planner dependencies.
+ *
+ * Safety behavior:
+ *   - Requires F/R in FORWARD to arm.
+ *   - Immediately disables all actuators if F/R leaves FORWARD or pedal
+ *     is pressed above threshold.
+ *   - Auto-recovers when conditions clear.
+ *
+ * @param param  Unused (NULL)
+ */
+void throttle_test_task(void *param)
+{
+	(void)param;
+	task_wdt_add_self_or_log("throttle_test");
+	bool wdt_reset_failed = false;
+
+	static const char *TAG_TEST = "THROTTLE_TEST";
+
+	// Configure stdin for non-blocking, unbuffered reads so single
+	// keypresses are received without waiting for enter.
+	setvbuf(stdin, NULL, _IONBF, 0);
+	int stdin_flags = fcntl(fileno(stdin), F_GETFL, 0);
+	fcntl(fileno(stdin), F_SETFL, stdin_flags | O_NONBLOCK);
+
+	ESP_LOGI(TAG_TEST, "========================================");
+	ESP_LOGI(TAG_TEST, "  THROTTLE TEST MODE");
+	ESP_LOGI(TAG_TEST, "  0-7: set throttle level");
+	ESP_LOGI(TAG_TEST, "  d:   disable (mux off)");
+	ESP_LOGI(TAG_TEST, "  q:   quit (shutdown all)");
+	ESP_LOGI(TAG_TEST, "========================================");
+
+	bool armed = false;
+	int8_t current_level = -1; // -1 = disabled
+	uint32_t last_waiting_log_ms = 0;
+
+	while (true)
+	{
+		task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+		uint32_t now_ms = get_time_ms();
+
+		update_driver_inputs(now_ms);
+
+		fr_state_t fr = fr_state_debounced();
+#ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
+		fr = FR_STATE_FORWARD;
+#endif
+
+		bool pedal_is_pressed = pedal_pressed();
+#ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
+		pedal_is_pressed = false;
+#endif
+
+		// Read serial input (non-blocking)
+		int ch = fgetc(stdin);
+
+		// Handle quit regardless of armed state
+		if (ch == 'q' || ch == 'Q')
+		{
+			ESP_LOGI(TAG_TEST, "Quit requested");
+			if (armed)
+			{
+				(void)multiplexer_dg408djz_disable();
+				(void)multiplexer_dg408djz_emergency_stop();
+				(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+				(void)relay_jd2912_deenergize();
+			}
+			led_ws2812_set_state(NODE_STATE_INIT);
+			ESP_LOGI(TAG_TEST, "Shutdown complete — idle");
+
+			while (true)
+			{
+				task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+				vTaskDelay(pdMS_TO_TICKS(1000));
+			}
+		}
+
+		// Check trip conditions while armed
+		if (armed)
+		{
+			const char *trip_reason = nullptr;
+			if (fr != FR_STATE_FORWARD)
+				trip_reason = "F/R left FORWARD";
+			else if (pedal_is_pressed)
+				trip_reason = "pedal pressed";
+
+			if (trip_reason)
+			{
+				ESP_LOGW(TAG_TEST, "%s — throttle DISABLED", trip_reason);
+				(void)multiplexer_dg408djz_disable();
+				(void)multiplexer_dg408djz_emergency_stop();
+				(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+				(void)relay_jd2912_deenergize();
+				armed = false;
+				current_level = -1;
+				led_ws2812_set_state(NODE_STATE_NOT_READY);
+			}
+		}
+
+		// Try to arm if not armed and conditions are met
+		if (!armed)
+		{
+			bool can_arm = (fr == FR_STATE_FORWARD) && !pedal_is_pressed;
+
+			if (can_arm)
+			{
+				ESP_LOGI(TAG_TEST, "F/R FORWARD, pedal clear — arming throttle");
+
+				// Enable sequence (same order as production, minus steppers)
+				esp_err_t err = relay_jd2912_energize();
+				if (err != ESP_OK)
+				{
+					ESP_LOGE(TAG_TEST, "Pedal bypass relay failed: %s", esp_err_to_name(err));
+					vTaskDelay(pdMS_TO_TICKS(500));
+					continue;
+				}
+
+				err = multiplexer_dg408djz_set_level(0);
+				if (err != ESP_OK)
+				{
+					ESP_LOGE(TAG_TEST, "Mux set level 0 failed: %s", esp_err_to_name(err));
+					(void)relay_jd2912_deenergize();
+					vTaskDelay(pdMS_TO_TICKS(500));
+					continue;
+				}
+
+				err = relay_srd05vdc_enable(&g_throttle_relay_cfg);
+				if (err != ESP_OK)
+				{
+					ESP_LOGE(TAG_TEST, "Throttle relay failed: %s", esp_err_to_name(err));
+					(void)multiplexer_dg408djz_disable();
+					(void)relay_jd2912_deenergize();
+					vTaskDelay(pdMS_TO_TICKS(500));
+					continue;
+				}
+
+				vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle
+
+				err = multiplexer_dg408djz_enable_autonomous();
+				if (err != ESP_OK)
+				{
+					ESP_LOGE(TAG_TEST, "Mux enable autonomous failed: %s", esp_err_to_name(err));
+					(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+					(void)multiplexer_dg408djz_disable();
+					(void)relay_jd2912_deenergize();
+					vTaskDelay(pdMS_TO_TICKS(500));
+					continue;
+				}
+
+				armed = true;
+				current_level = 0;
+				led_ws2812_set_state(NODE_STATE_READY);
+				ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 — enter command");
+			}
+			else
+			{
+				if (now_ms - last_waiting_log_ms >= 2000)
+				{
+					ESP_LOGI(TAG_TEST, "Waiting: fr=%s pedal=%s", fr_state_to_string(fr),
+					         pedal_is_pressed ? "pressed" : "clear");
+					last_waiting_log_ms = now_ms;
+				}
+			}
+		}
+
+		// Handle throttle input when armed
+		if (armed && ch != EOF)
+		{
+			if (ch >= '0' && ch <= '7')
+			{
+				int8_t level = (int8_t)(ch - '0');
+				if (level != current_level)
+				{
+					esp_err_t err = multiplexer_dg408djz_set_level(level);
+					if (err == ESP_OK)
+					{
+						current_level = level;
+						ESP_LOGI(TAG_TEST, "Throttle level: %d", level);
+						led_ws2812_set_state(level > 0 ? NODE_STATE_ACTIVE : NODE_STATE_READY);
+					}
+					else
+					{
+						ESP_LOGE(TAG_TEST, "Mux set level %d failed: %s", level, esp_err_to_name(err));
+					}
+				}
+			}
+			else if (ch == 'd' || ch == 'D')
+			{
+				(void)multiplexer_dg408djz_disable();
+				current_level = -1;
+				ESP_LOGI(TAG_TEST, "Throttle DISABLED (mux off)");
+				led_ws2812_set_state(NODE_STATE_READY);
+			}
+		}
+
+		vTaskDelay(CONTROL_LOOP_INTERVAL);
+	}
+}
+#endif // CONFIG_THROTTLE_TEST_MODE
 
 // ============================================================================
 // Main Task
@@ -2496,6 +2719,75 @@ void main_task(void *param)
 
 	g_control_state = NODE_STATE_INIT;
 	g_boot_start_ms = get_time_ms();
+
+#ifdef CONFIG_THROTTLE_TEST_MODE
+	// ----------------------------------------------------------------
+	// Throttle Test Mode: init only throttle-related hardware, then
+	// create the test task.  No CAN, steppers, or Safety/Planner.
+	// ----------------------------------------------------------------
+
+	esp_err_t err = led_ws2812_init();
+	bool heartbeat_ready = (err == ESP_OK);
+	if (heartbeat_ready)
+		led_ws2812_set_state(NODE_STATE_INIT);
+
+	g_mux_ready = (multiplexer_dg408djz_init(&g_mux_cfg) == ESP_OK);
+	g_throttle_relay_ready = (relay_srd05vdc_init(&g_throttle_relay_cfg) == ESP_OK);
+	g_relay_ready = (relay_jd2912_init(&g_relay_cfg) == ESP_OK);
+
+#ifndef CONFIG_BYPASS_INPUT_PEDAL_ADC
+	g_pedal_input_ready = (init_pedal_input() == ESP_OK);
+#else
+	g_pedal_input_ready = true;
+#endif
+
+#ifndef CONFIG_BYPASS_INPUT_FR_SENSOR
+	g_fr_inputs_ready = (init_fr_inputs() == ESP_OK);
+#else
+	g_fr_inputs_ready = true;
+#endif
+
+	ESP_LOGI(TAG_INIT, "--- THROTTLE TEST MODE ---");
+	ESP_LOGI(TAG_INIT, "MULTIPLEXER: %s (a0=%d a1=%d a2=%d en=%d)", g_mux_ready ? "OK" : "FAILED", g_mux_cfg.a0,
+	         g_mux_cfg.a1, g_mux_cfg.a2, g_mux_cfg.en);
+	ESP_LOGI(TAG_INIT, "THROTTLE_RELAY: %s (gpio=%d)", g_throttle_relay_ready ? "OK" : "FAILED",
+	         g_throttle_relay_cfg.gpio);
+	ESP_LOGI(TAG_INIT, "PEDAL_RELAY: %s (gpio=%d)", g_relay_ready ? "OK" : "FAILED", g_relay_cfg.gpio);
+#ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
+	ESP_LOGW(TAG_INIT, "PEDAL_INPUT: BYPASSED");
+#else
+	ESP_LOGI(TAG_INIT, "PEDAL_INPUT: %s", g_pedal_input_ready ? "OK" : "FAILED");
+#endif
+#ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
+	ESP_LOGW(TAG_INIT, "FR_INPUT: BYPASSED (forcing FORWARD)");
+#else
+	ESP_LOGI(TAG_INIT, "FR_INPUT: %s (fwd_gpio=%d rev_gpio=%d)", g_fr_inputs_ready ? "OK" : "FAILED",
+	         g_fr_pc817_cfg.forward_gpio, g_fr_pc817_cfg.reverse_gpio);
+#endif
+	ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: %s", heartbeat_ready ? "OK" : "UNAVAILABLE");
+	ESP_LOGI(TAG_INIT, "Skipped: CAN/TWAI, steppers, Safety/Planner");
+
+	if (!g_mux_ready || !g_throttle_relay_ready || !g_relay_ready)
+	{
+		ESP_LOGE(TAG_INIT, "Required throttle hardware init failed — test task will report errors");
+		if (heartbeat_ready)
+			led_ws2812_set_state(NODE_STATE_FAULT);
+	}
+
+	if (xTaskCreate(throttle_test_task, "throttle_test", CONTROL_TASK_STACK, nullptr, CONTROL_TASK_PRIO, nullptr) !=
+	    pdPASS)
+	{
+		ESP_LOGE(TAG_INIT, "Failed to create throttle test task, restarting");
+		esp_restart();
+	}
+
+	vTaskDelete(nullptr);
+
+#else // !CONFIG_THROTTLE_TEST_MODE
+
+	// ----------------------------------------------------------------
+	// Normal Mode: full system initialization
+	// ----------------------------------------------------------------
 
 	// Initialize TWAI once during startup. If it fails, mark FAULT and let
 	// background per-component retries handle recovery.
@@ -2658,6 +2950,7 @@ void main_task(void *param)
 	}
 
 	vTaskDelete(nullptr);
+#endif // CONFIG_THROTTLE_TEST_MODE
 }
 } // namespace
 

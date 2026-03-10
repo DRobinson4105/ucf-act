@@ -8,6 +8,29 @@ config PRODUCTION_BUILD
         This prevents accidental deployment of bench-test firmware
         onto the vehicle.
 
+config THROTTLE_TEST_MODE
+    bool "Throttle test mode (standalone serial throttle control)"
+    default n
+    help
+        Replace the normal CAN-based control loop with a standalone
+        throttle test task. Reads throttle levels 0-7 from USB serial
+        keypress (no enter required). Skips CAN, steppers, and
+        Safety/Planner dependencies entirely.
+
+        Useful for validating throttle hardware wiring on the cart
+        (DG408DJZ mux, SRD-05VDC throttle relay, JD-2912 pedal
+        bypass relay, F/R optocouplers, pedal ADC) without the full
+        system operational.
+
+        Controls (via idf.py monitor or serial terminal):
+          0-7  Set throttle level
+          d    Disable (mux off, level 0)
+          q    Quit (shutdown all actuators)
+
+        Safety behavior: requires F/R in FORWARD to arm. Immediately
+        disables all actuators if F/R leaves FORWARD or pedal is
+        pressed. Auto-recovers when conditions clear.
+
 menu "Test Bypasses"
 
     menu "Safety Mirror"
