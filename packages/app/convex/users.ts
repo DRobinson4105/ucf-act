@@ -1,31 +1,32 @@
+import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
-export const store = mutation({
-  args: {},
-  handler: async (ctx) => {
+export const storeUser = mutation({
+  args: {
+    name: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Called storeUser without authentication present");
-    }
+    if (!identity) throw new Error("Called storeUser without authentication");
 
-    // Check if we've already stored this identity before.
-    const user = await ctx.db
+    const existing = await ctx.db
       .query("users")
       .withIndex("by_token", (q) =>
         q.eq("tokenIdentifier", identity.tokenIdentifier)
       )
       .unique();
 
-    if (user !== null) {
-      // If we've seen this identity before but the name has changed, patch the value.
-      if (user.name !== identity.name) {
-        await ctx.db.patch(user._id, { name: identity.name! });
+    const name = args.name || identity.name || identity.email?.split("@")[0] || "ACT User";
+
+    if (existing !== null) {
+      if (existing.name !== name) {
+        await ctx.db.patch(existing._id, { name });
       }
-      return user._id;
+      return existing._id;
     }
-    // If it's a new identity, create a new `User`.
+
     return await ctx.db.insert("users", {
-      name: identity.name!,
+      name,
       tokenIdentifier: identity.tokenIdentifier,
       email: identity.email,
     });
@@ -36,14 +37,44 @@ export const currentUser = query({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return null;
-    }
+    if (!identity) return null;
     return await ctx.db
       .query("users")
       .withIndex("by_token", (q) =>
         q.eq("tokenIdentifier", identity.tokenIdentifier)
       )
       .unique();
+  },
+});
+
+export const updateUser = mutation({
+  args: {
+    name: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    settings: v.optional(
+      v.object({
+        notificationsEnabled: v.boolean(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_token", (q) =>
+        q.eq("tokenIdentifier", identity.tokenIdentifier)
+      )
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const patch: Record<string, unknown> = {};
+    if (args.name !== undefined) patch.name = args.name;
+    if (args.phone !== undefined) patch.phone = args.phone;
+    if (args.settings !== undefined) patch.settings = args.settings;
+
+    await ctx.db.patch(user._id, patch);
+    return user._id;
   },
 });

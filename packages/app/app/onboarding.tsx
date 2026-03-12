@@ -1,113 +1,136 @@
+import { api } from "@/convex/_generated/api";
 import Colors from "@/constants/colors";
-import { useAuth } from "@/contexts/AuthContext";
-import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { setAppleToken, TOKEN_STORAGE_KEY, useAuth } from "@/contexts/AuthContext";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as SecureStore from "expo-secure-store";
 import * as Location from "expo-location";
 import { router } from "expo-router";
-import { Bell, Check, ChevronRight, MapPin } from "lucide-react-native";
-import React, { useState } from "react";
+import { Bell, Check } from "lucide-react-native";
+import React, { useCallback, useState } from "react";
+import { useMutation } from "convex/react";
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type OnboardingStep =
-  | "welcome"
-  | "name"
-  | "phone"
-  | "verify"
-  | "location"
-  | "notifications"
-  | "complete";
+type OnboardingStep = "welcome" | "location" | "notifications" | "complete";
 
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const { completeOnboarding } = useAuth();
+  const storeUserMutation = useMutation(api.users.storeUser);
 
   const [step, setStep] = useState<OnboardingStep>("welcome");
-  const [name, setName] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [verificationCode, setVerificationCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
-  const totalSteps = 6;
-  const currentStepNumber = {
-    welcome: 0,
-    name: 1,
-    phone: 2,
-    verify: 3,
-    location: 4,
-    notifications: 5,
-    complete: 6,
-  }[step];
+  // Retry storeUser until the Convex WebSocket auth handshake completes.
+  // useConvexAuth().isAuthenticated reflects our hook state (token present),
+  // NOT server confirmation — so we can't gate on it. Instead we retry with
+  // exponential backoff until the mutation succeeds.
+  const storeUserWithRetry = useCallback(
+    async (attemptsLeft = 6, delay = 150) => {
+      const pendingName = await AsyncStorage.getItem("act_pending_name");
+      try {
+        await storeUserMutation({ name: pendingName || undefined });
+        await AsyncStorage.removeItem("act_pending_name");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (
+          (msg.includes("without authentication") || msg.includes("Unauthenticated")) &&
+          attemptsLeft > 0
+        ) {
+          setTimeout(() => storeUserWithRetry(attemptsLeft - 1, Math.min(delay * 2, 2000)), delay);
+        } else {
+          console.error("storeUser failed permanently:", e);
+        }
+      }
+    },
+    [storeUserMutation]
+  );
 
+  const totalSteps = 3;
+  const currentStepNumber = { welcome: 0, location: 1, notifications: 2, complete: 3 }[step];
   const progress = currentStepNumber / totalSteps;
 
-  const handleNext = async () => {
-    if (step === "welcome") {
-      setStep("name");
-    } else if (step === "name") {
-      if (name.trim()) {
-        setStep("phone");
+  const handleAppleSignIn = async () => {
+    setIsLoading(true);
+    setAuthError(null);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (!credential.identityToken) {
+        throw new Error("No identity token from Apple");
       }
-    } else if (step === "phone") {
-      if (phoneNumber.length >= 10) {
-        setIsLoading(true);
-        setTimeout(() => {
-          setIsLoading(false);
-          setStep("verify");
-        }, 1000);
+
+      // Build name from Apple credential (only sent on first sign-in)
+      let name: string | undefined;
+      if (credential.fullName) {
+        const parts = [
+          credential.fullName.givenName,
+          credential.fullName.familyName,
+        ].filter(Boolean);
+        if (parts.length > 0) name = parts.join(" ");
       }
-    } else if (step === "verify") {
-      if (verificationCode.length === 6) {
-        setIsLoading(true);
-        setTimeout(() => {
-          setIsLoading(false);
-          setStep("location");
-        }, 1000);
+
+      // Store name so storeUserWithRetry can pick it up
+      if (name) await AsyncStorage.setItem("act_pending_name", name);
+      // Set token — triggers ConvexProviderWithAuth to begin WebSocket auth
+      await SecureStore.setItemAsync(TOKEN_STORAGE_KEY, credential.identityToken);
+      setAppleToken(credential.identityToken);
+      // Fire storeUser in background with retry; the first attempt may arrive
+      // before the server auth handshake completes — retries handle that gap.
+      storeUserWithRetry();
+
+      setStep("location");
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      // User cancelled — don't show error
+      if (e?.code === "ERR_REQUEST_CANCELED") {
+        return;
       }
-    } else if (step === "location") {
-      setIsLoading(true);
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        console.log("Location permission status:", status);
-        setIsLoading(false);
-        setStep("notifications");
-      } catch (error) {
-        console.error("Error requesting location permission:", error);
-        setIsLoading(false);
-        setStep("notifications");
-      }
-    } else if (step === "notifications") {
-      setIsLoading(true);
-      try {
-        await completeOnboarding({
-          name,
-          phoneNumber,
-        });
-        setStep("complete");
-        setTimeout(() => {
-          setIsLoading(false);
-          router.replace("/(tabs)");
-        }, 2000);
-      } catch (error) {
-        console.error("Error completing onboarding:", error);
-        setIsLoading(false);
-      }
+      console.error("Apple sign-in error:", err);
+      setAuthError(e?.message || "Sign in failed. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const canProceed = () => {
-    if (step === "name") return name.trim().length > 0;
-    if (step === "phone") return phoneNumber.length >= 10;
-    if (step === "verify") return verificationCode.length === 6;
-    return true;
+  const handleLocation = async () => {
+    setIsLoading(true);
+    try {
+      await Location.requestForegroundPermissionsAsync();
+    } catch {
+      // Permission denied is fine — proceed anyway
+    } finally {
+      setIsLoading(false);
+      setStep("notifications");
+    }
+  };
+
+  const handleNotifications = async () => {
+    setIsLoading(true);
+    try {
+      await completeOnboarding();
+      setStep("complete");
+      setTimeout(() => router.replace("/(tabs)"), 1500);
+    } catch (err) {
+      console.error("Error completing onboarding:", err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const renderProgressBar = () => (
@@ -123,100 +146,55 @@ export default function OnboardingScreen() {
 
   const renderWelcome = () => (
     <View className="items-center py-10">
-      <Text className="text-8xl mb-6">
-      <MaterialCommunityIcons name="golf-cart" size={80} color={Colors.primary} />
-      </Text>
+      <MaterialCommunityIcons name="golf-cart" size={80} color={Colors.primary} style={{ marginBottom: 24 }} />
       <Text className="text-3xl font-bold text-text text-center mb-3">Welcome to ACT</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
-        Safe, reliable rides around campus. Let&apos;s get you set up in just a few steps.
+      <Text className="text-base text-textSecondary text-center leading-6 mb-10">
+        Safe, autonomous rides around campus. Sign in with Apple to get started.
       </Text>
-    </View>
-  );
 
-  const renderName = () => (
-    <View className="items-center py-10">
-      <Text className="text-3xl font-bold text-text text-center mb-3">What&apos;s your name?</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
-        This helps drivers identify you during pickup
-      </Text>
-      <TextInput
-        className="w-full bg-surface rounded-2xl px-5 py-4.5 text-lg text-text border border-border"
-        value={name}
-        onChangeText={setName}
-        placeholder="Enter your full name"
-        placeholderTextColor={Colors.textSecondary}
-        autoFocus
-        autoCapitalize="words"
-      />
-    </View>
-  );
-
-  const renderPhone = () => (
-    <View className="items-center py-10">
-      <Text className="text-3xl font-bold text-text text-center mb-3">Enter your phone number</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
-        We&apos;ll send you a verification code to confirm your number
-      </Text>
-      <View className="w-full flex-row items-center bg-surface rounded-2xl px-5 py-4.5 border border-border gap-3">
-        <Text className="text-lg font-semibold text-text">+1</Text>
-        <TextInput
-          className="flex-1 text-lg text-text"
-          value={phoneNumber}
-          onChangeText={setPhoneNumber}
-          placeholder="(555) 123-4567"
-          placeholderTextColor={Colors.textSecondary}
-          keyboardType="phone-pad"
-          maxLength={14}
-          autoFocus
+      {Platform.OS === "ios" ? (
+        <AppleAuthentication.AppleAuthenticationButton
+          buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+          buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE_OUTLINE}
+          cornerRadius={16}
+          style={{ width: "100%", height: 56 }}
+          onPress={handleAppleSignIn}
         />
-      </View>
-    </View>
-  );
+      ) : (
+        <TouchableOpacity
+          className="w-full bg-surface rounded-2xl py-4 items-center border border-border"
+          onPress={handleAppleSignIn}
+          disabled={isLoading}
+        >
+          <Text className="text-base font-semibold text-text">Sign in with Apple</Text>
+        </TouchableOpacity>
+      )}
 
-  const renderVerify = () => (
-    <View className="items-center py-10">
-      <Text className="text-3xl font-bold text-text text-center mb-3">Enter verification code</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
-        We sent a 6-digit code to {phoneNumber}
-      </Text>
-      <TextInput
-        className="w-full bg-surface rounded-2xl px-5 py-4.5 text-lg text-text border border-border text-center font-semibold tracking-widest text-4xl"
-        value={verificationCode}
-        onChangeText={setVerificationCode}
-        placeholder="000000"
-        placeholderTextColor={Colors.textSecondary}
-        keyboardType="number-pad"
-        maxLength={6}
-        autoFocus
-      />
-      <TouchableOpacity className="mt-4">
-        <Text className="text-base font-semibold text-primary">Resend code</Text>
-      </TouchableOpacity>
+      {isLoading && <ActivityIndicator color={Colors.primary} style={{ marginTop: 16 }} />}
+      {authError && (
+        <Text className="text-sm text-error text-center mt-4">{authError}</Text>
+      )}
     </View>
   );
 
   const renderLocation = () => (
     <View className="items-center py-10">
       <View className="w-24 h-24 rounded-full bg-surface items-center justify-center mb-6">
-        <MapPin size={40} color={Colors.primary} />
+        <MaterialCommunityIcons name="map-marker" size={40} color={Colors.primary} />
       </View>
       <Text className="text-3xl font-bold text-text text-center mb-3">Enable location services</Text>
       <Text className="text-base text-textSecondary text-center leading-6 mb-8">We need your location to:</Text>
       <View className="w-full gap-4">
-        <View className="flex-row items-center gap-3">
-          <Check size={20} color={Colors.success} />
-          <Text className="flex-1 text-base text-text">Show nearby pickup points</Text>
-        </View>
-        <View className="flex-row items-center gap-3">
-          <Check size={20} color={Colors.success} />
-          <Text className="flex-1 text-base text-text">Track your ride in real-time</Text>
-        </View>
-        <View className="flex-row items-center gap-3">
-          <Check size={20} color={Colors.success} />
-          <Text className="flex-1 text-base text-text">
-            Ensure safe and accurate pickups
-          </Text>
-        </View>
+        {[
+          "Show nearby pickup points",
+          "Track your ride in real-time",
+          "Ensure safe and accurate pickups",
+        ].map((item) => (
+          <View key={item} className="flex-row items-center gap-3">
+            <Check size={20} color={Colors.success} />
+            <Text className="flex-1 text-base text-text">{item}</Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -227,20 +205,20 @@ export default function OnboardingScreen() {
         <Bell size={40} color={Colors.primary} />
       </View>
       <Text className="text-3xl font-bold text-text text-center mb-3">Stay updated</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">Allow notifications to receive:</Text>
+      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
+        Allow notifications to receive:
+      </Text>
       <View className="w-full gap-4">
-        <View className="flex-row items-center gap-3">
-          <Check size={20} color={Colors.success} />
-          <Text className="flex-1 text-base text-text">Driver arrival updates</Text>
-        </View>
-        <View className="flex-row items-center gap-3">
-          <Check size={20} color={Colors.success} />
-          <Text className="flex-1 text-base text-text">Ride status changes</Text>
-        </View>
-        <View className="flex-row items-center gap-3">
-          <Check size={20} color={Colors.success} />
-          <Text className="flex-1 text-base text-text">Important safety alerts</Text>
-        </View>
+        {[
+          "Cart arrival updates",
+          "Ride status changes",
+          "Important safety alerts",
+        ].map((item) => (
+          <View key={item} className="flex-row items-center gap-3">
+            <Check size={20} color={Colors.success} />
+            <Text className="flex-1 text-base text-text">{item}</Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -251,40 +229,32 @@ export default function OnboardingScreen() {
         <Check size={60} color={Colors.white} />
       </View>
       <Text className="text-3xl font-bold text-text text-center mb-3">You&apos;re all set!</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
-        Welcome to CampusRide. Let&apos;s get you to your destination.
+      <Text className="text-base text-textSecondary text-center leading-6">
+        Welcome to ACT. Let&apos;s get you to your destination.
       </Text>
     </View>
   );
 
   const renderContent = () => {
     switch (step) {
-      case "welcome":
-        return renderWelcome();
-      case "name":
-        return renderName();
-      case "phone":
-        return renderPhone();
-      case "verify":
-        return renderVerify();
-      case "location":
-        return renderLocation();
-      case "notifications":
-        return renderNotifications();
-      case "complete":
-        return renderComplete();
-      default:
-        return null;
+      case "welcome": return renderWelcome();
+      case "location": return renderLocation();
+      case "notifications": return renderNotifications();
+      case "complete": return renderComplete();
     }
   };
 
+  const handleContinue = () => {
+    if (step === "location") handleLocation();
+    else if (step === "notifications") handleNotifications();
+  };
+
+  const showContinueButton = step === "location" || step === "notifications";
+
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-background"
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
+    <View className="flex-1 bg-background">
       <View className="px-5 pb-4" style={{ paddingTop: insets.top + 16 }}>
-        {currentStepNumber > 0 && renderProgressBar()}
+        {currentStepNumber > 0 && step !== "complete" && renderProgressBar()}
       </View>
 
       <ScrollView
@@ -295,29 +265,22 @@ export default function OnboardingScreen() {
         {renderContent()}
       </ScrollView>
 
-      {step !== "complete" && (
+      {showContinueButton && (
         <View className="px-5 pt-5 border-t border-border" style={{ paddingBottom: insets.bottom + 20 }}>
           <TouchableOpacity
-            className={`flex-row items-center justify-center bg-primary rounded-2xl py-4.5 gap-2 ${
-              (!canProceed() || isLoading) ? "bg-surface" : ""
-            }`}
-            onPress={handleNext}
-            disabled={!canProceed() || isLoading}
+            className="flex-row items-center justify-center bg-primary rounded-2xl py-4.5 gap-2"
+            onPress={handleContinue}
+            disabled={isLoading}
             activeOpacity={0.7}
           >
             {isLoading ? (
               <ActivityIndicator color={Colors.white} />
             ) : (
-              <>
-                <Text className="text-lg font-bold text-white">
-                  {step === "welcome" ? "Get Started" : "Continue"}
-                </Text>
-                <ChevronRight size={24} color={Colors.white} />
-              </>
+              <Text className="text-lg font-bold text-white">Continue</Text>
             )}
           </TouchableOpacity>
         </View>
       )}
-    </KeyboardAvoidingView>
+    </View>
   );
 }
