@@ -1,0 +1,17 @@
+[Unit]
+Description=ACT Cart Bridge (ROS2 ↔ Convex)
+After=network.target
+
+[Service]
+Type=simple
+User=jetson
+WorkingDirectory=/opt/ucf_act/cart-bridge
+EnvironmentFile=/opt/ucf_act/cart-bridge/.env
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source /opt/ucf_act/ros2_ws/install/setup.bash && python3 bridge.py"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

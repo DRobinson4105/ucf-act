@@ -14,6 +14,29 @@
         "simulator": true
       },
       "environment": "development"
+    },
+    "preview": {
+      "distribution": "internal",
+      "ios": {
+        "simulator": false
+      },
+      "environment": "preview"
+    },
+    "production": {
+      "distribution": "store",
+      "ios": {
+        "simulator": false
+      },
+      "environment": "production"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "raudyb02@gmail.com",
+        "ascAppId": "6760270481",
+        "appleTeamId": "26MKTVV8MS"
+      }
     }
   }
 }

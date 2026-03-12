@@ -1,4 +1,4 @@
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { AuthProvider, useAppleTokenAuth, useAuth } from "@/contexts/AuthContext";
 import { RideProvider } from "@/contexts/RideContext";
 import {
   Inter_400Regular,
@@ -6,11 +6,11 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ConvexProvider, ConvexReactClient } from "convex/react";
+import { ConvexProviderWithAuth, ConvexReactClient } from "convex/react";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import React, { useEffect } from "react";
 import "../global.css";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -75,7 +75,7 @@ export default function RootLayout() {
   }
 
   return (
-    <ConvexProvider client={convex}>
+    <ConvexProviderWithAuth client={convex} useAuth={useAppleTokenAuth}>
       <QueryClientProvider client={queryClient}>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <AuthProvider>
@@ -85,6 +85,6 @@ export default function RootLayout() {
           </AuthProvider>
         </GestureHandlerRootView>
       </QueryClientProvider>
-    </ConvexProvider>
+    </ConvexProviderWithAuth>
   );
 }

@@ -1,5 +1,7 @@
 import { CAMPUS_LOCATIONS, UCF_CENTER } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
+import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import { findPath, PathNode } from "@/utils/pathfinding";
 import * as Location from "expo-location";
 import { MapPin, Navigation } from "lucide-react-native";
@@ -12,6 +14,7 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
+import { useQuery } from "convex/react";
 
 interface CampusMapProps {
   selectedPickup: string | null;
@@ -20,6 +23,8 @@ interface CampusMapProps {
   onSelectDropoff: (locationId: string) => void;
   selectingType: "pickup" | "dropoff";
   vehiclePosition?: { latitude: number; longitude: number };
+  cartId?: string; // Convex Id<"carts"> — subscribes to live cart location
+  vehicleTarget?: { latitude: number; longitude: number }; // override route goal (e.g. destination during in_progress)
   showRoute?: boolean;
   interactive?: boolean;
   fullScreen?: boolean;
@@ -31,11 +36,19 @@ export default function CampusMap({
   onSelectPickup,
   onSelectDropoff,
   selectingType,
-  vehiclePosition,
+  vehiclePosition: vehiclePositionProp,
+  cartId,
+  vehicleTarget,
   showRoute = false,
   interactive = true,
   fullScreen = false,
 }: CampusMapProps) {
+  // Subscribe to live cart location if cartId is provided
+  const cartData = useQuery(
+    api.carts.getById,
+    cartId ? { cartId: cartId as Id<"carts"> } : "skip"
+  );
+  const vehiclePosition = cartData?.location ?? vehiclePositionProp;
   const mapRef = useRef<MapView>(null);
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
@@ -157,14 +170,16 @@ export default function CampusMap({
   useEffect(() => {
     let isCancelled = false;
 
-    if (showRoute && pickupLocation && vehiclePosition) {
+    const routeGoal = vehicleTarget ?? (pickupLocation ? { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude } : null);
+
+    if (showRoute && routeGoal && vehiclePosition) {
       const start: PathNode = {
         latitude: vehiclePosition.latitude,
         longitude: vehiclePosition.longitude,
       };
       const goal: PathNode = {
-        latitude: pickupLocation.latitude,
-        longitude: pickupLocation.longitude,
+        latitude: routeGoal.latitude,
+        longitude: routeGoal.longitude,
       };
 
       console.log(
@@ -192,7 +207,7 @@ export default function CampusMap({
     return () => {
       isCancelled = true;
     };
-  }, [showRoute, pickupLocation, vehiclePosition]);
+  }, [showRoute, pickupLocation, vehiclePosition, vehicleTarget]);
 
   const handleMarkerPress = (locationId: string) => {
     if (!interactive) return;

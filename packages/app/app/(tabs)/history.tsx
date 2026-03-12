@@ -12,6 +12,18 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+function StarRating({ rating }: { rating: number }) {
+  return (
+    <View style={{ flexDirection: "row", gap: 2 }}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <Text key={n} style={{ fontSize: 14, color: n <= rating ? Colors.accent : Colors.border }}>
+          ★
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { rideHistory } = useRide();
@@ -58,15 +70,10 @@ export default function HistoryScreen() {
             {rideHistory.map((ride) => (
               <TouchableOpacity key={ride.id} style={styles.rideCard}>
                 <View style={styles.rideHeader}>
-                  <View style={styles.vehicleInfo}>
-                    <Text style={styles.vehicleId}>{ride.vehicle.id}</Text>
-                    <View style={styles.statusBadge}>
-                      <Text style={styles.statusText}>Completed</Text>
-                    </View>
+                  <Text style={styles.vehicleId}>{formatDate(ride.requestedAt)}</Text>
+                  <View style={styles.statusBadge}>
+                    <Text style={styles.statusText}>Completed</Text>
                   </View>
-                  <Text style={styles.date}>
-                    {formatDate(ride.requestedAt)}
-                  </Text>
                 </View>
 
                 <View style={styles.routeContainer}>
@@ -93,12 +100,21 @@ export default function HistoryScreen() {
                   </View>
                 </View>
 
-                {ride.pickupAt && ride.completedAt && (
+                {(ride.rating != null || (ride.pickupAt && ride.completedAt)) && (
                   <View style={styles.footer}>
-                    <Clock size={14} color={Colors.textSecondary} />
-                    <Text style={styles.duration}>
-                      {getDuration(ride.pickupAt, ride.completedAt)}
-                    </Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      {ride.pickupAt && ride.completedAt && (
+                        <>
+                          <Clock size={14} color={Colors.textSecondary} />
+                          <Text style={styles.duration}>
+                            {getDuration(ride.pickupAt, ride.completedAt)}
+                          </Text>
+                        </>
+                      )}
+                    </View>
+                    {ride.rating != null && (
+                      <StarRating rating={ride.rating} />
+                    )}
                   </View>
                 )}
               </TouchableOpacity>
@@ -235,6 +251,7 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+    justifyContent: "space-between",
   },
   duration: {
     fontSize: 13,

@@ -1,8 +1,8 @@
 export type RideStatus =
-  | "pending"
+  | "requested"
   | "assigned"
   | "arriving"
-  | "in-progress"
+  | "in_progress"
   | "completed"
   | "cancelled";
 
@@ -15,6 +15,8 @@ export interface Vehicle {
 
 export interface Ride {
   id: string;
+  convexId?: string;
+  cartId?: string;
   pickupLocationId: string;
   dropoffLocationId: string;
   status: RideStatus;
@@ -24,6 +26,8 @@ export interface Ride {
   estimatedWaitTime?: number;
   vehiclePosition?: { latitude: number; longitude: number };
   vehicle: Vehicle;
+  rating?: number;
+  reviewComment?: string;
 }
 
 export interface Notification {
