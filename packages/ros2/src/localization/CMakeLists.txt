@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -51,8 +52,26 @@ ament_target_dependencies(
   rclcpp
 )
 
+add_executable(gps_fusion_node src/gps_fusion_node.cpp)
+
+target_include_directories(
+  gps_fusion_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(
+  gps_fusion_node
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
 install(
-  TARGETS convert_odom_frame_lib convert_odom_frame_node
+  TARGETS convert_odom_frame_lib convert_odom_frame_node gps_fusion_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

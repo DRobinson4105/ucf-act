@@ -7,3 +7,12 @@ src/FAST_LIO_ROS2
 *.onnx
 *.engine
 .clang-format
+# OpenCV source and build artifacts
+opencv-*/
+opencv_contrib-*/
+opencv-4.10.0/
+opencv_contrib-4.10.0/
+opencv-4.10.0/build/
+opencv-4.10.0/install/
+opencv_contrib-4.10.0/build/
+opencv_contrib-4.10.0/install/

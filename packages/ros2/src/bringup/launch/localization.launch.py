@@ -34,13 +34,10 @@ def generate_launch_description():
             output="screen"
         ),
         Node(
-            package="robot_localization",
-            executable="ekf_node",
-            name="ekf_global_node",
+            package="localization",
+            executable="gps_fusion_node",
+            name="gps_fusion_node",
             parameters=[params],
-            remappings=[
-                ("/odometry/filtered", "/odometry/global"),
-            ],
             output="screen"
         )
     ])

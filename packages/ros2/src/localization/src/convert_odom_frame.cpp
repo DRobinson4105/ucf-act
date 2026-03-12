@@ -150,6 +150,15 @@ void ConvertOdomFrame::cb(const nav_msgs::msg::Odometry::SharedPtr msg) {
   out.pose.pose.orientation.w = q.w();
 
   out.pose.covariance = msg->pose.covariance;
+  constexpr double POS_VAR  = 0.05;
+  constexpr double YAW_VAR  = 0.01;
+  // Diagonal indices: x=0, y=7, z=14, roll=21, pitch=28, yaw=35
+  auto &cov = out.pose.covariance;
+  // base covariance floor
+  if (cov[0]  == 0.0) cov[0]  = POS_VAR;
+  if (cov[7]  == 0.0) cov[7]  = POS_VAR;
+  if (cov[14] == 0.0) cov[14] = POS_VAR;
+  if (cov[35] == 0.0) cov[35] = YAW_VAR;
 
   out.twist.twist.linear.x = 0.0;
   out.twist.twist.linear.y = 0.0;
