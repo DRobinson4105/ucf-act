@@ -79,6 +79,13 @@ menu "Test Bypasses"
             help
                 Force ultrasonic sensor to report no obstacle and healthy status.
 
+        config BYPASS_INPUT_BATTERY_MONITOR
+            bool "Bypass battery monitor: force 50% SOC"
+            default n
+            help
+                Skip battery ADC initialization and force SOC to 50%.
+                Use when no voltage divider or current sensor is connected.
+
     endmenu
 
 endmenu
@@ -233,6 +240,20 @@ menu "Debug Logging"
             default n
             help
                 Log ultrasonic frame parse failures (checksum, length, etc.).
+
+        config LOG_INPUT_BATTERY_VOLTAGE
+            bool "Log battery voltage/current readings (verbose)"
+            default n
+            help
+                Log battery pack voltage, current, and SOC on every update.
+                Very verbose (20 Hz). Use for calibration and debugging.
+
+        config LOG_INPUT_BATTERY_SOC_CHANGES
+            bool "Log battery SOC percentage changes"
+            default y
+            help
+                Log when SOC percentage changes by 1% or more (edge-triggered).
+                Also logs voltage-based SOC recalibration events.
 
     endmenu
 

@@ -41,7 +41,8 @@ typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
 // ============================================================================
 
 // Safety ESP32 (0x100-0x10F)
-#define CAN_ID_SAFETY_HEARTBEAT 0x100 // Safety heartbeat (target_state, estop fault_code)
+#define CAN_ID_SAFETY_HEARTBEAT      0x100 // Safety heartbeat (target_state, estop fault_code)
+#define CAN_ID_SAFETY_BATTERY_STATUS 0x101 // Battery voltage, current, SOC (1 Hz)
 
 // Planner (0x110-0x11F)
 #define CAN_ID_PLANNER_HEARTBEAT 0x110 // Planner heartbeat (seq, state, fault_code, flags)
@@ -115,6 +116,15 @@ typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
 #define NODE_FAULT_MOTOR_COMM     0x92 // Stepper communication lost
 #define NODE_FAULT_SENSOR_INVALID 0x93 // F/R sensor invalid reading
 #define NODE_FAULT_RELAY_INIT     0x94 // Relay initialization failed
+
+// ============================================================================
+// Battery Status Flags (CAN_ID_SAFETY_BATTERY_STATUS byte 5)
+// ============================================================================
+
+#define BATTERY_FLAG_CHARGING     0x01 // Current flowing into battery (charger/regen)
+#define BATTERY_FLAG_LOW_WARNING  0x02 // SOC <= 20%
+#define BATTERY_FLAG_CRITICAL     0x04 // SOC <= 10%
+#define BATTERY_FLAG_SENSOR_FAULT 0x08 // ADC read failure
 
 // ============================================================================
 // Heartbeat Flags
@@ -321,6 +331,69 @@ static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, 
 	cmd->throttle = (uint8_t)(data[1] & 0x07); // 3-bit field, max = 7
 	cmd->steering_position = can_unpack_le16s(&data[2]);
 	cmd->braking_position = can_unpack_le16s(&data[4]);
+	return true;
+}
+
+// ============================================================================
+// Battery Status (0x101)
+// ============================================================================
+// Sent by Safety ESP32 at 1 Hz.
+// byte 0-1: pack voltage in mV (uint16 LE, 0-65535 → 0-65.5V)
+// byte 2-3: pack current in 10mA units (int16 LE, ±327.67A)
+//           positive = discharge, negative = charge
+// byte 4:   SOC percentage (uint8, 0-100)
+// byte 5:   flags (BATTERY_FLAG_*)
+// byte 6-7: reserved
+
+typedef struct
+{
+	uint16_t voltage_mv;   // Pack voltage in millivolts
+	int16_t current_10ma;  // Pack current in 10mA units (positive=discharge)
+	uint8_t soc_pct;       // State of charge 0-100%
+	uint8_t flags;         // BATTERY_FLAG_* bitmask
+} battery_status_t;
+
+/**
+ * @brief Encode a battery status struct into an 8-byte CAN data frame.
+ *
+ * Writes voltage (bytes 0-1, LE), current (bytes 2-3, LE), SOC (byte 4),
+ * flags (byte 5), and zeroes the reserved bytes 6-7.
+ *
+ * @param data  Destination buffer (must have room for 8 bytes)
+ * @param bat   Battery status struct to encode
+ */
+static inline void can_encode_battery_status(uint8_t *data, const battery_status_t *bat)
+{
+	if (!data || !bat)
+		return;
+	can_pack_le16(&data[0], bat->voltage_mv);
+	can_pack_le16s(&data[2], bat->current_10ma);
+	data[4] = bat->soc_pct;
+	data[5] = bat->flags;
+	data[6] = 0;
+	data[7] = 0;
+}
+
+/**
+ * @brief Decode an 8-byte CAN data frame into a battery status struct.
+ *
+ * Reads voltage (bytes 0-1), current (bytes 2-3), SOC (byte 4),
+ * and flags (byte 5). Returns false if any pointer is NULL or
+ * the DLC is less than 6.
+ *
+ * @param data  Source CAN data buffer (at least 6 bytes)
+ * @param dlc   Data length code (must be >= 6)
+ * @param bat   Destination battery status struct
+ * @return true on success, false on invalid arguments
+ */
+static inline bool can_decode_battery_status(const uint8_t *data, uint8_t dlc, battery_status_t *bat)
+{
+	if (!data || !bat || dlc < 6)
+		return false;
+	bat->voltage_mv = can_unpack_le16(&data[0]);
+	bat->current_10ma = can_unpack_le16s(&data[2]);
+	bat->soc_pct = data[4];
+	bat->flags = data[5];
 	return true;
 }
 
