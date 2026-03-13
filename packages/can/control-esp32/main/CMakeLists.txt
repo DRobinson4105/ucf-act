@@ -2,5 +2,5 @@ idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
     REQUIRES can_twai can_protocol can_tx_track led_ws2812 multiplexer_dg408djz stepper_motor_uim2852 relay_srd05vdc relay_jd2912 adc_12bitsar optocoupler_pc817 control_logic heartbeat_monitor node_utils
-    PRIV_REQUIRES esp_timer
+    PRIV_REQUIRES esp_timer esp_driver_usb_serial_jtag
 )

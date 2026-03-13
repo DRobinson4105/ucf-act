@@ -161,7 +161,7 @@ All throttle-related components (DG408DJZ mux, resistor ladder, SRD-05VDC thrott
 | Label  | Connector    | Pin 1                   | Pin 2                        | Pin 3                    | Pin 4                |
 | ------ | ------------ | ----------------------- | ---------------------------- | ------------------------ | -------------------- |
 | **J1** | 4-pin JST-PH | Mux A0 (GPIO 2) WHITE   | Mux A1 (GPIO 3) YELLOW       | Mux A2 (GPIO 6) GREEN    | Mux EN (GPIO 7) BLUE |
-| **J2** | 3-pin JST-PH | Relay IN (GPIO 9) WHITE | Bypass Base (GPIO 10) YELLOW | Pedal ADC (GPIO 0) GREEN |                      |
+| **J2** | 3-pin JST-PH | Relay IN (GPIO 21) WHITE | Bypass Base (GPIO 10) YELLOW | Pedal ADC (GPIO 0) GREEN |                      |
 | **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE | F/R Rev (GPIO 23) GREEN      |                          |                      |
 | **J9** | Single wire  | ESP32 GND BLACK         |                              |                          |                      |
 
@@ -174,31 +174,91 @@ J9 is a single black wire connecting an ESP32 GND pin to the throttle box GND bu
 | **J4** | Anderson Powerpole | 12V+ RED               | GND BLACK             |                |                       |
 | **J5** | 4-pin JST-PH       | Curtis Pin 2 RED       | Curtis Pin 3 YELLOW   | Curtis B- BLUE | Pedal pot wiper GREEN |
 | **J6** | 2-pin JST-PH       | Bypass wire A YELLOW   | Bypass wire B WHITE   |                |                       |
-| **J7** | 2-pin JST-PH       | Anti-arc switch YELLOW | Anti-arc return GREEN |                |                       |
-| **J8** | 2-pin JST-PH       | Buzzer switch BLUE     | Buzzer return WHITE   |                |                       |
+| **J7** | 2-pin JST-PH       | Anti-arc signal YELLOW | Anti-arc return GREEN |                |                       |
+| **J8** | 2-pin JST-PH       | Buzzer supply BLUE     | Buzzer signal WHITE   |                |                       |
 
-**Important:** J5 pin 3 (Curtis B-, blue wire) connects ONLY to the resistor ladder bottom — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal.
+**Important:** J5 pin 3 (Curtis B-, blue wire) connects ONLY to the resistor ladder bottom — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
+
+**J5 internal throttle box connections:**
+
+The SRD-05VDC throttle relay on the throttle box perfboard switches the Curtis throttle input (Pin 3) between the manual pedal pot and the DG408 mux output. J5 connects the relay and resistor ladder to the cart-side Curtis controller and pedal pot:
+
+| J5 Pin | Cart-Side Signal                    | Throttle Box Internal Connection |
+| ------ | ----------------------------------- | -------------------------------- |
+| Pin 1  | Curtis Pin 2 (pot high ref) RED     | Resistor ladder top              |
+| Pin 2  | Curtis Pin 3 (throttle input) YELLOW | Relay COM (output)              |
+| Pin 3  | Curtis B- BLUE                      | Resistor ladder bottom           |
+| Pin 4  | Pedal pot wiper GREEN               | Relay NC (input)                 |
+
+The relay switches Curtis Pin 3 between manual pedal pot (NC, de-energized) and mux output (NO, energized). In manual mode, the pot wiper signal passes through NC → COM → Curtis Pin 3. In autonomous mode, the mux output passes through NO → COM → Curtis Pin 3.
+
+**Curtis controller pinout (1999 Club Car DS 48V):**
+
+| Curtis Pin | Function              | Used by J5? |
+| ---------- | --------------------- | ----------- |
+| Pin 1      | Key switch            | No          |
+| Pin 2      | Pot high reference    | Yes (Pin 1) |
+| Pin 3      | Pot wiper / throttle input | Yes (Pin 2) |
+| B-         | Battery negative      | Yes (Pin 3) |
+
+**J5 cart-side wiring procedure:**
+
+The original cart wiring connects the pedal pot wiper directly to Curtis Pin 3. To intercept this signal for the throttle relay:
+
+1. **CUT** the original pedal pot wiper → Curtis Pin 3 wire:
+   - Curtis Pin 3 side of the cut → J5 Pin 2 (YELLOW)
+   - Pedal pot wiper side of the cut → J5 Pin 4 (GREEN)
+2. **SPLICE** (do not cut) the Curtis Pin 2 wire:
+   - Original connection to pedal pot high terminal stays intact
+   - New branch → J5 Pin 1 (RED) for the resistor ladder
+3. **SPLICE** (do not cut) the Curtis B- wire:
+   - Original connection stays intact
+   - New branch → J5 Pin 3 (BLUE) for the resistor ladder bottom
+
+Curtis Pin 2 must remain connected to the pedal pot high terminal so the pot retains its reference voltage for manual mode.
 
 ### Throttle System (DG408DJZ Mux + AEDIKO Relay)
 
-8-channel analog multiplexer selects throttle levels 0-7 using this resistor ladder:
+8-channel analog multiplexer selects throttle levels 0-7 using a 7-resistor voltage divider ladder optimized for fine low-speed control:
 
-| Resistor # | Resistance (Ohms) |
-| ---------- | ----------------- |
-| 1          | 910               |
-| 2          | 750               |
-| 3          | 910               |
-| 4          | 1000              |
-| 5          | 1000              |
-| 6          | 1000              |
+```
+Pin 2 (ref) ── R0(1k+510) ── T6 ── R1(330) ── T5 ── R2(330) ── T4 ── R3(330) ── T3 ── R4(330) ── T2 ── R5(330) ── T1 ── R6(2.2k) ── T0 ── B-
+```
 
-The six series resistors create seven physical ladder taps (`T0..T6`). Mux channels are mapped `CH0..CH6 -> T0..T6`, and `CH7` is intentionally duplicated to `T6` (max throttle).
+| Resistor # | Resistance (Ohms) | Rating | Notes                                       |
+| ---------- | ----------------- | ------ | ------------------------------------------- |
+| 0          | 1510 (1k + 510)   | 1/4W   | Top — caps max throttle below full speed    |
+| 1          | 330               | 1/4W   | Uniform step                                |
+| 2          | 330               | 1/4W   | Uniform step                                |
+| 3          | 330               | 1/4W   | Uniform step                                |
+| 4          | 330               | 1/4W   | Uniform step                                |
+| 5          | 330               | 1/4W   | Uniform step                                |
+| 6          | 2200              | 1/4W   | Bottom — jumps past Curtis deadband         |
 
-Address lines A0-A2 (GPIO 2/3/6) select the channel; EN (GPIO 7) gates the output. An AEDIKO SRD-05VDC-SL-C relay (GPIO 9) switches the Curtis controller throttle input between manual pedal pot (NC, de-energized) and mux output (NO, energized). EN has a 10k pull-down to ensure the mux is disabled on reset.
+The seven series resistors create seven physical ladder taps (`T0..T6`). R6 (2.2k) drops the voltage past the Curtis controller's deadband so that level 1 (T1) is the first tap that produces movement. R0 (1k + 510 in series) caps T6 well below the full reference voltage for a safe maximum speed. R1-R5 (330 each) create uniform ~500mV steps in the active throttle range.
 
-**Production:** Mux output feeds into the Curtis motor controller throttle input through the relay. The ladder taps and channel mapping are tuned to the Curtis controller's expected voltage range.
+Approximate voltages assuming ~8.5V reference on Curtis Pin 2:
 
-**Bench:** Same DG408 + resistor ladder + relay hardware. The mux output is unloaded (no Curtis controller connected). Useful for verifying channel selection with a DMM on the mux output. The relay will audibly click when energized — verifies GPIO 9 output.
+| Level | Tap | Voltage | % of ref | Behavior           |
+| ----- | --- | ------- | -------- | ------------------ |
+| 0     | T0  | 0.0V    | 0%       | Off (in deadband)  |
+| 1     | T1  | 3.5V    | 41%      | Barely creeping    |
+| 2     | T2  | 4.0V    | 47%      | Very slow          |
+| 3     | T3  | 4.5V    | 53%      | Slow               |
+| 4     | T4  | 5.1V    | 60%      | Moderate-slow      |
+| 5     | T5  | 5.6V    | 66%      | Moderate           |
+| 6     | T6  | 6.1V    | 72%      | Cruising           |
+| 7     | T6  | 6.1V    | 72%      | Duplicate of 6     |
+
+Mux channels are mapped `CH0..CH6 -> T0..T6`, and `CH7` is intentionally duplicated to `T6`.
+
+**Tuning:** If level 1 doesn't produce movement, increase R6 (try 2.7k or 3.3k) to push T1 higher above the deadband. If max speed is too slow, decrease R0 (try 1k alone). If max speed is too fast, increase R0 (try 1k + 1k). Only R0 and R6 need to be changed for tuning — R1-R5 stay at 330.
+
+Address lines A0-A2 (GPIO 2/3/6) select the channel; EN (GPIO 7) gates the output. An AEDIKO SRD-05VDC-SL-C relay (GPIO 21) switches the Curtis controller throttle input between manual pedal pot (NC, de-energized) and mux output (NO, energized). EN has a 10k pull-down to ensure the mux is disabled on reset.
+
+**Production:** Mux output feeds into the Curtis motor controller throttle input through the relay. The ladder is tuned for low-speed autonomous operation with 7 usable levels concentrated in the Curtis controller's active throttle range.
+
+**Bench:** Same DG408 + resistor ladder + relay hardware. The mux output is unloaded (no Curtis controller connected). Useful for verifying channel selection with a DMM on the mux output. The relay will audibly click when energized — verifies GPIO 21 output.
 
 ### Pedal Bypass Relay (JD-2912 via S8050)
 
@@ -220,10 +280,10 @@ GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider
 
 The F/R decode is wired for a **1999 Club Car DS 48V** forward/reverse switch assembly. The switch has three microswitches; two are used for direction sensing:
 
-| Microswitch    | GPIO              | Active When                                                     |
-| -------------- | ----------------- | --------------------------------------------------------------- |
-| Anti-arcing    | 22 (forward_gpio) | Forward **and** Reverse (opens solenoid coil during transition) |
-| Reverse buzzer | 23 (reverse_gpio) | Reverse only (activates backup buzzer)                          |
+| Microswitch    | GPIO              | Active When                                                     | Circuit Position |
+| -------------- | ----------------- | --------------------------------------------------------------- | ---------------- |
+| Anti-arcing    | 22 (forward_gpio) | Forward **and** Reverse (opens solenoid coil during transition) | High-side switch (output → solenoid coil → B-) |
+| Reverse buzzer | 23 (reverse_gpio) | Reverse only (activates backup buzzer)                          | Low-side switch (supply → buzzer → input, output → B-) |
 
 State decode (PC817 optocouplers, active LOW with internal pull-up):
 
@@ -234,9 +294,47 @@ State decode (PC817 optocouplers, active LOW with internal pull-up):
 | HIGH               | HIGH             | Neutral         | Neither ON (handle in center detent)   |
 | HIGH               | LOW              | Invalid (fault) | Buzzer without anti-arc = wiring fault |
 
-Each PC817 provides galvanic isolation between the cart's 48V signal circuits and the ESP32:
+Each PC817 provides galvanic isolation between the cart's 48V signal circuits and the ESP32. A 4.7k ohm current-limiting resistor on pin 1 of each PC817 LED limits current at 48V to ~10 mA. Keep the cart-side F/R switch wiring isolated from the ESP32 GPIO side (do not tie any cart-side LED wire to ESP32 GND or the throttle box GND bus).
 
-**Production (48V):** 4.7k ohm current-limiting resistor on pin 1 for each F/R channel on the **PC817 LED side**. Keep the cart-side F/R switch wiring isolated from the ESP32 GPIO side (do not tie the cart-side LED return for these channels to ESP32 GND). Microswitch closed -> LED on -> phototransistor conducts -> GPIO pulled LOW (active). Microswitch open -> LED off -> phototransistor off -> GPIO pulled HIGH by internal pull-up.
+The two microswitches sit in **different circuit positions** (high-side vs low-side) in the cart's 48V wiring, so their optocoupler LED connections differ. In both cases, the PC817 LED must be wired so current flows through the LED **only** when the microswitch is closed. Wiring the LED across the microswitch contacts (in parallel with the switch) is **incorrect** — it creates a sneak current path that activates the cart load (buzzer/solenoid) regardless of switch position and inverts the sensing logic.
+
+#### Anti-arcing microswitch — high-side switch (J7)
+
+The anti-arc microswitch is a high-side switch: its output feeds the solenoid coil, which returns to B-. The output terminal toggles between supply voltage (switch closed) and ~B- (switch open, pulled through coil impedance).
+
+```
+Supply → Anti-arc microswitch → OUTPUT ──┬── Solenoid coil → B-
+                                         │
+                                         └── J7 Pin1 (YELLOW) → [4.7k → PC817 LED] → J7 Pin2 (GREEN) → B-
+```
+
+- **J7 Pin 1 (YELLOW, "Anti-arc signal")**: Connect to the microswitch **output** terminal (the terminal that goes toward the solenoid coil — hot only when the switch is closed).
+- **J7 Pin 2 (GREEN, "Anti-arc return")**: Connect to **B-** (battery negative / chassis ground).
+
+| Switch State | OUTPUT Voltage | LED   | GPIO 22 | Software     |
+| ------------ | -------------- | ----- | ------- | ------------ |
+| Closed       | ~Supply        | ON    | LOW     | active ✓     |
+| Open         | ~B- (via coil) | OFF   | HIGH    | inactive ✓   |
+
+#### Reverse buzzer microswitch — low-side switch (J8)
+
+The reverse buzzer microswitch is a low-side switch: its output connects directly to Curtis B-. The buzzer sits between the supply and the microswitch input. Because the output is always at B-, tapping the output is useless for sensing. Tapping the input with a return to B- creates a sneak path through the buzzer (current flows `supply → buzzer → 4.7k → LED → B-` even when the switch is open, audibly activating the buzzer and inverting the logic).
+
+Instead, wire the LED from the **supply** (before the buzzer) to the microswitch **input** (after the buzzer). When the switch is open, both ends of the LED are at supply potential (the input is pulled to supply through the buzzer with no current flowing), so 0V appears across the LED and it stays off. When the switch is closed, the input is pulled to B- through the switch, and current flows through the LED.
+
+```
+Supply ──┬── Buzzer → Microswitch INPUT ──┬── Microswitch → OUTPUT (B-)
+         │                                │
+         └── J8 Pin1 (BLUE) → [4.7k → PC817 LED] → J8 Pin2 (WHITE) ─┘
+```
+
+- **J8 Pin 1 (BLUE, "Buzzer supply")**: Connect to the **supply wire** that feeds the buzzer circuit (the hot wire in the 48V domain, before the buzzer). This is upstream of the buzzer — find it with a multimeter: keyed on, F/R in neutral, the wire that reads ~48V against B- regardless of switch position.
+- **J8 Pin 2 (WHITE, "Buzzer signal")**: Connect to the microswitch **input** terminal (the terminal connected to the buzzer, NOT the terminal that goes to B-).
+
+| Switch State | Microswitch INPUT | LED Voltage          | LED   | GPIO 23 | Software     |
+| ------------ | ----------------- | -------------------- | ----- | ------- | ------------ |
+| Closed       | ~B- (via switch)  | Supply − B- ≈ 48V    | ON    | LOW     | active ✓     |
+| Open         | ~Supply (via buzzer, no current) | Supply − Supply ≈ 0V | OFF   | HIGH    | inactive ✓   |
 
 **Bench:** If cart F/R switch wiring is absent on bench, use `CONFIG_BYPASS_INPUT_FR_SENSOR` to force Forward.
 
@@ -275,10 +373,11 @@ For the mux and relay, detecting hardware absence would require board-level chan
 
 ## Throttle Control
 
-The throttle system uses an 8-channel analog multiplexer to select 8 levels from a 7-tap resistor ladder (top tap duplicated on CH7):
+The throttle system uses an 8-channel analog multiplexer to select 8 levels from a 7-tap resistor ladder (top tap duplicated on CH7). The ladder is optimized for fine low-speed control with ~500mV steps in the active range:
 
-- Level 0: Idle (minimum throttle)
-- Level 7: Maximum throttle
+- Level 0: Off (in Curtis deadband, no movement)
+- Level 1: Barely creeping (~3.5V)
+- Level 7: Cruising (~6.1V, well below full throttle)
 - Slew rate limited: max 1 level change per 100ms
 
 Enable sequence (READY -> ACTIVE):

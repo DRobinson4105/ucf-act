@@ -16,7 +16,7 @@
 #include "esp_task_wdt.h"
 
 #ifdef CONFIG_THROTTLE_TEST_MODE
-#include <fcntl.h>
+#include "driver/usb_serial_jtag.h"
 #endif
 
 #include "can_protocol.h"
@@ -179,7 +179,7 @@ constexpr gpio_num_t MUX_A2_GPIO = GPIO_NUM_6;
 constexpr gpio_num_t MUX_EN_GPIO = GPIO_NUM_7;
 
 // Relay outputs
-constexpr gpio_num_t THROTTLE_RELAY_GPIO = GPIO_NUM_9; // AEDIKO module
+constexpr gpio_num_t THROTTLE_RELAY_GPIO = GPIO_NUM_21; // AEDIKO module (avoid GPIO 9: boot strapping pin)
 constexpr gpio_num_t ENABLE_BJT_GPIO = GPIO_NUM_10;    // S8050 base (via 680R) for JD-2912
 
 // Pedal ADC (voltage divider from pot wiper)
@@ -418,11 +418,14 @@ void mark_component_lost(volatile bool *ready, const char *name, const char *det
 		return err;
 
 #ifndef CONFIG_BYPASS_INPUT_FR_SENSOR
+#ifndef CONFIG_THROTTLE_TEST_MODE
+	// Production: reject NEUTRAL/INVALID at init — require a known gear.
 	fr_state_t fr_initial = optocoupler_pc817_get_state();
 	if (fr_initial == FR_STATE_NEUTRAL || fr_initial == FR_STATE_INVALID)
 	{
 		return ESP_ERR_INVALID_STATE;
 	}
+#endif
 #endif
 
 	g_fr_inputs_ready = true;
@@ -454,7 +457,8 @@ void update_driver_inputs(uint32_t now_ms)
 			g_pedal_mv = pedal_mv;
 
 #ifdef CONFIG_LOG_INPUT_PEDAL_ADC
-			ESP_LOGI(TAG, "Pedal: %u mV (threshold: %u mV)", g_pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV);
+			if (g_pedal_mv >= PEDAL_ADC_THRESHOLD_MV)
+				ESP_LOGI(TAG, "Pedal: %u mV (threshold: %u mV)", g_pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV);
 #endif
 
 			if (g_pedal_mv >= PEDAL_ADC_THRESHOLD_MV)
@@ -2517,22 +2521,119 @@ void throttle_test_task(void *param)
 
 	static const char *TAG_TEST = "THROTTLE_TEST";
 
-	// Configure stdin for non-blocking, unbuffered reads so single
-	// keypresses are received without waiting for enter.
-	setvbuf(stdin, NULL, _IONBF, 0);
-	int stdin_flags = fcntl(fileno(stdin), F_GETFL, 0);
-	fcntl(fileno(stdin), F_SETFL, stdin_flags | O_NONBLOCK);
+	// ----------------------------------------------------------------
+	// Install USB Serial JTAG driver for non-blocking serial reads.
+	// The VFS console may already use it for stdout, but we need the
+	// driver-level API for reliable non-blocking input.
+	// ----------------------------------------------------------------
+	if (!usb_serial_jtag_is_driver_installed())
+	{
+		usb_serial_jtag_driver_config_t usj_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+		esp_err_t usj_err = usb_serial_jtag_driver_install(&usj_cfg);
+		if (usj_err != ESP_OK)
+			ESP_LOGW(TAG_TEST, "USB Serial JTAG driver install failed: %s (serial input may not work)",
+			         esp_err_to_name(usj_err));
+		else
+			ESP_LOGI(TAG_TEST, "USB Serial JTAG driver installed");
+	}
 
 	ESP_LOGI(TAG_TEST, "========================================");
 	ESP_LOGI(TAG_TEST, "  THROTTLE TEST MODE");
 	ESP_LOGI(TAG_TEST, "  0-7: set throttle level");
-	ESP_LOGI(TAG_TEST, "  d:   disable (mux off)");
+	ESP_LOGI(TAG_TEST, "  b:   toggle bypass relay (JD-2912)");
+	ESP_LOGI(TAG_TEST, "  t:   toggle throttle relay (SRD-05VDC)");
 	ESP_LOGI(TAG_TEST, "  q:   quit (shutdown all)");
+	ESP_LOGI(TAG_TEST, "  pedal: manual override (auto re-arms)");
 	ESP_LOGI(TAG_TEST, "========================================");
 
-	bool armed = false;
-	int8_t current_level = -1; // -1 = disabled
-	uint32_t last_waiting_log_ms = 0;
+	// ----------------------------------------------------------------
+	// Arm immediately.  The bypass relay energizes and the throttle
+	// system is ready for serial commands.  The cart will only move
+	// if F/R is physically in FORWARD — the anti-arcing microswitch
+	// in the solenoid circuit enforces this at the hardware level.
+	// ----------------------------------------------------------------
+	esp_err_t err = relay_jd2912_energize();
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG_TEST, "Bypass relay failed: %s — cannot arm", esp_err_to_name(err));
+		led_ws2812_set_state(NODE_STATE_FAULT);
+		while (true)
+		{
+			task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+			vTaskDelay(pdMS_TO_TICKS(1000));
+		}
+	}
+
+	err = multiplexer_dg408djz_set_level(0);
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG_TEST, "Mux set level 0 failed: %s — cannot arm", esp_err_to_name(err));
+		(void)relay_jd2912_deenergize();
+		led_ws2812_set_state(NODE_STATE_FAULT);
+		while (true)
+		{
+			task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+			vTaskDelay(pdMS_TO_TICKS(1000));
+		}
+	}
+
+	err = relay_srd05vdc_enable(&g_throttle_relay_cfg);
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG_TEST, "Throttle relay failed: %s — cannot arm", esp_err_to_name(err));
+		(void)multiplexer_dg408djz_disable();
+		(void)relay_jd2912_deenergize();
+		led_ws2812_set_state(NODE_STATE_FAULT);
+		while (true)
+		{
+			task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+			vTaskDelay(pdMS_TO_TICKS(1000));
+		}
+	}
+
+	vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle
+
+	err = multiplexer_dg408djz_enable_autonomous();
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG_TEST, "Mux enable failed: %s — cannot arm", esp_err_to_name(err));
+		(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+		(void)multiplexer_dg408djz_disable();
+		(void)relay_jd2912_deenergize();
+		led_ws2812_set_state(NODE_STATE_FAULT);
+		while (true)
+		{
+			task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+			vTaskDelay(pdMS_TO_TICKS(1000));
+		}
+	}
+
+	ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 — bypass ON, throttle relay ON, mux ON");
+	ESP_LOGI(TAG_TEST, "Cart will drive when F/R is in FORWARD (hardware enforced)");
+
+	// ----------------------------------------------------------------
+	// State machine
+	//
+	// ARMED:    bypass ON, throttle relay ON, mux active.
+	//           Serial 0-7 sets throttle level.
+	//           Pedal press → OVERRIDE.
+	// OVERRIDE: bypass ON, throttle relay OFF (potbox drives).
+	//           Pedal release → back to ARMED at level 0.
+	// SHUTDOWN: everything OFF, idle forever.
+	// ----------------------------------------------------------------
+	enum test_state_t : uint8_t
+	{
+		TEST_ARMED,
+		TEST_OVERRIDE,
+		TEST_SHUTDOWN,
+	};
+
+	test_state_t state = TEST_ARMED;
+	int8_t current_level = 0;
+	bool bypass_on = true;   // JD-2912 bypass relay (GPIO 10) — energized on boot
+	bool throttle_on = true; // SRD-05VDC throttle relay (GPIO 21) — energized on boot
+	uint32_t last_status_log_ms = 0;
+	led_ws2812_set_state(NODE_STATE_READY);
 
 	while (true)
 	{
@@ -2541,138 +2642,76 @@ void throttle_test_task(void *param)
 
 		update_driver_inputs(now_ms);
 
-		fr_state_t fr = fr_state_debounced();
-#ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
-		fr = FR_STATE_FORWARD;
-#endif
-
 		bool pedal_is_pressed = pedal_pressed();
 #ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
 		pedal_is_pressed = false;
 #endif
 
-		// Read serial input (non-blocking)
-		int ch = fgetc(stdin);
+		bool pedal_is_rearmed = pedal_rearmed();
+#ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
+		pedal_is_rearmed = true;
+#endif
 
-		// Handle quit regardless of armed state
+		// Read serial input (non-blocking, 0 tick wait)
+		uint8_t rx_byte = 0;
+		int rx_len = usb_serial_jtag_read_bytes(&rx_byte, 1, 0);
+		int ch = (rx_len > 0) ? (int)rx_byte : -1;
+
+		// ---- Quit: immediate shutdown from any state ----
 		if (ch == 'q' || ch == 'Q')
 		{
 			ESP_LOGI(TAG_TEST, "Quit requested");
-			if (armed)
-			{
-				(void)multiplexer_dg408djz_disable();
-				(void)multiplexer_dg408djz_emergency_stop();
-				(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
-				(void)relay_jd2912_deenergize();
-			}
+			(void)multiplexer_dg408djz_disable();
+			(void)multiplexer_dg408djz_emergency_stop();
+			(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+			(void)relay_jd2912_deenergize();
 			led_ws2812_set_state(NODE_STATE_INIT);
 			ESP_LOGI(TAG_TEST, "Shutdown complete — idle");
-
-			while (true)
-			{
-				task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
-				vTaskDelay(pdMS_TO_TICKS(1000));
-			}
+			state = TEST_SHUTDOWN;
 		}
 
-		// Check trip conditions while armed
-		if (armed)
+		// ---- State machine ----
+		switch (state)
 		{
-			const char *trip_reason = nullptr;
-			if (fr != FR_STATE_FORWARD)
-				trip_reason = "F/R left FORWARD";
-			else if (pedal_is_pressed)
-				trip_reason = "pedal pressed";
-
-			if (trip_reason)
+		// ............................................................
+		// ARMED: bypass relay ON, mux active, throttle relay ON.
+		// Serial commands 0-7 control throttle level.
+		// Pedal press → OVERRIDE (manual control).
+		// Hardware enforces F/R safety (anti-arcing switch in
+		// solenoid circuit — cart cannot drive unless in FORWARD).
+		// ............................................................
+		case TEST_ARMED:
+		{
+			// Diagnostic: log pedal ADC + level every 2 seconds
+			if (now_ms - last_status_log_ms >= 2000)
 			{
-				ESP_LOGW(TAG_TEST, "%s — throttle DISABLED", trip_reason);
+				ESP_LOGI(TAG_TEST, "Armed: level=%d pedal=%u mV (threshold=%u)",
+				         current_level, (unsigned)g_pedal_mv,
+				         (unsigned)PEDAL_ADC_THRESHOLD_MV);
+				last_status_log_ms = now_ms;
+			}
+
+			// Pedal press: hand control to driver (manual override)
+			if (pedal_is_pressed)
+			{
+				ESP_LOGI(TAG_TEST, "Pedal pressed (%u mV) — manual override, throttle relay off",
+				         (unsigned)g_pedal_mv);
 				(void)multiplexer_dg408djz_disable();
-				(void)multiplexer_dg408djz_emergency_stop();
 				(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
-				(void)relay_jd2912_deenergize();
-				armed = false;
 				current_level = -1;
 				led_ws2812_set_state(NODE_STATE_NOT_READY);
+				state = TEST_OVERRIDE;
+				break;
 			}
-		}
 
-		// Try to arm if not armed and conditions are met
-		if (!armed)
-		{
-			bool can_arm = (fr == FR_STATE_FORWARD) && !pedal_is_pressed;
-
-			if (can_arm)
-			{
-				ESP_LOGI(TAG_TEST, "F/R FORWARD, pedal clear — arming throttle");
-
-				// Enable sequence (same order as production, minus steppers)
-				esp_err_t err = relay_jd2912_energize();
-				if (err != ESP_OK)
-				{
-					ESP_LOGE(TAG_TEST, "Pedal bypass relay failed: %s", esp_err_to_name(err));
-					vTaskDelay(pdMS_TO_TICKS(500));
-					continue;
-				}
-
-				err = multiplexer_dg408djz_set_level(0);
-				if (err != ESP_OK)
-				{
-					ESP_LOGE(TAG_TEST, "Mux set level 0 failed: %s", esp_err_to_name(err));
-					(void)relay_jd2912_deenergize();
-					vTaskDelay(pdMS_TO_TICKS(500));
-					continue;
-				}
-
-				err = relay_srd05vdc_enable(&g_throttle_relay_cfg);
-				if (err != ESP_OK)
-				{
-					ESP_LOGE(TAG_TEST, "Throttle relay failed: %s", esp_err_to_name(err));
-					(void)multiplexer_dg408djz_disable();
-					(void)relay_jd2912_deenergize();
-					vTaskDelay(pdMS_TO_TICKS(500));
-					continue;
-				}
-
-				vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle
-
-				err = multiplexer_dg408djz_enable_autonomous();
-				if (err != ESP_OK)
-				{
-					ESP_LOGE(TAG_TEST, "Mux enable autonomous failed: %s", esp_err_to_name(err));
-					(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
-					(void)multiplexer_dg408djz_disable();
-					(void)relay_jd2912_deenergize();
-					vTaskDelay(pdMS_TO_TICKS(500));
-					continue;
-				}
-
-				armed = true;
-				current_level = 0;
-				led_ws2812_set_state(NODE_STATE_READY);
-				ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 — enter command");
-			}
-			else
-			{
-				if (now_ms - last_waiting_log_ms >= 2000)
-				{
-					ESP_LOGI(TAG_TEST, "Waiting: fr=%s pedal=%s", fr_state_to_string(fr),
-					         pedal_is_pressed ? "pressed" : "clear");
-					last_waiting_log_ms = now_ms;
-				}
-			}
-		}
-
-		// Handle throttle input when armed
-		if (armed && ch != EOF)
-		{
+			// Handle serial throttle commands
 			if (ch >= '0' && ch <= '7')
 			{
 				int8_t level = (int8_t)(ch - '0');
 				if (level != current_level)
 				{
-					esp_err_t err = multiplexer_dg408djz_set_level(level);
-					if (err == ESP_OK)
+					esp_err_t serr = multiplexer_dg408djz_set_level(level);
+					if (serr == ESP_OK)
 					{
 						current_level = level;
 						ESP_LOGI(TAG_TEST, "Throttle level: %d", level);
@@ -2680,18 +2719,142 @@ void throttle_test_task(void *param)
 					}
 					else
 					{
-						ESP_LOGE(TAG_TEST, "Mux set level %d failed: %s", level, esp_err_to_name(err));
+						ESP_LOGE(TAG_TEST, "Mux set level %d failed: %s", level, esp_err_to_name(serr));
 					}
 				}
 			}
-			else if (ch == 'd' || ch == 'D')
+			// Toggle bypass relay (JD-2912, GPIO 10)
+			else if (ch == 'b' || ch == 'B')
 			{
-				(void)multiplexer_dg408djz_disable();
-				current_level = -1;
-				ESP_LOGI(TAG_TEST, "Throttle DISABLED (mux off)");
+				esp_err_t berr;
+				if (bypass_on)
+				{
+					berr = relay_jd2912_deenergize();
+					if (berr == ESP_OK)
+					{
+						bypass_on = false;
+						ESP_LOGI(TAG_TEST, "Bypass relay OFF (JD-2912, GPIO 10) — potbox switch back in circuit");
+					}
+					else
+					{
+						ESP_LOGE(TAG_TEST, "Bypass relay deenergize failed: %s", esp_err_to_name(berr));
+					}
+				}
+				else
+				{
+					berr = relay_jd2912_energize();
+					if (berr == ESP_OK)
+					{
+						bypass_on = true;
+						ESP_LOGI(TAG_TEST, "Bypass relay ON (JD-2912, GPIO 10) — potbox switch bypassed");
+					}
+					else
+					{
+						ESP_LOGE(TAG_TEST, "Bypass relay energize failed: %s", esp_err_to_name(berr));
+					}
+				}
+			}
+			// Toggle throttle relay (SRD-05VDC, GPIO 21)
+			else if (ch == 't' || ch == 'T')
+			{
+				esp_err_t terr;
+				if (throttle_on)
+				{
+					terr = relay_srd05vdc_disable(&g_throttle_relay_cfg);
+					if (terr == ESP_OK)
+					{
+						throttle_on = false;
+						ESP_LOGI(TAG_TEST, "Throttle relay OFF (SRD-05VDC, GPIO 21) — pot wiper drives Curtis Pin 3");
+					}
+					else
+					{
+						ESP_LOGE(TAG_TEST, "Throttle relay disable failed: %s", esp_err_to_name(terr));
+					}
+				}
+				else
+				{
+					// Reset mux to level 0 before reconnecting to prevent sudden throttle jump
+					esp_err_t mux_err = multiplexer_dg408djz_set_level(0);
+					if (mux_err != ESP_OK)
+					{
+						ESP_LOGE(TAG_TEST, "Mux reset to 0 failed: %s — aborting relay ON", esp_err_to_name(mux_err));
+					}
+					else
+					{
+						terr = relay_srd05vdc_enable(&g_throttle_relay_cfg);
+						if (terr == ESP_OK)
+						{
+							throttle_on = true;
+							current_level = 0;
+							ESP_LOGI(TAG_TEST, "Throttle relay ON (SRD-05VDC, GPIO 21) — mux drives Curtis Pin 3 (level reset to 0)");
+						}
+						else
+						{
+							ESP_LOGE(TAG_TEST, "Throttle relay enable failed: %s", esp_err_to_name(terr));
+						}
+					}
+				}
+			}
+			break;
+		}
+
+		// ............................................................
+		// OVERRIDE: driver has manual control via pedal/potbox.
+		// Bypass relay stays ON (solenoid stays powered).
+		// Throttle relay OFF (potbox wiper → motor controller).
+		// Mux disabled.  When pedal is released and rearmed,
+		// re-enable autonomous at level 0.
+		// ............................................................
+		case TEST_OVERRIDE:
+		{
+			if (pedal_is_rearmed)
+			{
+				ESP_LOGI(TAG_TEST, "Pedal released — re-arming autonomous at level 0");
+
+				esp_err_t rerr = multiplexer_dg408djz_set_level(0);
+				if (rerr == ESP_OK)
+					rerr = relay_srd05vdc_enable(&g_throttle_relay_cfg);
+				if (rerr == ESP_OK)
+				{
+					vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle
+					rerr = multiplexer_dg408djz_enable_autonomous();
+				}
+
+				if (rerr != ESP_OK)
+				{
+					ESP_LOGE(TAG_TEST, "Re-arm failed: %s — staying in override", esp_err_to_name(rerr));
+					// Clean up partial state
+					(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+					(void)multiplexer_dg408djz_disable();
+					break;
+				}
+
+				current_level = 0;
 				led_ws2812_set_state(NODE_STATE_READY);
+				ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 — enter command");
+				state = TEST_ARMED;
+			}
+			else if (now_ms - last_status_log_ms >= 2000)
+			{
+				ESP_LOGI(TAG_TEST, "Override: driver has manual control (release pedal to re-arm)");
+				last_status_log_ms = now_ms;
+			}
+			break;
+		}
+
+		// ............................................................
+		// SHUTDOWN: everything off, idle forever.
+		// ............................................................
+		case TEST_SHUTDOWN:
+		{
+			while (true)
+			{
+				task_wdt_reset_or_log("throttle_test", &wdt_reset_failed);
+				vTaskDelay(pdMS_TO_TICKS(1000));
 			}
 		}
+
+		} // switch
 
 		vTaskDelay(CONTROL_LOOP_INTERVAL);
 	}
