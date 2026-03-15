@@ -32,11 +32,10 @@ export default function HomeScreen() {
   };
 
   const recentLocations = rideHistory
-    .slice(0, 3)
-    .map((ride) =>
-      CAMPUS_LOCATIONS.find((l) => l.id === ride.dropoffLocationId)
-    )
-    .filter((loc): loc is (typeof CAMPUS_LOCATIONS)[0] => loc !== undefined);
+    .map((ride) => CAMPUS_LOCATIONS.find((l) => l.id === ride.dropoffLocationId))
+    .filter((loc): loc is (typeof CAMPUS_LOCATIONS)[0] => loc !== undefined)
+    .filter((loc, i, arr) => arr.findIndex((l) => l.id === loc.id) === i)
+    .slice(0, 3);
 
   if (currentRide && showTracking) {
     return (
