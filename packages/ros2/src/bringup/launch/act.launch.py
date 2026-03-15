@@ -3,7 +3,9 @@ import os.path as osp
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+
 
 def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_arguments: dict | None = None):
     launch_arguments = launch_arguments or {}
@@ -14,19 +16,59 @@ def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_argum
         launch_arguments=launch_arguments.items()
     )
 
+
 def generate_launch_description():
     return LaunchDescription([
         include("bringup", "static_tfs.launch.py"),
-        include(
-          "ros2_socketcan", "socket_can_bridge.launch.xml",
-          launch_arguments={"interface": "can0"}
-        ),
         include("bringup", "cameras.launch.py"),
         include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
-        include("perception", "lidar_filter.launch.py"),
-        #include("bringup", "gps.launch.py"),
+        include("bringup", "gps.launch.py"),
         include("fast_lio", "mapping.launch.py"),
-        #include("bringup", "localization.launch.py"),
+        include("bringup", "localization.launch.py"),
         include("perception", "seg_all.launch.py"),
-        include("perception", "det_all.launch.py")
-  ])
+
+        include("bringup", "nav2_no_map.launch.py"),
+
+        Node(
+            package="navigation",
+            executable="act_global_path_manager",
+            name="act_global_path_manager",
+            output="screen",
+            parameters=[{
+                "map_frame": "odom",
+                "input_topic": "/ui/global_route_wgs84_json",
+                "output_topic_clean": "/global_path",
+                "output_topic_raw": "/global_path_raw"
+            }],
+        ),
+        # Node(
+        #     package="navigation",
+        #     executable="clicked_point_path_publisher",
+        #     name="clicked_point_path_publisher",
+        #     output="screen",
+        #     parameters=[{
+        #         "global_frame": "odom",
+        #         "base_frame": "base_link",
+        #         "clicked_topic": "/clicked_point",
+        #         "path_topic": "/global_path",
+        #         "spacing_m": 0.75
+        #     }],
+        # ),
+        Node(
+            package="navigation",
+            executable="cmd_vel_adapter",
+            name="cmd_vel_adapter",
+            output="screen",
+            parameters=[{
+                "cmd_in_topic": "/cmd_vel_nav",
+                "odom_topic": "/odometry/local",
+                "out_topic": "/act/drive_cmd",
+                "publish_hz": 25.0,
+                "v_max": 3.58,
+                "w_max": 1.28,
+                "a_max": 1.0,
+                "d_max": 1.5,
+                "w_acc_max": 2.0
+            }],
+        ),
+    ])
