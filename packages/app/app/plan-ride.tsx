@@ -34,7 +34,7 @@ import {
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -272,6 +272,7 @@ export default function PlanRideScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
   const { requestRide, currentRide } = useRide();
+  const allCarts = useQuery(api.carts.getAll, {});
   const [pickupLocation, setPickupLocation] =
     useState<string>("Current Location");
   const [dropoffLocation, setDropoffLocation] = useState<string>("");
@@ -543,6 +544,8 @@ export default function PlanRideScreen() {
         customPickupCoord={customPickupCoord}
         customDropoffCoord={customDropoffCoord}
         onMapPress={viewMode === "planning" && !isExpanded ? handleMapTap : undefined}
+        hideUserLocation={currentRide?.status === "in_progress"}
+        allCarts={allCarts ?? []}
       />
 
       <TouchableOpacity

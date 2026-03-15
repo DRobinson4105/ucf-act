@@ -1,7 +1,5 @@
 import { CAMPUS_LOCATIONS, UCF_CENTER } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
-import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
 import { findPath, PathNode } from "@/utils/pathfinding";
 import * as Location from "expo-location";
 import { MapPin, Navigation } from "lucide-react-native";
@@ -14,7 +12,6 @@ import {
   View,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
-import { useQuery } from "convex/react";
 
 interface CampusMapProps {
   selectedPickup: string | null;
@@ -23,7 +20,8 @@ interface CampusMapProps {
   onSelectDropoff: (locationId: string) => void;
   selectingType: "pickup" | "dropoff";
   vehiclePosition?: { latitude: number; longitude: number };
-  cartId?: string; // Convex Id<"carts"> — subscribes to live cart location
+  cartId?: string; // assigned cart Id — if set, shows only this cart
+  allCarts?: Array<{ _id: string; name: string; status: string; location: { latitude: number; longitude: number; heading?: number } }>; // live cart list from parent
   vehicleTarget?: { latitude: number; longitude: number }; // override route goal (e.g. destination during in_progress)
   showRoute?: boolean;
   interactive?: boolean;
@@ -31,6 +29,7 @@ interface CampusMapProps {
   customPickupCoord?: { latitude: number; longitude: number };
   customDropoffCoord?: { latitude: number; longitude: number };
   onMapPress?: (coord: { latitude: number; longitude: number }) => void;
+  hideUserLocation?: boolean; // hide blue user dot (e.g. during in_progress — use cart as reference instead)
 }
 
 export default function CampusMap({
@@ -41,6 +40,7 @@ export default function CampusMap({
   selectingType,
   vehiclePosition: vehiclePositionProp,
   cartId,
+  allCarts,
   vehicleTarget,
   showRoute = false,
   interactive = true,
@@ -48,13 +48,13 @@ export default function CampusMap({
   customPickupCoord,
   customDropoffCoord,
   onMapPress,
+  hideUserLocation = false,
 }: CampusMapProps) {
-  // Subscribe to live cart location if cartId is provided
-  const cartData = useQuery(
-    api.carts.getById,
-    cartId ? { cartId: cartId as Id<"carts"> } : "skip"
-  );
-  const vehiclePosition = cartData?.location ?? vehiclePositionProp;
+  const assignedCart = cartId ? allCarts?.find((c) => c._id === cartId) : null;
+  const vehiclePosition = assignedCart?.location ?? vehiclePositionProp;
+
+  // Idle carts to show on the map before a ride is assigned
+  const idleCarts = cartId ? [] : (allCarts ?? []).filter((c) => c.status === "idle" && c.location);
   const mapRef = useRef<MapView>(null);
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
@@ -377,8 +377,22 @@ export default function CampusMap({
             </Marker>
           )}
 
+          {/* Idle carts — shown when no ride is assigned yet */}
+          {idleCarts.map((cart) => (
+            <Marker
+              key={cart._id}
+              coordinate={{ latitude: cart.location.latitude, longitude: cart.location.longitude }}
+              title={cart.name}
+            >
+              <View className="w-[44px] h-[44px] rounded-full bg-surface/90 items-center justify-center border-2 border-border shadow-md">
+                <Text style={{ fontSize: 20 }}>🛺</Text>
+              </View>
+            </Marker>
+          ))}
+
+          {/* Assigned cart — shown after a ride is matched */}
           {vehiclePosition && (
-            <Marker coordinate={vehiclePosition} title="Driver">
+            <Marker coordinate={vehiclePosition} title="Your Cart">
               <View className="w-[50px] h-[50px] rounded-full bg-accent/15 items-center justify-center border-4 border-accent shadow-lg shadow-accent">
                 <View
                   className="w-5 h-5 rounded-full shadow-md shadow-accent"
@@ -388,7 +402,7 @@ export default function CampusMap({
             </Marker>
           )}
 
-          {userLocation && (
+          {userLocation && !hideUserLocation && (
             <Marker coordinate={userLocation} title="Your Location">
               <View className="w-11 h-11 rounded-full bg-accent/20 items-center justify-center border-4 border-accent/30 shadow-md shadow-accent">
                 <View className="w-4 h-4 rounded-full bg-accent shadow-sm shadow-accent" />
