@@ -8,7 +8,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-const MIN_HEIGHT = 190;
+const MIN_HEIGHT = 230;
 const MAX_HEIGHT = SCREEN_HEIGHT * 0.85;
 const DRAG_THRESHOLD = 3;
 
@@ -18,6 +18,7 @@ interface SwipeableBottomSheetProps {
   onSwipeDown?: () => void;
   initiallyExpanded?: boolean;
   expandRef?: React.MutableRefObject<{ expand: () => void } | null>;
+  maxHeight?: number;
 }
 
 export default function SwipeableBottomSheet({

@@ -28,6 +28,9 @@ interface CampusMapProps {
   showRoute?: boolean;
   interactive?: boolean;
   fullScreen?: boolean;
+  customPickupCoord?: { latitude: number; longitude: number };
+  customDropoffCoord?: { latitude: number; longitude: number };
+  onMapPress?: (coord: { latitude: number; longitude: number }) => void;
 }
 
 export default function CampusMap({
@@ -42,6 +45,9 @@ export default function CampusMap({
   showRoute = false,
   interactive = true,
   fullScreen = false,
+  customPickupCoord,
+  customDropoffCoord,
+  onMapPress,
 }: CampusMapProps) {
   // Subscribe to live cart location if cartId is provided
   const cartData = useQuery(
@@ -60,23 +66,24 @@ export default function CampusMap({
   const [animatedOpacity, setAnimatedOpacity] = useState(1);
   const listenerRef = useRef<string | null>(null);
 
-  const pickupLocation = React.useMemo(() =>
-    selectedPickup === "current-location"
-      ? userLocation
-        ? {
-            id: "current-location",
-            name: "Current Location",
-            latitude: userLocation.latitude,
-            longitude: userLocation.longitude,
-          }
-        : null
-      : CAMPUS_LOCATIONS.find((l) => l.id === selectedPickup),
-    [selectedPickup, userLocation]
-  );
+  const pickupLocation = React.useMemo(() => {
+    if (selectedPickup === "current-location") {
+      return userLocation
+        ? { id: "current-location", name: "Current Location", latitude: userLocation.latitude, longitude: userLocation.longitude }
+        : null;
+    }
+    if (selectedPickup === "custom" && customPickupCoord) {
+      return { id: "custom", name: "Custom Location", ...customPickupCoord };
+    }
+    return CAMPUS_LOCATIONS.find((l) => l.id === selectedPickup);
+  }, [selectedPickup, userLocation, customPickupCoord]);
 
-  const dropoffLocation = React.useMemo(() => CAMPUS_LOCATIONS.find(
-    (l) => l.id === selectedDropoff
-  ), [selectedDropoff]);
+  const dropoffLocation = React.useMemo(() => {
+    if (selectedDropoff === "custom" && customDropoffCoord) {
+      return { id: "custom", name: "Custom Location", ...customDropoffCoord };
+    }
+    return CAMPUS_LOCATIONS.find((l) => l.id === selectedDropoff);
+  }, [selectedDropoff, customDropoffCoord]);
 
   useEffect(() => {
     (async () => {
@@ -273,6 +280,7 @@ export default function CampusMap({
           showsCompass={false}
           showsPointsOfInterest={false}
           showsBuildings={false}
+          onPress={onMapPress ? (e) => onMapPress(e.nativeEvent.coordinate) : undefined}
         >
           {showRoute && vehiclePath.length > 0 && (
             <Polyline
@@ -340,6 +348,34 @@ export default function CampusMap({
               </Marker>
             );
           })}
+
+          {customPickupCoord && selectedPickup === "custom" && (
+            <Marker coordinate={customPickupCoord} title="Custom Pickup">
+              <View className="items-center justify-center">
+                <View
+                  className="w-10 h-10 rounded-full items-center justify-center border-4 border-white/90 shadow-md"
+                  style={{ backgroundColor: Colors.accent }}
+                >
+                  <MapPin size={14} color="#ffffff" fill="#ffffff" />
+                </View>
+                <View className="w-3 h-1 rounded-full opacity-30 -mt-1" style={{ backgroundColor: Colors.accent }} />
+              </View>
+            </Marker>
+          )}
+
+          {customDropoffCoord && selectedDropoff === "custom" && (
+            <Marker coordinate={customDropoffCoord} title="Custom Drop-off">
+              <View className="items-center justify-center">
+                <View
+                  className="w-10 h-10 rounded-full items-center justify-center border-4 border-white/90 shadow-md"
+                  style={{ backgroundColor: Colors.primary }}
+                >
+                  <MapPin size={14} color="#ffffff" fill="#ffffff" />
+                </View>
+                <View className="w-3 h-1 rounded-full opacity-30 -mt-1" style={{ backgroundColor: Colors.primary }} />
+              </View>
+            </Marker>
+          )}
 
           {vehiclePosition && (
             <Marker coordinate={vehiclePosition} title="Driver">

@@ -4,12 +4,12 @@ export interface CampusLocation {
   shortName: string;
   latitude: number;
   longitude: number;
-  type: "academic" | "residential" | "dining" | "recreation" | "parking";
+  type: "academic" | "residential" | "dining" | "recreation" | "parking" | "testing";
 }
 
 export const UCF_CENTER = {
-  latitude: 28.6024,
-  longitude: -81.2001,
+  latitude: 28.5189,
+  longitude: -81.6699,
 };
 
 export const CAMPUS_LOCATIONS: CampusLocation[] = [
@@ -93,4 +93,20 @@ export const CAMPUS_LOCATIONS: CampusLocation[] = [
     longitude: -81.1985,
     type: "academic",
   },
+  {
+    id: "11",
+    name: "Drob House Start",
+    shortName: "Drob House Start",
+    latitude: 28.518758,
+    longitude: -81.670477,
+    type: "testing",
+  },
+  {
+    id: "12",
+    name: "Drob House End",
+    shortName: "Drob House End",
+    latitude: 28.517825,
+    longitude: -81.671971,
+    type: "testing",
+  }
 ];

@@ -127,26 +127,13 @@ export const [RideProvider, useRide] = createContextHook(() => {
   }, [currentRide?.status]);
 
   const requestRide = useCallback(
-    async (pickupLocationId: string, dropoffLocationId: string) => {
-      // "current-location" is a UI sentinel — fall back to the first campus location
-      const pickup =
-        pickupLocationId === "current-location"
-          ? CAMPUS_LOCATIONS[0]
-          : CAMPUS_LOCATIONS.find((l) => l.id === pickupLocationId);
-      const dropoff = CAMPUS_LOCATIONS.find((l) => l.id === dropoffLocationId);
-      if (!pickup || !dropoff) return;
-
+    async (
+      pickup: { latitude: number; longitude: number; name: string },
+      dropoff: { latitude: number; longitude: number; name: string }
+    ) => {
       await requestRideMutation({
-        origin: {
-          latitude: pickup.latitude,
-          longitude: pickup.longitude,
-          name: pickup.name,
-        },
-        destination: {
-          latitude: dropoff.latitude,
-          longitude: dropoff.longitude,
-          name: dropoff.name,
-        },
+        origin: { latitude: pickup.latitude, longitude: pickup.longitude, name: pickup.name },
+        destination: { latitude: dropoff.latitude, longitude: dropoff.longitude, name: dropoff.name },
       });
     },
     [requestRideMutation]
