@@ -25,12 +25,15 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
-from convex_client import push_telemetry, poll_assignment, complete_ride
+from convex_client import push_telemetry, poll_assignment, complete_ride, get_ride_status
 
 TELEMETRY_INTERVAL_S = 2.0
 POLL_INTERVAL_S = 5.0
+ROUTE_REPUBLISH_INTERVAL_S = 3.0
 # meters — consider ride complete when within this distance
 COMPLETION_DISTANCE_M = 8.0
+
+TERMINAL_STATUSES = {"completed", "cancelled"}
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -72,6 +75,7 @@ class CartBridgeNode(Node):
         # Timers
         self.create_timer(TELEMETRY_INTERVAL_S, self._telemetry_timer)
         self.create_timer(POLL_INTERVAL_S, self._poll_timer)
+        self.create_timer(ROUTE_REPUBLISH_INTERVAL_S, self._route_republish_timer)
 
         self.get_logger().info("Cart bridge started")
 
@@ -113,7 +117,17 @@ class CartBridgeNode(Node):
                     self._finish_ride()
 
     def _poll_timer(self) -> None:
+        # If a ride is active, check whether it was cancelled externally
         if self._active_ride is not None:
+            try:
+                status = get_ride_status(self._active_ride["_id"])
+                if status in TERMINAL_STATUSES:
+                    self.get_logger().info(
+                        f"Ride {self._active_ride['_id']} is {status} externally — clearing"
+                    )
+                    self._active_ride = None
+            except Exception as e:
+                self.get_logger().error(f"Ride status check failed: {e}")
             return
 
         try:
@@ -128,6 +142,11 @@ class CartBridgeNode(Node):
                 self._publish_route(ride)
         except Exception as e:
             self.get_logger().error(f"Assignment poll failed: {e}")
+
+    def _route_republish_timer(self) -> None:
+        """Periodically re-publish the current route so the path manager never misses it."""
+        if self._active_ride is not None:
+            self._publish_route(self._active_ride)
 
     # ---- Ride management ------------------------------------------------- #
 
