@@ -1,6 +1,6 @@
 planner_server:
   ros__parameters:
-    use_sim_time: true
+    use_sim_time: false
     expected_planner_frequency: 1.0
     planner_plugins: ["GridBased"]
     GridBased:
@@ -39,8 +39,8 @@ planner_server:
 
 controller_server:
   ros__parameters:
-    use_sim_time: true
-    controller_frequency: 5.0
+    use_sim_time: false
+    controller_frequency: 25.0
     odom_topic: /odometry/local
     enable_stamped_cmd_vel: false
 
@@ -67,8 +67,8 @@ controller_server:
       AckermannConstraints:
         min_turning_r: 2.8
 
-      model_dt: 0.2
-      time_steps: 20
+      model_dt: 0.04
+      time_steps: 25
       iteration_count: 1
       batch_size: 300
 
@@ -99,29 +99,29 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.0
-        critical_cost: 300.0
+        cost_weight: 8.0
+        critical_cost: 200.0
         collision_cost: 1000000.0
         consider_footprint: true
 
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0
-        threshold_to_consider: 1.5
+        cost_weight: 3.0
+        threshold_to_consider: 2.0
         offset_from_furthest: 5
 
       GoalCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 1.5
+        cost_weight: 3.0
+        threshold_to_consider: 2.0
 
 global_costmap:
   global_costmap:
     ros__parameters:
-      track_unknown_space: true
-      footprint_padding: 0.15
+      track_unknown_space: false
+      #footprint_padding: 0.05
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
@@ -130,6 +130,7 @@ global_costmap:
       resolution: 0.1
       update_frequency: 5.0
       publish_frequency: 2.0
+      footprint_padding: 0.15
       footprint: "[[1.9304, 0.5842], [1.9304, -0.5842], [-0.8382, -0.5842], [-0.8382, 0.5842]]"
       plugins: ["stvl_layer", "inflation_layer"]
 
@@ -148,20 +149,22 @@ global_costmap:
         publish_voxel_map: false
         transform_tolerance: 1.0
         mapping_mode: false
-        observation_sources: livox front_left_seg front_right_seg
+        observation_sources: livox
 
         livox:
-          topic: "/livox/lidar_pc2"
+          topic: "/livox/lidar_filtered"
           sensor_frame: "livox_frame"
           data_type: "PointCloud2"
           marking: true
           clearing: true
-          obstacle_range: 50.0
-          max_obstacle_height: 2.0
-          min_obstacle_height: 0.30
+          obstacle_range: 8.0
+          max_obstacle_height: 1.8
+          min_obstacle_height: 0.6
           filter: "voxel"
-          voxel_min_points: 1
           remind: false
+          max_z: 2.0
+          min_z: 0.1
+          voxel_min_points: 2
 
         front_left_seg:
           topic: "/front_left/seg_pc2"
@@ -185,14 +188,14 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 1.0
+        inflation_radius: 2.0
         cost_scaling_factor: 2.0
 
 local_costmap:
   local_costmap:
     ros__parameters:
       track_unknown_space: true
-      footprint_padding: 0.15
+      #footprint_padding: 0.15
       global_frame: odom
       robot_base_frame: base_link
       update_frequency: 10.0
@@ -202,6 +205,7 @@ local_costmap:
       width: 40
       height: 40
       plugins: ["stvl_layer", "inflation_layer"]
+      footprint_padding: 0.15
       footprint: "[[1.9304, 0.5842], [1.9304, -0.5842], [-0.8382, -0.5842], [-0.8382, 0.5842]]"
 
       stvl_layer:
@@ -219,19 +223,22 @@ local_costmap:
         publish_voxel_map: true
         transform_tolerance: 1.0
         mapping_mode: false
-        observation_sources: livox front_left_seg front_right_seg
+        observation_sources: livox
 
         livox:
-          topic: "/livox/lidar_pc2"
+          topic: "/livox/lidar_filtered"
           sensor_frame: "livox_frame"
           data_type: "PointCloud2"
           marking: true
           clearing: true
-          obstacle_range: 50.0
-          max_obstacle_height: 2.0
-          min_obstacle_height: 0.30
+          obstacle_range: 10.0
+          max_obstacle_height: 1.8
+          min_obstacle_height: 0.6
           filter: "voxel"
-          voxel_min_points: 1
+          remind: false
+          max_z: 2.0
+          min_z: 0.1
+          voxel_min_points: 2
 
         front_left_seg:
           topic: "/front_left/seg_pc2"
@@ -255,12 +262,12 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.76
+        inflation_radius: 2.0
         cost_scaling_factor: 2.0
 
 lifecycle_manager:
   ros__parameters:
-    use_sim_time: true
+    use_sim_time: false
     autostart: true
     bond_timeout: 10.0
     node_names:

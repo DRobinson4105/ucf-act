@@ -13,7 +13,8 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(GeographicLib QUIET)
-find_package(act_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
 
 if(NOT GeographicLib_FOUND)
   list(APPEND CMAKE_MODULE_PATH /usr/share/cmake/geographiclib)
@@ -53,7 +54,6 @@ ament_target_dependencies(cmd_vel_adapter
   rclcpp
   geometry_msgs
   nav_msgs
-  act_msgs
 )
 
 add_executable(mock_livox_pointcloud_publisher src/mock_livox_pointcloud_publisher.cpp)
@@ -96,29 +96,31 @@ ament_target_dependencies(route_navigator
   nav2_msgs
 )
 
-add_executable(cmd_vel_adapter src/cmd_vel_adapter.cpp)
-ament_target_dependencies(cmd_vel_adapter
-  rclcpp
-  geometry_msgs
-  nav_msgs
-) 
+
 
 install(TARGETS
   act_global_path_manager
   fake_odom_integrator
+  cmd_vel_adapter
   mock_livox_pointcloud_publisher
   clicked_point_path_publisher
   follow_path_client
   route_navigator
-  cmd_vel_adapter
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY
-  launch
-  config
-  DESTINATION share/${PROJECT_NAME}
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/DriveCommand.msg"
+  DEPENDENCIES
+    std_msgs
+    geometry_msgs
 )
+
+rosidl_target_interfaces(cmd_vel_adapter
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
+  
+ament_export_dependencies(rosidl_default_runtime)
+
 
 ament_package()
 

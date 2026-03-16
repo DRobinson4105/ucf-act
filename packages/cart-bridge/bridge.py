@@ -21,6 +21,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
@@ -63,7 +64,12 @@ class CartBridgeNode(Node):
         self._active_ride: Optional[dict] = None
 
         # Subscriptions
-        self.create_subscription(NavSatFix, "/fix", self._gps_callback, 10)
+        self.create_subscription(
+	    NavSatFix,
+	    "/fix",
+	    self._gps_callback,
+	    qos_profile_sensor_data,
+	)
         self.create_subscription(Odometry, "/odometry/global", self._odom_callback, 10)
 
         # Publisher — sends route to act_global_path_manager

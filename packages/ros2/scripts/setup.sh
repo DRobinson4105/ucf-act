@@ -24,5 +24,3 @@ for ((i=0; i<=2; i+=2)); do
   v4l2-ctl -d "/dev/video${i}" --set-ctrl=auto_exposure=1
   v4l2-ctl -d "/dev/video${i}" --set-ctrl=exposure_time_absolute=10
 done
-
-sudo ip link set can0 up type can bitrate 1000000

@@ -26,7 +26,7 @@
       publish_voxel_map: true
       transform_tolerance: 1.0
       mapping_mode: false
-      observation_sources: pointcloud front_left_seg front_right_seg
+      observation_sources: pointcloud
 
       pointcloud:
         topic: "/livox/lidar_filtered"
@@ -42,10 +42,10 @@
         clearing: true
         obstacle_range: 50.0
         filter: "voxel"
-        voxel_min_points: 1
+        voxel_min_points: 2
         clear_after_reading: true
         max_z: 2.0
-        min_z: 0.05
+        min_z: 0.1
         vertical_fov_angle: 3.14159
         horizontal_fov_angle: 0.0
         decay_acceleration: 15.0

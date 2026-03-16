@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 
-#include <act_msgs/msg/drive_command.hpp>
+#include <navigation/msg/drive_command.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -32,7 +32,7 @@ public:
       odom_topic_, 10,
       std::bind(&CmdVelAdapter::onOdom, this, std::placeholders::_1));
 
-    out_pub_ = create_publisher<act_msgs::msg::DriveCommand>(out_topic_, 10);
+    out_pub_ = create_publisher<navigation::msg::DriveCommand>(out_topic_, 10);
 
     last_time_ = now();
 
@@ -66,7 +66,12 @@ private:
     if (dt > 0.2) dt = 0.2;
     last_time_ = t;
 
-    if (!have_cmd_) return;
+    if (!have_cmd_) {
+	RCLCPP_INFO_THROTTLE(
+	get_logger(), *get_clock(), 2000,
+	"Waiting for /cmd_vel_nav before publishing /act/drive_cmd");
+	return;
+    }
 
     const double v_raw = cmd_in_.linear.x;
     const double w_raw = cmd_in_.angular.z;
@@ -88,23 +93,26 @@ private:
       w_filt_ += clamp(dw, -dw_lim, dw_lim);
     }
 
-    act_msgs::msg::DriveCommand out;
+    navigation::msg::DriveCommand out;
+
     out.header.stamp = t;
     out.header.frame_id = "base_link";
-
-    out.desired_raw.linear.x = v_raw;
-    out.desired_raw.angular.z = w_raw;
-
-    out.desired.linear.x = v_filt_;
-    out.desired.angular.z = w_filt_;
-
-    out.has_measured = have_odom_;
+    
+    out.v = static_cast<float>(v_filt_);
+    out.w = static_cast<float>(w_filt_);
+    
     if (have_odom_) {
-      out.measured = odom_.twist.twist;
-      out.error.linear.x = out.desired.linear.x - out.measured.linear.x;
-      out.error.angular.z = out.desired.angular.z - out.measured.angular.z;
+      out.v_meas = static_cast<float>(odom_.twist.twist.linear.x);
+      out.w_meas = static_cast<float>(odom_.twist.twist.angular.z);
+      out.v_err = out.v - out.v_meas;
+      out.w_err = out.w - out.w_meas;
+    } else {
+      out.v_meas = 0.0f;
+      out.w_meas = 0.0f;
+      out.v_err = 0.0f;
+      out.w_err = 0.0f;
     }
-
+    
     out_pub_->publish(out);
   }
 
@@ -135,7 +143,7 @@ private:
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_in_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  rclcpp::Publisher<act_msgs::msg::DriveCommand>::SharedPtr out_pub_;
+  rclcpp::Publisher<navigation::msg::DriveCommand>::SharedPtr out_pub_;
 };
 
 int main(int argc, char **argv) {
