@@ -6,6 +6,7 @@ import { useRide } from "@/contexts/RideContext";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { router, useLocalSearchParams } from "expo-router";
+import * as Location from "expo-location";
 import {
     ArrowLeft,
     Car,
@@ -33,7 +34,7 @@ import {
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -61,8 +62,8 @@ const RIDE_OPTIONS: RideOption[] = [
 ];
 
 interface RideTrackingContentProps {
-  pickupLocation: (typeof CAMPUS_LOCATIONS)[0] | null;
-  dropoffLocation: (typeof CAMPUS_LOCATIONS)[0] | null | undefined;
+  pickupLocation: { name: string } | null;
+  dropoffLocation: { name: string } | null | undefined;
   onBack: () => void;
 }
 
@@ -271,6 +272,7 @@ export default function PlanRideScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams();
   const { requestRide, currentRide } = useRide();
+  const allCarts = useQuery(api.carts.getAll, {});
   const [pickupLocation, setPickupLocation] =
     useState<string>("Current Location");
   const [dropoffLocation, setDropoffLocation] = useState<string>("");
@@ -280,6 +282,19 @@ export default function PlanRideScreen() {
   const [selectedDropoffId, setSelectedDropoffId] = useState<string | null>(
     null
   );
+  const [customPickupCoord, setCustomPickupCoord] = useState<{ latitude: number; longitude: number } | undefined>();
+  const [customDropoffCoord, setCustomDropoffCoord] = useState<{ latitude: number; longitude: number } | undefined>();
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === "granted") {
+        const loc = await Location.getCurrentPositionAsync({});
+        setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+      }
+    })();
+  }, []);
   const [pickupSearchQuery, setPickupSearchQuery] = useState("");
   const [dropoffSearchQuery, setDropoffSearchQuery] = useState("");
   const [isExpanded, setIsExpanded] = useState(false);
@@ -356,10 +371,33 @@ export default function PlanRideScreen() {
   };
 
   const handleConfirmRide = () => {
-    if (selectedPickupId && selectedDropoffId) {
-      setViewMode("finding");
-      requestRide(selectedPickupId, selectedDropoffId);
-    }
+    if (!selectedPickupId || !selectedDropoffId) return;
+
+    const resolvePickup = () => {
+      if (selectedPickupId === "custom" && customPickupCoord) {
+        return { ...customPickupCoord, name: "Dropped Pin" };
+      }
+      if (selectedPickupId === "current-location" && userLocation) {
+        return { ...userLocation, name: "Current Location" };
+      }
+      const loc = CAMPUS_LOCATIONS.find((l) => l.id === selectedPickupId);
+      return loc ? { latitude: loc.latitude, longitude: loc.longitude, name: loc.name } : null;
+    };
+
+    const resolveDropoff = () => {
+      if (selectedDropoffId === "custom" && customDropoffCoord) {
+        return { ...customDropoffCoord, name: "Dropped Pin" };
+      }
+      const loc = CAMPUS_LOCATIONS.find((l) => l.id === selectedDropoffId);
+      return loc ? { latitude: loc.latitude, longitude: loc.longitude, name: loc.name } : null;
+    };
+
+    const pickup = resolvePickup();
+    const dropoff = resolveDropoff();
+    if (!pickup || !dropoff) return;
+
+    setViewMode("finding");
+    requestRide(pickup, dropoff);
   };
 
   const handleBackFromChoosing = () => {
@@ -421,6 +459,25 @@ export default function PlanRideScreen() {
     }
   };
 
+  const handleMapTap = (coord: { latitude: number; longitude: number }) => {
+    if (isExpanded || viewMode !== "planning") return;
+    if (selectionMode === "pickup") {
+      setCustomPickupCoord(coord);
+      setSelectedPickupId("custom");
+      setPickupLocation("Dropped Pin");
+      setPickupSearchQuery("");
+      setPreviousPickupLocation("Dropped Pin");
+      setSelectionMode(null);
+    } else if (selectionMode === "dropoff") {
+      setCustomDropoffCoord(coord);
+      setSelectedDropoffId("custom");
+      setDropoffLocation("Dropped Pin");
+      setDropoffSearchQuery("");
+      setPreviousDropoffLocation("Dropped Pin");
+      setSelectionMode(null);
+    }
+  };
+
   const getButtonText = () => {
     if (!selectedDropoffId) {
       return "Select Destination";
@@ -431,18 +488,29 @@ export default function PlanRideScreen() {
     return "Confirm Ride";
   };
 
-  const isButtonDisabled =
-    !selectedPickupId ||
-    !selectedDropoffId ||
-    selectedPickupId === selectedDropoffId;
+  const isButtonDisabled = (() => {
+    if (!selectedPickupId || !selectedDropoffId) return true;
+    if (selectedPickupId === "custom" && !customPickupCoord) return true;
+    if (selectedDropoffId === "custom" && !customDropoffCoord) return true;
+    // Allow both "custom" as long as their coords differ
+    if (selectedPickupId === selectedDropoffId && selectedPickupId !== "custom") return true;
+    return false;
+  })();
 
-  const pickupLocationObj =
-    selectedPickupId === "current-location"
-      ? null
-      : CAMPUS_LOCATIONS.find((l) => l.id === selectedPickupId) || null;
-  const dropoffLocationObj = CAMPUS_LOCATIONS.find(
-    (l) => l.id === selectedDropoffId
-  );
+  const pickupLocationObj = React.useMemo(() => {
+    if (selectedPickupId === "current-location") return null;
+    if (selectedPickupId === "custom" && customPickupCoord) {
+      return { id: "custom", name: "Dropped Pin", shortName: "Pin", type: "academic" as const, ...customPickupCoord };
+    }
+    return CAMPUS_LOCATIONS.find((l) => l.id === selectedPickupId) || null;
+  }, [selectedPickupId, customPickupCoord]);
+
+  const dropoffLocationObj = React.useMemo(() => {
+    if (selectedDropoffId === "custom" && customDropoffCoord) {
+      return { id: "custom", name: "Dropped Pin", shortName: "Pin", type: "academic" as const, ...customDropoffCoord };
+    }
+    return CAMPUS_LOCATIONS.find((l) => l.id === selectedDropoffId) || null;
+  }, [selectedDropoffId, customDropoffCoord]);
 
   const vehicleTarget = currentRide?.status === "in_progress" && dropoffLocationObj
     ? { latitude: dropoffLocationObj.latitude, longitude: dropoffLocationObj.longitude }
@@ -473,6 +541,11 @@ export default function PlanRideScreen() {
         }
         fullScreen
         interactive={true}
+        customPickupCoord={customPickupCoord}
+        customDropoffCoord={customDropoffCoord}
+        onMapPress={viewMode === "planning" && !isExpanded ? handleMapTap : undefined}
+        hideUserLocation={currentRide?.status === "in_progress"}
+        allCarts={allCarts ?? []}
       />
 
       <TouchableOpacity
@@ -603,6 +676,9 @@ export default function PlanRideScreen() {
                 </Text>
               </View>
             </TouchableOpacity>
+            <Text style={styles.dropPinHint}>
+              Or tap anywhere on the map to drop a pin
+            </Text>
             <TouchableOpacity
               style={[
                 styles.collapsedButton,
@@ -812,14 +888,14 @@ const styles = StyleSheet.create({
 
   collapsedContent: {
     paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 24,
-    gap: 12,
+    paddingTop: 4,
+    paddingBottom: 16,
+    gap: 8,
   },
   collapsedSearchBar: {
     backgroundColor: Colors.card,
     borderRadius: 12,
-    padding: 18,
+    padding: 14,
   },
   collapsedInputRow: {
     flexDirection: "row",
@@ -841,10 +917,15 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: Colors.accent,
   },
+  dropPinHint: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: "center",
+  },
   collapsedButton: {
     backgroundColor: Colors.accent,
     borderRadius: 12,
-    paddingVertical: 18,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -873,7 +954,7 @@ const styles = StyleSheet.create({
   },
   sheetContent: {
     paddingHorizontal: 20,
-    paddingBottom: 40,
+    paddingBottom: 16,
   },
   searchContainer: {
     backgroundColor: Colors.card,
@@ -947,11 +1028,11 @@ const styles = StyleSheet.create({
   confirmButton: {
     backgroundColor: Colors.accent,
     borderRadius: 12,
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 20,
-    marginBottom: 20,
+    marginTop: 8,
+    marginBottom: 12,
   },
   confirmButtonDisabled: {
     backgroundColor: Colors.border,
@@ -972,8 +1053,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginBottom: 16,
-    marginTop: 8,
+    marginBottom: 8,
+    marginTop: 4,
   },
   backText: {
     fontSize: 16,
@@ -981,24 +1062,24 @@ const styles = StyleSheet.create({
     color: Colors.text,
   },
   title: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "700" as const,
     color: Colors.text,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   optionsContainer: {
-    marginBottom: 20,
+    marginBottom: 8,
   },
   rideOption: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: Colors.card,
     borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    padding: 12,
+    marginBottom: 8,
     borderWidth: 2,
     borderColor: "transparent",
-    gap: 16,
+    gap: 12,
   },
   rideOptionSelected: {
     borderColor: Colors.accent,

@@ -4,12 +4,12 @@ export interface CampusLocation {
   shortName: string;
   latitude: number;
   longitude: number;
-  type: "academic" | "residential" | "dining" | "recreation" | "parking";
+  type: "academic" | "residential" | "dining" | "recreation" | "parking" | "testing";
 }
 
 export const UCF_CENTER = {
-  latitude: 28.6024,
-  longitude: -81.2001,
+  latitude: 28.5189,
+  longitude: -81.6699,
 };
 
 export const CAMPUS_LOCATIONS: CampusLocation[] = [
