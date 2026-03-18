@@ -16,7 +16,7 @@
 #include "esp_task_wdt.h"
 
 #ifdef CONFIG_THROTTLE_TEST_MODE
-#include "driver/usb_serial_jtag.h"
+#include "serial_console.h"
 #endif
 
 #include "can_protocol.h"
@@ -2517,21 +2517,9 @@ void throttle_test_task(void *param)
 
 	static const char *TAG_TEST = "THROTTLE_TEST";
 
-	// ----------------------------------------------------------------
-	// Install USB Serial JTAG driver for non-blocking serial reads.
-	// The VFS console may already use it for stdout, but we need the
-	// driver-level API for reliable non-blocking input.
-	// ----------------------------------------------------------------
-	if (!usb_serial_jtag_is_driver_installed())
-	{
-		usb_serial_jtag_driver_config_t usj_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-		esp_err_t usj_err = usb_serial_jtag_driver_install(&usj_cfg);
-		if (usj_err != ESP_OK)
-			ESP_LOGW(TAG_TEST, "USB Serial JTAG driver install failed: %s (serial input may not work)",
-			         esp_err_to_name(usj_err));
-		else
-			ESP_LOGI(TAG_TEST, "USB Serial JTAG driver installed");
-	}
+	esp_err_t console_err = serial_console_init();
+	if (console_err != ESP_OK)
+		ESP_LOGW(TAG_TEST, "Serial console init failed: %s (serial input may not work)", esp_err_to_name(console_err));
 
 	ESP_LOGI(TAG_TEST, "========================================");
 	ESP_LOGI(TAG_TEST, "  THROTTLE TEST MODE");
@@ -2677,10 +2665,8 @@ void throttle_test_task(void *param)
 		pedal_is_rearmed = true;
 #endif
 
-		// Read serial input (non-blocking, 0 tick wait)
-		uint8_t rx_byte = 0;
-		int rx_len = usb_serial_jtag_read_bytes(&rx_byte, 1, 0);
-		int ch = (rx_len > 0) ? (int)rx_byte : -1;
+		// Read serial input (non-blocking)
+		int ch = serial_console_read_char();
 
 		// ---- Quit: immediate shutdown from any state ----
 		if (ch == 'q' || ch == 'Q')
