@@ -21,7 +21,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
@@ -30,7 +30,6 @@ from convex_client import push_telemetry, poll_assignment, complete_ride, get_ri
 
 TELEMETRY_INTERVAL_S = 2.0
 POLL_INTERVAL_S = 5.0
-ROUTE_REPUBLISH_INTERVAL_S = 3.0
 # meters — consider ride complete when within this distance
 COMPLETION_DISTANCE_M = 8.0
 
@@ -76,12 +75,20 @@ class CartBridgeNode(Node):
         self.create_subscription(Odometry, "/odometry/global", self._odom_callback, 10)
 
         # Publisher — sends route to act_global_path_manager
-        self._route_pub = self.create_publisher(String, "/ui/global_route_wgs84_json", 10)
+        self._route_pub = self.create_publisher(
+            String,
+            "/ui/global_route_wgs84_json",
+            QoSProfile(
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
 
         # Timers
         self.create_timer(TELEMETRY_INTERVAL_S, self._telemetry_timer)
         self.create_timer(POLL_INTERVAL_S, self._poll_timer)
-        self.create_timer(ROUTE_REPUBLISH_INTERVAL_S, self._route_republish_timer)
 
         self.get_logger().info("Cart bridge started")
 
@@ -131,6 +138,7 @@ class CartBridgeNode(Node):
                     self.get_logger().info(
                         f"Ride {self._active_ride['_id']} is {status} externally — clearing"
                     )
+                    self._publish_clear(self._active_ride["_id"])
                     self._active_ride = None
             except Exception as e:
                 self.get_logger().error(f"Ride status check failed: {e}")
@@ -149,11 +157,6 @@ class CartBridgeNode(Node):
         except Exception as e:
             self.get_logger().error(f"Assignment poll failed: {e}")
 
-    def _route_republish_timer(self) -> None:
-        """Periodically re-publish the current route so the path manager never misses it."""
-        if self._active_ride is not None:
-            self._publish_route(self._active_ride)
-
     # ---- Ride management ------------------------------------------------- #
 
     def _publish_route(self, ride: dict) -> None:
@@ -169,11 +172,22 @@ class CartBridgeNode(Node):
             },
         ]
         msg = String()
-        msg.data = json.dumps(waypoints)
+        msg.data = json.dumps({
+            "route_id": ride["_id"],
+            "waypoints": waypoints,
+        })
         self._route_pub.publish(msg)
         self.get_logger().info(
             f"Published route: {len(waypoints)} waypoints to /ui/global_route_wgs84_json"
         )
+
+    def _publish_clear(self, ride_id: str) -> None:
+        msg = String()
+        msg.data = json.dumps({
+            "route_id": ride_id,
+            "waypoints": [],
+        })
+        self._route_pub.publish(msg)
 
     def _finish_ride(self) -> None:
         if not self._active_ride:
@@ -185,6 +199,7 @@ class CartBridgeNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to complete ride {ride_id}: {e}")
         finally:
+            self._publish_clear(ride_id)
             self._active_ride = None
 
 

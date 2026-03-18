@@ -54,6 +54,7 @@ ament_target_dependencies(cmd_vel_adapter
   rclcpp
   geometry_msgs
   nav_msgs
+  nav2_msgs
 )
 
 add_executable(mock_livox_pointcloud_publisher src/mock_livox_pointcloud_publisher.cpp)
@@ -123,4 +124,3 @@ ament_export_dependencies(rosidl_default_runtime)
 
 
 ament_package()
-

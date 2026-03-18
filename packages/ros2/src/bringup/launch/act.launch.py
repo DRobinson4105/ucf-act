@@ -32,20 +32,22 @@ def generate_launch_description():
         include("bringup", "nav2_no_map.launch.py"),
 
         Node(
-	    package="navigation",
-	    executable="act_global_path_manager",
-	    name="act_global_path_manager",
-	    output="screen",
-	    parameters=[{
-		"map_frame": "odom",
-		"input_topic": "/ui/global_route_wgs84_json",
-		"output_topic_clean": "/global_path",
-		"output_topic_raw": "/global_path_raw",
-		"datum_lat": 28.5188,
-		"datum_lon": -81.6701,
-		"datum_alt": 0.0
-	    }],
-	),
+            package="navigation",
+            executable="act_global_path_manager",
+            name="act_global_path_manager",
+            output="screen",
+            parameters=[{
+                "map_frame": "odom",
+                "input_topic": "/ui/global_route_wgs84_json",
+                "output_topic_clean": "/global_path",
+                "output_topic_raw": "/global_path_raw",
+                "datum_lat": 28.5188,
+                "datum_lon": -81.6701,
+                "datum_alt": 0.0,
+                "v_max_mps": 3.58,
+                "a_lat_max_mps2": 1.0
+            }],
+        ),
         # Node(
         #     package="navigation",
         #     executable="clicked_point_path_publisher",
@@ -68,12 +70,15 @@ def generate_launch_description():
                 "cmd_in_topic": "/cmd_vel_nav",
                 "odom_topic": "/odometry/local",
                 "out_topic": "/act/drive_cmd",
+                "speed_limit_topic": "/speed_limit",
                 "publish_hz": 25.0,
                 "v_max": 3.58,
                 "w_max": 1.28,
                 "a_max": 1.0,
                 "d_max": 1.5,
-                "w_acc_max": 2.0
+                "w_acc_max": 2.0,
+                "speed_limit_timeout_s": 0.5,
+                "min_turning_r": 2.8
             }],
         ),
     ])
