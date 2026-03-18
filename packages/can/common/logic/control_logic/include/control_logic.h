@@ -26,6 +26,28 @@ extern "C"
 #endif
 
 // Valid throttle level range for the DG408DJZ multiplexer (3-bit, 0-7).
+//
+// F/R state interpretation (pre-bypass vs post-bypass):
+//
+// The anti-arcing microswitch (forward_gpio) is in series after the throttle
+// microswitch in the cart's 48V circuit.  Before the pedal bypass relay
+// (JD-2912) is energized during the ENABLE sequence, the anti-arcing switch
+// cannot conduct — so FORWARD and NEUTRAL are indistinguishable (both read
+// as NEUTRAL).  The buzzer microswitch (reverse_gpio) is independent and
+// always readable.
+//
+// Pre-bypass (INIT / NOT_READY / READY):
+//   - Can only distinguish "buzzer off" (FORWARD or NEUTRAL) from
+//     "buzzer on" (REVERSE — reads as FR_STATE_INVALID pre-bypass).
+//   - Preconditions require "not in reverse": FORWARD and NEUTRAL both pass.
+//   - FR_STATE_INVALID is treated as "reverse" (blocks READY, no fault).
+//
+// Post-bypass (ENABLE after START_ENABLE / ACTIVE):
+//   - Full truth table is readable (bypass relay allows anti-arc current).
+//   - FORWARD: normal throttle operation.
+//   - NEUTRAL: stay ACTIVE but zero throttle (cart can't drive in neutral).
+//   - REVERSE: override (disable all actuators).
+//   - INVALID: wiring fault → FAULT (anti-arc should be readable).
 #define THROTTLE_LEVEL_MIN 0
 #define THROTTLE_LEVEL_MAX 7
 

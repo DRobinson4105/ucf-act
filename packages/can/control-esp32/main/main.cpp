@@ -180,7 +180,7 @@ constexpr gpio_num_t MUX_EN_GPIO = GPIO_NUM_7;
 
 // Relay outputs
 constexpr gpio_num_t THROTTLE_RELAY_GPIO = GPIO_NUM_21; // AEDIKO module (avoid GPIO 9: boot strapping pin)
-constexpr gpio_num_t ENABLE_BJT_GPIO = GPIO_NUM_10;    // S8050 base (via 680R) for JD-2912
+constexpr gpio_num_t ENABLE_BJT_GPIO = GPIO_NUM_10;     // S8050 base (via 680R) for JD-2912
 
 // Pedal ADC (voltage divider from pot wiper)
 constexpr adc_channel_t PEDAL_ADC_CHANNEL = ADC_CHANNEL_0; // GPIO 0
@@ -417,16 +417,11 @@ void mark_component_lost(volatile bool *ready, const char *name, const char *det
 	if (err != ESP_OK)
 		return err;
 
-#ifndef CONFIG_BYPASS_INPUT_FR_SENSOR
-#ifndef CONFIG_THROTTLE_TEST_MODE
-	// Production: reject NEUTRAL/INVALID at init — require a known gear.
-	fr_state_t fr_initial = optocoupler_pc817_get_state();
-	if (fr_initial == FR_STATE_NEUTRAL || fr_initial == FR_STATE_INVALID)
-	{
-		return ESP_ERR_INVALID_STATE;
-	}
-#endif
-#endif
+	// Accept any initial FR state.  Pre-bypass, the anti-arcing switch
+	// can't conduct, so FORWARD reads as NEUTRAL and REVERSE reads as
+	// INVALID — both are expected.  The precondition check (not-in-reverse)
+	// gates READY, and the full truth table becomes available once the
+	// pedal bypass relay is energized during the ENABLE sequence.
 
 	g_fr_inputs_ready = true;
 	return ESP_OK;
@@ -1395,6 +1390,7 @@ void send_control_heartbeat(void)
 		.state = state,
 		.fault_code = fault_code,
 		.flags = heartbeat_flags,
+		.fr_state = (uint8_t)fr_state_debounced(),
 	};
 	can_encode_heartbeat(hb_data, &hb_msg);
 
@@ -1492,8 +1488,8 @@ void send_control_heartbeat(void)
 		return "safety_retreat";
 	case CONTROL_ABORT_REASON_PEDAL_PRESSED:
 		return "pedal_pressed";
-	case CONTROL_ABORT_REASON_FR_NOT_FORWARD:
-		return "fr_not_forward";
+	case CONTROL_ABORT_REASON_FR_IN_REVERSE:
+		return "fr_in_reverse";
 	case CONTROL_ABORT_REASON_MOTOR_FAULT:
 		return "motor_fault";
 	case CONTROL_ABORT_REASON_SENSOR_INVALID:
@@ -2608,17 +2604,18 @@ void throttle_test_task(void *param)
 		}
 	}
 
-	ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 — bypass ON, throttle relay ON, mux ON");
-	ESP_LOGI(TAG_TEST, "Cart will drive when F/R is in FORWARD (hardware enforced)");
+	ESP_LOGI(TAG_TEST, "Throttle system ready — bypass ON, throttle relay ON, mux ON");
+	ESP_LOGI(TAG_TEST, "F/R software enforced: REVERSE disables throttle, NEUTRAL zeros level");
 
 	// ----------------------------------------------------------------
 	// State machine
 	//
 	// ARMED:    bypass ON, throttle relay ON, mux active.
 	//           Serial 0-7 sets throttle level.
-	//           Pedal press → OVERRIDE.
+	//           Pedal press or F/R REVERSE → OVERRIDE.
+	//           F/R NEUTRAL → zero throttle (stay ARMED).
 	// OVERRIDE: bypass ON, throttle relay OFF (potbox drives).
-	//           Pedal release → back to ARMED at level 0.
+	//           Pedal release + F/R not REVERSE → back to ARMED at level 0.
 	// SHUTDOWN: everything OFF, idle forever.
 	// ----------------------------------------------------------------
 	enum test_state_t : uint8_t
@@ -2628,12 +2625,34 @@ void throttle_test_task(void *param)
 		TEST_SHUTDOWN,
 	};
 
-	test_state_t state = TEST_ARMED;
 	int8_t current_level = 0;
 	bool bypass_on = true;   // JD-2912 bypass relay (GPIO 10) — energized on boot
 	bool throttle_on = true; // SRD-05VDC throttle relay (GPIO 21) — energized on boot
 	uint32_t last_status_log_ms = 0;
-	led_ws2812_set_state(NODE_STATE_READY);
+
+	// Post-bypass F/R gate: bypass relay is energized so the full truth
+	// table is readable.  Wait for debounce to settle, then start in
+	// OVERRIDE if the cart is in REVERSE (loop will recover when cleared).
+	vTaskDelay(pdMS_TO_TICKS(FR_PC817_DEBOUNCE_MS + 5));
+	update_driver_inputs(get_time_ms());
+	fr_state_t fr_arm = fr_state_debounced();
+	test_state_t state;
+	if (fr_arm == FR_STATE_REVERSE || fr_arm == FR_STATE_INVALID)
+	{
+		ESP_LOGW(TAG_TEST, "F/R is %s at arm — entering override until not in reverse", fr_state_to_string(fr_arm));
+		(void)multiplexer_dg408djz_disable();
+		(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+		throttle_on = false;
+		current_level = -1;
+		state = TEST_OVERRIDE;
+		led_ws2812_set_state(NODE_STATE_NOT_READY);
+	}
+	else
+	{
+		ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 (F/R=%s)", fr_state_to_string(fr_arm));
+		state = TEST_ARMED;
+		led_ws2812_set_state(NODE_STATE_READY);
+	}
 
 	while (true)
 	{
@@ -2641,6 +2660,12 @@ void throttle_test_task(void *param)
 		uint32_t now_ms = get_time_ms();
 
 		update_driver_inputs(now_ms);
+
+		fr_state_t fr_now = fr_state_debounced();
+#ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
+		fr_now = FR_STATE_FORWARD;
+#endif
+		bool fr_is_reverse = (fr_now == FR_STATE_REVERSE || fr_now == FR_STATE_INVALID);
 
 		bool pedal_is_pressed = pedal_pressed();
 #ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
@@ -2676,32 +2701,56 @@ void throttle_test_task(void *param)
 		// ............................................................
 		// ARMED: bypass relay ON, mux active, throttle relay ON.
 		// Serial commands 0-7 control throttle level.
-		// Pedal press → OVERRIDE (manual control).
-		// Hardware enforces F/R safety (anti-arcing switch in
-		// solenoid circuit — cart cannot drive unless in FORWARD).
+		// Pedal press or F/R REVERSE → OVERRIDE (manual control).
+		// F/R NEUTRAL → zero throttle (stay ARMED).
 		// ............................................................
 		case TEST_ARMED:
 		{
-			// Diagnostic: log pedal ADC + level every 2 seconds
+			// Diagnostic: log pedal ADC + level + FR every 2 seconds
 			if (now_ms - last_status_log_ms >= 2000)
 			{
-				ESP_LOGI(TAG_TEST, "Armed: level=%d pedal=%u mV (threshold=%u)",
-				         current_level, (unsigned)g_pedal_mv,
-				         (unsigned)PEDAL_ADC_THRESHOLD_MV);
+				ESP_LOGI(TAG_TEST, "Armed: level=%d pedal=%u mV (threshold=%u) fr=%s", current_level,
+				         (unsigned)g_pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV, fr_state_to_string(fr_now));
 				last_status_log_ms = now_ms;
 			}
 
 			// Pedal press: hand control to driver (manual override)
 			if (pedal_is_pressed)
 			{
-				ESP_LOGI(TAG_TEST, "Pedal pressed (%u mV) — manual override, throttle relay off",
-				         (unsigned)g_pedal_mv);
+				ESP_LOGI(TAG_TEST, "Pedal pressed (%u mV) — manual override, throttle relay off", (unsigned)g_pedal_mv);
 				(void)multiplexer_dg408djz_disable();
 				(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+				throttle_on = false;
 				current_level = -1;
 				led_ws2812_set_state(NODE_STATE_NOT_READY);
 				state = TEST_OVERRIDE;
 				break;
+			}
+
+			// F/R REVERSE: disable throttle (same as pedal override)
+			if (fr_is_reverse)
+			{
+				ESP_LOGW(TAG_TEST, "F/R is %s — override, throttle relay off", fr_state_to_string(fr_now));
+				(void)multiplexer_dg408djz_disable();
+				(void)relay_srd05vdc_disable(&g_throttle_relay_cfg);
+				throttle_on = false;
+				current_level = -1;
+				led_ws2812_set_state(NODE_STATE_NOT_READY);
+				state = TEST_OVERRIDE;
+				break;
+			}
+
+			// F/R NEUTRAL: zero throttle but stay ARMED (cart can't
+			// drive in neutral, resumes when switched to FORWARD)
+			if (fr_now == FR_STATE_NEUTRAL && current_level > 0)
+			{
+				ESP_LOGW(TAG_TEST, "F/R is NEUTRAL — zeroing throttle (was level %d)", current_level);
+				esp_err_t zerr = multiplexer_dg408djz_set_level(0);
+				if (zerr == ESP_OK)
+				{
+					current_level = 0;
+					led_ws2812_set_state(NODE_STATE_READY);
+				}
 			}
 
 			// Handle serial throttle commands
@@ -2786,7 +2835,9 @@ void throttle_test_task(void *param)
 						{
 							throttle_on = true;
 							current_level = 0;
-							ESP_LOGI(TAG_TEST, "Throttle relay ON (SRD-05VDC, GPIO 21) — mux drives Curtis Pin 3 (level reset to 0)");
+							ESP_LOGI(
+								TAG_TEST,
+								"Throttle relay ON (SRD-05VDC, GPIO 21) — mux drives Curtis Pin 3 (level reset to 0)");
 						}
 						else
 						{
@@ -2802,14 +2853,15 @@ void throttle_test_task(void *param)
 		// OVERRIDE: driver has manual control via pedal/potbox.
 		// Bypass relay stays ON (solenoid stays powered).
 		// Throttle relay OFF (potbox wiper → motor controller).
-		// Mux disabled.  When pedal is released and rearmed,
-		// re-enable autonomous at level 0.
+		// Mux disabled.  When pedal is released, rearmed, AND F/R
+		// is not in REVERSE, re-enable autonomous at level 0.
 		// ............................................................
 		case TEST_OVERRIDE:
 		{
-			if (pedal_is_rearmed)
+			if (pedal_is_rearmed && !fr_is_reverse)
 			{
-				ESP_LOGI(TAG_TEST, "Pedal released — re-arming autonomous at level 0");
+				ESP_LOGI(TAG_TEST, "Override cleared (pedal rearmed, fr=%s) — re-arming at level 0",
+				         fr_state_to_string(fr_now));
 
 				esp_err_t rerr = multiplexer_dg408djz_set_level(0);
 				if (rerr == ESP_OK)
@@ -2836,7 +2888,8 @@ void throttle_test_task(void *param)
 			}
 			else if (now_ms - last_status_log_ms >= 2000)
 			{
-				ESP_LOGI(TAG_TEST, "Override: driver has manual control (release pedal to re-arm)");
+				ESP_LOGI(TAG_TEST, "Override: manual control (fr=%s, pedal_rearmed=%d — need both clear)",
+				         fr_state_to_string(fr_now), pedal_is_rearmed);
 				last_status_log_ms = now_ms;
 			}
 			break;

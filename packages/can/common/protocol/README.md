@@ -55,7 +55,8 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 | 1    | state      | uint8 | NODE_STATE_* (Safety heartbeat commands NOT_READY/READY/ENABLE/ACTIVE target states) |
 | 2    | fault_code | uint8 | NODE_FAULT_* (Safety: e-stop reason, 0 when safe)                                    |
 | 3    | flags      | uint8 | HEARTBEAT_FLAG_* bitmask                                                             |
-| 4-7  | reserved   | -     | Zero-filled                                                                          |
+| 4    | fr_state   | uint8 | FR_STATE_* (Control only; Safety/Planner set to 0)                                   |
+| 5-7  | reserved   | -     | Zero-filled                                                                          |
 
 ### Planner Command (0x111)
 
@@ -142,7 +143,7 @@ Multiple conditions can be active at once. The fault_code byte is OR'd together.
 | 0    | NEUTRAL | Switch in neutral            |
 | 1    | FORWARD | Switch in forward            |
 | 2    | REVERSE | Switch in reverse            |
-| 3    | INVALID | Both switches active (fault) |
+| 3    | INVALID | Buzzer active without anti-arc (reverse pre-bypass, wiring fault post-bypass) |
 
 ## Override Reasons (OVERRIDE_REASON_*)
 
@@ -152,7 +153,7 @@ Internal to Control — NOT transmitted over CAN.
 |------|------------|-------------------------------|
 | 0x00 | NONE       | No override                   |
 | 0x01 | PEDAL      | Accelerator pedal pressed     |
-| 0x02 | FR_CHANGED | F/R switch moved from Forward |
+| 0x02 | FR_CHANGED | F/R switch moved to Reverse while ACTIVE |
 | 0x03 | STEERING   | Steering wheel override        |
 | 0x04 | BRAKING    | Brake pedal override           |
 

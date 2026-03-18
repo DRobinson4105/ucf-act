@@ -32,27 +32,31 @@ High-level rules:
 
 **`NOT_READY <-> READY`** is driven by local preconditions:
 
-- F/R switch in Forward position
+- F/R switch not in Reverse (FORWARD or NEUTRAL both satisfy this)
 - Pedal not pressed
 - Pedal re-armed (released for 500ms after any press)
 - No active fault codes
+
+Note: The anti-arcing microswitch is in series after the throttle microswitch. Before the pedal bypass relay (JD-2912) is energized during ENABLE, the anti-arcing switch cannot conduct. Pre-bypass, FORWARD reads as NEUTRAL and REVERSE reads as INVALID. The precondition check only requires "not in reverse" — NEUTRAL is accepted because it is indistinguishable from FORWARD pre-bypass.
 
 **`READY -> ENABLE`** requires all:
 
 - Safety target state is ENABLE or ACTIVE (from Safety heartbeat `state` field)
-- F/R switch in Forward position
+- F/R switch not in Reverse
 - Pedal not pressed
 - Pedal re-armed (released for 500ms after any press)
 - No active fault codes
 
-**`ENABLE -> ACTIVE`** advances when Safety target reaches `ACTIVE`. It can abort back to `NOT_READY`/`READY` if Safety retreats, pedal is pressed, or F/R moves.
+**`ENABLE -> ACTIVE`** advances when Safety target reaches `ACTIVE`. It can abort back to `NOT_READY`/`READY` if Safety retreats, pedal is pressed, or F/R moves to Reverse. NEUTRAL during ENABLE is allowed.
 
 **`ACTIVE -> OVERRIDE`** is triggered immediately by any:
 
 - Pedal press (no debounce - immediate response)
-- F/R switch moved from Forward (debounced)
+- F/R switch moved to Reverse (debounced)
 - Steering position error (actual encoder diverged >200 pulses from commanded target after motion complete)
 - Braking position error (actual encoder diverged >200 pulses from commanded target after motion complete)
+
+Note: F/R NEUTRAL while ACTIVE does NOT trigger override. Instead, throttle is zeroed (cart can't drive in neutral anyway) while steering/braking continue. The system resumes normal throttle when FORWARD is engaged. F/R state is transmitted to the Orin via heartbeat byte 4 so it can prompt the user to put the cart in forward.
 
 **`ACTIVE -> NOT_READY/READY`** occurs when Safety target retreats (e-stop, node fault/override/timeout, or Planner/Orin autonomy halt).
 This is a commanded retreat from Safety, not a human override event.
@@ -63,7 +67,7 @@ This is a commanded retreat from Safety, not a human override event.
 
 **`OVERRIDE -> NOT_READY/READY`** auto-clears when all conditions are met:
 
-- F/R switch in Forward position
+- F/R switch not in Reverse (FORWARD or NEUTRAL)
 - Pedal re-armed (released for 500ms)
 
 Recovery target is recomputed from current preconditions.
@@ -336,7 +340,7 @@ Supply ──┬── Buzzer → Microswitch INPUT ──┬── Microswitch 
 | Closed       | ~B- (via switch)  | Supply − B- ≈ 48V    | ON    | LOW     | active ✓     |
 | Open         | ~Supply (via buzzer, no current) | Supply − Supply ≈ 0V | OFF   | HIGH    | inactive ✓   |
 
-**Bench:** If cart F/R switch wiring is absent on bench, use `CONFIG_BYPASS_INPUT_FR_SENSOR` to force Forward.
+**Bench:** If cart F/R switch wiring is absent on bench, disconnected optocouplers read NEUTRAL (both HIGH). Pre-bypass, NEUTRAL passes preconditions (not-in-reverse), so the system can reach READY and ENABLE without the F/R sensor bypass. Use `CONFIG_BYPASS_INPUT_FR_SENSOR` only if you need to force FORWARD readings for testing post-bypass ACTIVE behavior.
 
 ### Status LED (WS2812)
 
@@ -366,7 +370,7 @@ Not all components can detect physical absence at init or runtime. Components th
 | `multiplexer_dg408djz`  | No               | Output-only GPIO. Init readback tests the MCU output latch, not the external IC. The DG408DJZ is a purely analog device with no feedback path.                                                                                               |
 | `relay_jd2912`          | No               | Output-only GPIO. Same readback pattern as the mux -- verifies the MCU register, not whether the relay/transistor is physically present.                                                                                                     |
 | `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled. |
-| `optocoupler_pc817`     | Yes              | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. `init_fr_inputs()` rejects NEUTRAL as invalid, triggering FAULT.                                                                                                        |
+| `optocoupler_pc817`     | No (pre-bypass)  | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. Pre-bypass, NEUTRAL is expected (FORWARD reads as NEUTRAL when anti-arc switch can't conduct). Hardware absence is indistinguishable from "cart in FORWARD/NEUTRAL." Post-bypass (ACTIVE), the full truth table is readable and a disconnected optocoupler would read NEUTRAL, which zeroes throttle but does not fault. |
 | `stepper_motor_uim2852` | Yes              | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                        |
 
 For the mux and relay, detecting hardware absence would require board-level changes (e.g., adding a sense/feedback line). For the pedal ADC, a plausibility range check on the idle reading could improve detection but is not yet implemented.

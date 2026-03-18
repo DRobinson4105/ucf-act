@@ -49,22 +49,22 @@ typedef uint8_t fr_state_t; // FR_STATE_* values
 typedef uint8_t override_reason_t; // OVERRIDE_REASON_* values
 
 #define PRECONDITION_OK                     0x00
-#define PRECONDITION_FAIL_FR_NOT_FORWARD    0x01
+#define PRECONDITION_FAIL_FR_IN_REVERSE     0x01
 #define PRECONDITION_FAIL_PEDAL_PRESSED     0x02
 #define PRECONDITION_FAIL_PEDAL_NOT_REARMED 0x04
 #define PRECONDITION_FAIL_ACTIVE_FAULT      0x08
-#define PRECONDITION_FAIL_ALL                                                                                   \
-	(PRECONDITION_FAIL_FR_NOT_FORWARD | PRECONDITION_FAIL_PEDAL_PRESSED | PRECONDITION_FAIL_PEDAL_NOT_REARMED | \
+#define PRECONDITION_FAIL_ALL                                                                                  \
+	(PRECONDITION_FAIL_FR_IN_REVERSE | PRECONDITION_FAIL_PEDAL_PRESSED | PRECONDITION_FAIL_PEDAL_NOT_REARMED | \
 	 PRECONDITION_FAIL_ACTIVE_FAULT)
 typedef uint8_t precondition_fail_t; // PRECONDITION_FAIL_* bitmask
 
 #define CONTROL_ACTION_NONE             0x0000
-#define CONTROL_ACTION_START_ENABLE     0x0001 // Begin enable sequence (relay, mux level 0)
-#define CONTROL_ACTION_COMPLETE_ENABLE  0x0002 // Finish enable (steppers on, mux autonomous)
-#define CONTROL_ACTION_ABORT_ENABLE     0x0004 // Cancel enable (relay off, mux disable)
+#define CONTROL_ACTION_START_ENABLE     0x0001 // Begin enable sequence (relay, throttle level 0)
+#define CONTROL_ACTION_COMPLETE_ENABLE  0x0002 // Finish enable (steppers on, throttle autonomous)
+#define CONTROL_ACTION_ABORT_ENABLE     0x0004 // Cancel enable (relay off, throttle disable)
 #define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008 // Emergency disable all actuators
 #define CONTROL_ACTION_ATTEMPT_RECOVERY 0x0010 // Try fault recovery
-#define CONTROL_ACTION_APPLY_THROTTLE   0x0020 // Update DG408DJZ mux to new throttle level
+#define CONTROL_ACTION_APPLY_THROTTLE   0x0020 // Update throttle actuator to new level
 #define CONTROL_ACTION_DISABLE_AUTONOMY 0x0040 // Disable actuators (non-override retreat/fault)
 typedef uint16_t control_actions_t;            // CONTROL_ACTION_* bitmask
 
@@ -77,7 +77,7 @@ typedef uint8_t disable_reason_t; // CONTROL_DISABLE_REASON_* values
 #define CONTROL_ABORT_REASON_NONE           0x00
 #define CONTROL_ABORT_REASON_SAFETY_RETREAT 0x01
 #define CONTROL_ABORT_REASON_PEDAL_PRESSED  0x02
-#define CONTROL_ABORT_REASON_FR_NOT_FORWARD 0x03
+#define CONTROL_ABORT_REASON_FR_IN_REVERSE  0x03
 #define CONTROL_ABORT_REASON_MOTOR_FAULT    0x04
 #define CONTROL_ABORT_REASON_SENSOR_INVALID 0x05
 typedef uint8_t abort_reason_t; // CONTROL_ABORT_REASON_* values

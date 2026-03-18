@@ -145,7 +145,8 @@ typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
 //         - HEARTBEAT_FLAG_ENABLE_COMPLETE: node finished ENABLE
 //         - HEARTBEAT_FLAG_AUTONOMY_REQUEST: Planner/Orin requests autonomy enable and
 //           must stay asserted while autonomy should remain enabled
-// byte 4-7: reserved
+// byte 4: fr_state (FR_STATE_* — Control only; Safety/Planner set to 0)
+// byte 5-7: reserved
 
 typedef struct
 {
@@ -153,6 +154,7 @@ typedef struct
 	node_state_t state;
 	node_fault_t fault_code;
 	heartbeat_flags_t flags;
+	uint8_t fr_state; // FR_STATE_* (Control heartbeat only, 0 for Safety/Planner)
 } node_heartbeat_t;
 
 // ============================================================================
@@ -256,7 +258,7 @@ static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *h
 	data[1] = hb->state;
 	data[2] = hb->fault_code;
 	data[3] = hb->flags;
-	data[4] = 0;
+	data[4] = hb->fr_state;
 	data[5] = 0;
 	data[6] = 0;
 	data[7] = 0;
@@ -281,6 +283,7 @@ static inline bool can_decode_heartbeat(const uint8_t *data, uint8_t dlc, node_h
 	hb->state = data[1];
 	hb->fault_code = data[2];
 	hb->flags = data[3];
+	hb->fr_state = data[4];
 	return true;
 }
 
@@ -347,10 +350,10 @@ static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, 
 
 typedef struct
 {
-	uint16_t voltage_mv;   // Pack voltage in millivolts
-	int16_t current_10ma;  // Pack current in 10mA units (positive=discharge)
-	uint8_t soc_pct;       // State of charge 0-100%
-	uint8_t flags;         // BATTERY_FLAG_* bitmask
+	uint16_t voltage_mv;  // Pack voltage in millivolts
+	int16_t current_10ma; // Pack current in 10mA units (positive=discharge)
+	uint8_t soc_pct;      // State of charge 0-100%
+	uint8_t flags;        // BATTERY_FLAG_* bitmask
 } battery_status_t;
 
 /**

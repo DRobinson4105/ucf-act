@@ -205,6 +205,7 @@ static void test_safety_heartbeat_roundtrip_advancing(void)
 		.state = NODE_STATE_ENABLE,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = 0,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -225,6 +226,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void)
 		.state = NODE_STATE_READY,
 		.fault_code = NODE_FAULT_ESTOP_BUTTON,
 		.flags = 0,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -245,12 +247,13 @@ static void test_safety_heartbeat_reserved_bytes_zero(void)
 		.state = NODE_STATE_ACTIVE,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = 0,
+		.fr_state = 0, // Safety has no FR state
 	};
 	uint8_t data[8];
 	memset(data, 0xFF, 8);
 	can_encode_heartbeat(data, &hb);
 
-	// bytes 4-7 should be zeroed
+	// byte 4 = fr_state (0 for Safety), bytes 5-7 reserved (zeroed)
 	for (int i = 4; i < 8; i++)
 	{
 		assert(data[i] == 0);
@@ -268,6 +271,7 @@ static void test_heartbeat_roundtrip_basic(void)
 		.state = NODE_STATE_ACTIVE,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = 0,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -289,6 +293,7 @@ static void test_heartbeat_roundtrip_with_fault(void)
 		.state = NODE_STATE_FAULT,
 		.fault_code = NODE_FAULT_PERCEPTION,
 		.flags = 0,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -310,6 +315,7 @@ static void test_heartbeat_roundtrip_enable_complete(void)
 		.state = NODE_STATE_ENABLE,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = HEARTBEAT_FLAG_ENABLE_COMPLETE,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -331,6 +337,7 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 		.state = NODE_STATE_READY,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = HEARTBEAT_FLAG_AUTONOMY_REQUEST,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -345,6 +352,30 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 	assert(hb_out.flags == HEARTBEAT_FLAG_AUTONOMY_REQUEST);
 }
 
+static void test_heartbeat_roundtrip_fr_state(void)
+{
+	node_heartbeat_t hb_in = {
+		.sequence = 53,
+		.state = NODE_STATE_ACTIVE,
+		.fault_code = NODE_FAULT_NONE,
+		.flags = 0,
+		.fr_state = 0x01, // FR_STATE_FORWARD
+	};
+
+	uint8_t data[8];
+	can_encode_heartbeat(data, &hb_in);
+
+	// Verify byte 4 carries fr_state
+	assert(data[4] == 0x01);
+
+	node_heartbeat_t hb_out = {};
+	assert(can_decode_heartbeat(data, 8, &hb_out));
+
+	assert(hb_out.sequence == 53);
+	assert(hb_out.state == NODE_STATE_ACTIVE);
+	assert(hb_out.fr_state == 0x01);
+}
+
 static void test_heartbeat_roundtrip_reserved_bit2(void)
 {
 	node_heartbeat_t hb_in = {
@@ -352,6 +383,7 @@ static void test_heartbeat_roundtrip_reserved_bit2(void)
 		.state = NODE_STATE_READY,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = 0x04,
+		.fr_state = 0,
 	};
 
 	uint8_t data[8];
@@ -373,12 +405,13 @@ static void test_heartbeat_reserved_bytes_zero(void)
 		.state = NODE_STATE_READY,
 		.fault_code = NODE_FAULT_NONE,
 		.flags = 0,
+		.fr_state = 0,
 	};
 	uint8_t data[8];
 	memset(data, 0xFF, 8);
 	can_encode_heartbeat(data, &hb);
 
-	// bytes 4-7 should be zeroed
+	// byte 4 = fr_state (0), bytes 5-7 reserved (zeroed)
 	for (int i = 4; i < 8; i++)
 	{
 		assert(data[i] == 0);
@@ -393,6 +426,7 @@ static void test_heartbeat_decode_rejects_short_dlc(void)
 		.state = 0xBB,
 		.fault_code = 0xCC,
 		.flags = 0xDD,
+		.fr_state = 0xEE,
 	};
 
 	assert(!can_decode_heartbeat(data, 3, &hb_out));
@@ -526,6 +560,7 @@ int main(void)
 	TEST(test_heartbeat_roundtrip_with_fault);
 	TEST(test_heartbeat_roundtrip_enable_complete);
 	TEST(test_heartbeat_roundtrip_autonomy_request);
+	TEST(test_heartbeat_roundtrip_fr_state);
 	TEST(test_heartbeat_roundtrip_reserved_bit2);
 	TEST(test_heartbeat_reserved_bytes_zero);
 	TEST(test_heartbeat_decode_rejects_short_dlc);

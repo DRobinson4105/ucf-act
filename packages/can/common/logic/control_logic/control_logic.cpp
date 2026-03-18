@@ -78,8 +78,8 @@ precondition_fail_t control_check_preconditions(const precondition_inputs_t *inp
 
 	precondition_fail_t fail = PRECONDITION_OK;
 
-	if (inputs->fr_state != FR_STATE_FORWARD)
-		fail |= PRECONDITION_FAIL_FR_NOT_FORWARD;
+	if (inputs->fr_state == FR_STATE_REVERSE || inputs->fr_state == FR_STATE_INVALID)
+		fail |= PRECONDITION_FAIL_FR_IN_REVERSE;
 	if (inputs->pedal_pressed)
 		fail |= PRECONDITION_FAIL_PEDAL_PRESSED;
 	if (!inputs->pedal_rearmed)
@@ -211,8 +211,13 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		return r;
 	}
 
-	// Check for F/R INVALID sensor reading
-	if (inputs->fr_state == FR_STATE_INVALID && current_fault != NODE_FAULT_SENSOR_INVALID)
+	// Check for F/R INVALID sensor reading (post-bypass only).
+	// Pre-bypass (INIT/NOT_READY/READY), INVALID means "reverse" (buzzer
+	// active, anti-arc can't conduct) — handled by the precondition check,
+	// not as a fault.  Post-bypass (ENABLE/ACTIVE), the anti-arc switch is
+	// readable, so INVALID is a genuine wiring fault.
+	if (inputs->fr_state == FR_STATE_INVALID && current_fault != NODE_FAULT_SENSOR_INVALID &&
+	    (current_state == NODE_STATE_ENABLE || current_state == NODE_STATE_ACTIVE))
 	{
 		if (current_state == NODE_STATE_ACTIVE)
 		{
@@ -295,12 +300,15 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 			r.enable_work_done = false;
 			break;
 		}
-		// FR no longer forward? Abort.
-		if (inputs->fr_state != FR_STATE_FORWARD)
+		// FR moved to reverse? Abort.
+		// FR_INVALID during ENABLE is caught by the pre-switch guard above
+		// (post-bypass wiring fault).  NEUTRAL is allowed (pre-bypass, FORWARD
+		// and NEUTRAL are indistinguishable).
+		if (inputs->fr_state == FR_STATE_REVERSE)
 		{
 			r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
 			r.actions |= CONTROL_ACTION_ABORT_ENABLE;
-			r.abort_reason = CONTROL_ABORT_REASON_FR_NOT_FORWARD;
+			r.abort_reason = CONTROL_ABORT_REASON_FR_IN_REVERSE;
 			r.enable_work_done = false;
 			break;
 		}
@@ -351,11 +359,14 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 			enter_override(&r, OVERRIDE_REASON_PEDAL);
 			break;
 		}
-		if (inputs->fr_state != FR_STATE_FORWARD)
+		if (inputs->fr_state == FR_STATE_REVERSE)
 		{
 			enter_override(&r, OVERRIDE_REASON_FR_CHANGED);
 			break;
 		}
+		// FR_INVALID in ACTIVE is caught by the pre-switch guard (wiring fault → FAULT).
+		// FR_NEUTRAL in ACTIVE: cart is not in gear — zero throttle but stay ACTIVE
+		// so steering/braking continue and the system resumes when FORWARD is engaged.
 		// Steering position error (external force on steering column)
 		if (inputs->steering_position_error)
 		{
@@ -369,10 +380,11 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 			break;
 		}
 
-		// Throttle slew
+		// Throttle slew — zero target when FR is NEUTRAL (cart not in gear)
+		int8_t effective_throttle_target = (inputs->fr_state == FR_STATE_NEUTRAL) ? 0 : inputs->throttle_cmd;
 		throttle_slew_inputs_t slew = {
 			.current = inputs->throttle_current,
-			.target = inputs->throttle_cmd,
+			.target = effective_throttle_target,
 			.last_change_ms = inputs->last_throttle_change_ms,
 			.now_ms = inputs->now_ms,
 			.slew_interval_ms = inputs->throttle_slew_interval_ms,
@@ -427,7 +439,8 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		apply_safe_outputs(&r);
 
 		// Recover to readiness state when override conditions clear.
-		if (inputs->fr_state == FR_STATE_FORWARD && inputs->pedal_rearmed)
+		// FR must not be in REVERSE or INVALID (same as precondition check).
+		if (inputs->fr_state != FR_STATE_REVERSE && inputs->fr_state != FR_STATE_INVALID && inputs->pedal_rearmed)
 		{
 			r.new_state = readiness_state_from_inputs(current_fault, inputs, &r.precondition_fail);
 			r.override_reason = OVERRIDE_REASON_NONE;
