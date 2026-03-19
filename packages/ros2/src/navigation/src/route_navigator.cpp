@@ -49,6 +49,7 @@ public:
 
     goal_ahead_m_ = declare_parameter<double>("goal_ahead_m", 25.0);
     replan_period_s_ = declare_parameter<double>("replan_period_s", 0.5);
+    min_follow_replace_period_s_ = declare_parameter<double>("min_follow_replace_period_s", 2.0);
 
     stuck_time_s_ = declare_parameter<double>("stuck_time_s", 3.0);
     stuck_dist_m_ = declare_parameter<double>("stuck_dist_m", 0.25);
@@ -113,6 +114,7 @@ public:
     last_pose_.pose.orientation.w = 1.0;
     last_local_costmap_time_ = now();
     last_speed_limit_eval_time_ = now();
+    last_follow_send_time_ = now();
     publishSpeedLimitNoLimit();
   }
 
@@ -501,7 +503,7 @@ private:
     const double reaction_term = a * std::max(0.0, speed_limit_reaction_time_s_);
     const double L = std::max(0.0, free_distance - speed_limit_buffer_m_);
     const double v = -reaction_term + std::sqrt(reaction_term * reaction_term + 2.0 * a * L);
-    return clampDouble(v, speed_limit_crawl_mps_, speed_limit_max_mps_);
+    return clampDouble(v, 0.0, speed_limit_max_mps_);
   }
 
   double rateLimitSpeedCapIncrease(double target) {
@@ -566,13 +568,17 @@ private:
 
     double target_cap = std::min(speed_limit_max_mps_, phase_cap);
     if (mode_ == Mode::FOLLOW_ROUTE) target_cap = std::min(target_cap, path_cap);
-    if (have_env_cap) target_cap = std::min(target_cap, env_cap);
+    if (have_env_cap) {
+      const double env_cap_with_floor =
+        (env_cap > 0.0 && env_cap < speed_limit_crawl_mps_) ? speed_limit_crawl_mps_ : env_cap;
+      target_cap = std::min(target_cap, env_cap_with_floor);
+    }
 
     const double final_cap = rateLimitSpeedCapIncrease(target_cap);
     publishSpeedLimitValue(final_cap);
 
     RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 1000,
+      get_logger(), *get_clock(), 2000,
       "speed cap path=%.2f phase=%.2f env=%.2f final=%.2f",
       path_cap, phase_cap, env_cap, final_cap);
   }
@@ -658,7 +664,14 @@ private:
       planned_path_pub_->publish(path);
 
       const std::string path_key = makePathKey(path, 0.25);
-      if (active_follow_ && path_key == active_follow_path_key_) return;
+
+      if (active_follow_) {
+        const double since_last_follow_send = (now() - last_follow_send_time_).seconds();
+        if (path_key == active_follow_path_key_ || since_last_follow_send < min_follow_replace_period_s_) {
+          return;
+        }
+      }
+
       sendFollow(path, path_key);
     };
 
@@ -667,7 +680,10 @@ private:
 
   void sendFollow(const nav_msgs::msg::Path &path, const std::string &path_key) {
     const uint64_t follow_token = ++active_follow_token_;
-    if (active_follow_) follow_client_->async_cancel_all_goals();
+    if (active_follow_) {
+      follow_client_->async_cancel_all_goals();
+    }
+    last_follow_send_time_ = now();
 
     FollowPath::Goal fg;
     fg.path = path;
@@ -716,6 +732,7 @@ private:
 
   double goal_ahead_m_{25.0};
   double replan_period_s_{0.5};
+  double min_follow_replace_period_s_{2.0};
   double stuck_time_s_{3.0};
   double stuck_dist_m_{0.25};
 
@@ -787,6 +804,7 @@ private:
   rclcpp::Time last_pose_time_;
   rclcpp::Time last_local_costmap_time_;
   rclcpp::Time last_speed_limit_eval_time_;
+  rclcpp::Time last_follow_send_time_;
   geometry_msgs::msg::PoseStamped last_pose_;
 };
 

@@ -5,7 +5,7 @@ planner_server:
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_smac_planner/SmacPlannerHybrid"
-      tolerance: 0.5
+      tolerance: 1.5
       allow_unknown: false
       downsample_costmap: false
       downsampling_factor: 1
@@ -14,7 +14,7 @@ planner_server:
       terminal_checking_interval: 5000
       max_planning_time: 1.0
       motion_model_for_search: "DUBIN"
-      cost_travel_multiplier: 2.0
+      cost_travel_multiplier: 3.0
       angle_quantization_bins: 64
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 10.0
@@ -24,7 +24,7 @@ planner_server:
       reverse_penalty: 2.1
       change_penalty: 0.0
       non_straight_penalty: 1.2
-      cost_penalty: 2.0
+      cost_penalty: 3.0
       retrospective_penalty: 0.025
       lookup_table_size: 20.0
       cache_obstacle_heuristic: true
@@ -51,7 +51,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.25
-      movement_time_allowance: 30.0
+      movement_time_allowance: 75.0
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
@@ -100,8 +100,8 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 8.0
-        critical_cost: 200.0
+        cost_weight: 12.0
+        critical_cost: 150.0
         collision_cost: 1000000.0
         consider_footprint: true
 
@@ -122,7 +122,6 @@ global_costmap:
   global_costmap:
     ros__parameters:
       track_unknown_space: false
-      #footprint_padding: 0.05
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
@@ -158,7 +157,7 @@ global_costmap:
           data_type: "PointCloud2"
           marking: true
           clearing: true
-          obstacle_range: 8.0
+          obstacle_range: 50.0
           max_obstacle_height: 1.8
           min_obstacle_height: 0.6
           filter: "voxel"
@@ -189,14 +188,13 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 2.0
-        cost_scaling_factor: 2.0
+        inflation_radius: 2.2
+        cost_scaling_factor: 1.0
 
 local_costmap:
   local_costmap:
     ros__parameters:
       track_unknown_space: true
-      #footprint_padding: 0.15
       global_frame: odom
       robot_base_frame: base_link
       update_frequency: 10.0
@@ -206,13 +204,13 @@ local_costmap:
       width: 40
       height: 40
       plugins: ["stvl_layer", "inflation_layer"]
-      footprint_padding: 0.15
+      footprint_padding: 0.1
       footprint: "[[1.9304, 0.5842], [1.9304, -0.5842], [-0.8382, -0.5842], [-0.8382, 0.5842]]"
 
       stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
         enabled: true
-        voxel_decay: 1.0
+        voxel_decay: 5.0
         decay_model: 0
         voxel_size: 0.05
         track_unknown_space: false
@@ -231,8 +229,8 @@ local_costmap:
           sensor_frame: "livox_frame"
           data_type: "PointCloud2"
           marking: true
-          clearing: true
-          obstacle_range: 10.0
+          clearing: false
+          obstacle_range: 50.0
           max_obstacle_height: 1.8
           min_obstacle_height: 0.6
           filter: "voxel"
@@ -263,8 +261,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 2.0
-        cost_scaling_factor: 2.0
+        inflation_radius: 2.2
+        cost_scaling_factor: 1.0
 
 lifecycle_manager:
   ros__parameters:

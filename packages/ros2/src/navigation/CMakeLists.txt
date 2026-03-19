@@ -15,6 +15,7 @@ find_package(nav2_msgs REQUIRED)
 find_package(GeographicLib QUIET)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(can_msgs REQUIRED)
 
 if(NOT GeographicLib_FOUND)
   list(APPEND CMAKE_MODULE_PATH /usr/share/cmake/geographiclib)
@@ -55,6 +56,7 @@ ament_target_dependencies(cmd_vel_adapter
   geometry_msgs
   nav_msgs
   nav2_msgs
+  can_msgs
 )
 
 add_executable(mock_livox_pointcloud_publisher src/mock_livox_pointcloud_publisher.cpp)
