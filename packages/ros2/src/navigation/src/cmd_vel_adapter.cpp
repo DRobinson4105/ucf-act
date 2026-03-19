@@ -4,9 +4,9 @@
 #include <string>
 
 #include <nav2_msgs/msg/speed_limit.hpp>
-#include <navigation/msg/drive_command.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <can_msgs/msg/frame.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 class CmdVelAdapter : public rclcpp::Node {
@@ -14,7 +14,7 @@ public:
   CmdVelAdapter() : rclcpp::Node("cmd_vel_adapter") {
     cmd_in_topic_ = declare_parameter<std::string>("cmd_in_topic", "/cmd_vel_nav");
     odom_topic_ = declare_parameter<std::string>("odom_topic", "/odometry/local");
-    out_topic_ = declare_parameter<std::string>("out_topic", "/act/drive_cmd");
+    can_topic_ = declare_parameter<std::string>("can_topic", "/to_can_bus");
     speed_limit_topic_ = declare_parameter<std::string>("speed_limit_topic", "/speed_limit");
 
     publish_hz_ = declare_parameter<double>("publish_hz", 50.0);
@@ -40,7 +40,7 @@ public:
       speed_limit_topic_, rclcpp::QoS(1).reliable().transient_local(),
       std::bind(&CmdVelAdapter::onSpeedLimit, this, std::placeholders::_1));
 
-    out_pub_ = create_publisher<navigation::msg::DriveCommand>(out_topic_, 10);
+    can_pub_ = create_publisher<can_msgs::msg::Frame>(can_topic_, 10);
 
     last_time_ = now();
     last_speed_limit_time_ = now();
@@ -54,6 +54,33 @@ public:
 private:
   static double clamp(double v, double lo, double hi) {
     return std::max(lo, std::min(hi, v));
+  }
+
+  uint16_t normalize(double value, double inMin, double inMax, uint16_t outMin, uint16_t outMax) {
+    double clamped = std::clamp(value, inMin, inMax);
+    double normalized = (clamped - inMin) / (inMax - inMin);
+    return static_cast<uint16_t>(outMin + normalized * (outMax - outMin) + 0.5);
+  }
+
+  uint8_t counter_ = 0;
+  double decelerateL_ = 1.0;
+  double v_acc_min_ = 0.0, v_acc_max_ = 1.0;
+  double v_decc_min_ = 0.0, v_decc_max_ = 1.5;
+  double w_vel_min_ = -1.28, w_vel_max_ = 1.28;
+  uint8_t throttle_min_ = 0, throttle_max_ = 7;
+  uint16_t steering_min_ = 0, steering_max_ = 720;
+  uint8_t braking_min_ = 0, braking_max_ = 3;
+
+  std::vector<uint8_t> map_values(double v_acc, double w_vel) {
+    double accel = v_acc - decelerateL_;
+    uint8_t throttle_val = static_cast<uint8_t>(
+      normalize(std::max(accel, 0.0), v_acc_min_, v_acc_max_, throttle_min_, throttle_max_));
+    uint16_t steering_raw = normalize(w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_);
+    uint8_t steering_hi = static_cast<uint8_t>((steering_raw >> 8) & 0xFF);
+    uint8_t steering_lo = static_cast<uint8_t>(steering_raw & 0xFF);
+    uint8_t braking_val = static_cast<uint8_t>(
+      normalize(std::max(-accel, 0.0), v_decc_min_, v_decc_max_, braking_min_, braking_max_));
+    return {throttle_val, steering_hi, steering_lo, braking_val};
   }
 
   void onCmd(const geometry_msgs::msg::Twist::SharedPtr msg) {
@@ -92,6 +119,7 @@ private:
   }
 
   void onTimer() {
+    counter_ = counter_ == 255 ? 0 : (counter_ + 1);
     const auto t = now();
     double dt = (t - last_time_).seconds();
     if (dt < 0.0) dt = 0.0;
@@ -99,10 +127,10 @@ private:
     last_time_ = t;
 
     if (!have_cmd_) {
-	RCLCPP_INFO_THROTTLE(
-	get_logger(), *get_clock(), 2000,
-	"Waiting for /cmd_vel_nav before publishing /act/drive_cmd");
-	return;
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "Waiting for /cmd_vel_nav before publishing CAN frame");
+      return;
     }
 
     if (have_active_speed_cap_ && (t - last_speed_limit_time_).seconds() > speed_limit_timeout_s_) {
@@ -139,32 +167,30 @@ private:
       w_out = clamp(w_filt_, -curv_limit, curv_limit);
     }
 
-    navigation::msg::DriveCommand out;
+    double v_curr = have_odom_ ? odom_.twist.twist.linear.x : 0.0;
+    double v_acc = v_filt_ - v_curr;
+    auto mapped = map_values(v_acc, w_out);
 
-    out.header.stamp = t;
-    out.header.frame_id = "base_link";
-    
-    out.v = static_cast<float>(v_filt_);
-    out.w = static_cast<float>(w_out);
-    
-    if (have_odom_) {
-      out.v_meas = static_cast<float>(odom_.twist.twist.linear.x);
-      out.w_meas = static_cast<float>(odom_.twist.twist.angular.z);
-      out.v_err = out.v - out.v_meas;
-      out.w_err = out.w - out.w_meas;
-    } else {
-      out.v_meas = 0.0f;
-      out.w_meas = 0.0f;
-      out.v_err = 0.0f;
-      out.w_err = 0.0f;
-    }
-    
-    out_pub_->publish(out);
+    // Publish CAN frame
+    can_msgs::msg::Frame can_frame;
+    can_frame.header.stamp = t;
+    can_frame.header.frame_id = "can";
+    can_frame.id = 0x111;
+    can_frame.is_extended = false;
+    can_frame.is_error = false;
+    can_frame.dlc = 5;
+    can_frame.data[0] = counter_;
+    can_frame.data[1] = mapped[0];  // throttle
+    can_frame.data[2] = mapped[1];  // steering high byte
+    can_frame.data[3] = mapped[2];  // steering low byte
+    can_frame.data[4] = mapped[3];  // braking
+
+    can_pub_->publish(can_frame);
   }
 
   std::string cmd_in_topic_;
   std::string odom_topic_;
-  std::string out_topic_;
+  std::string can_topic_;
   std::string speed_limit_topic_;
 
   double publish_hz_{50.0};
@@ -196,7 +222,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_in_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav2_msgs::msg::SpeedLimit>::SharedPtr speed_limit_sub_;
-  rclcpp::Publisher<navigation::msg::DriveCommand>::SharedPtr out_pub_;
+  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr can_pub_;
 };
 
 int main(int argc, char **argv) {
