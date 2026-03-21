@@ -76,10 +76,14 @@ private:
     uint8_t throttle_val = static_cast<uint8_t>(
       normalize(std::max(accel, 0.0), v_acc_min_, v_acc_max_, throttle_min_, throttle_max_));
     uint16_t steering_raw = normalize(w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_);
+
     uint8_t steering_hi = static_cast<uint8_t>((steering_raw >> 8) & 0xFF);
     uint8_t steering_lo = static_cast<uint8_t>(steering_raw & 0xFF);
     uint8_t braking_val = static_cast<uint8_t>(
       normalize(std::max(-accel, 0.0), v_decc_min_, v_decc_max_, braking_min_, braking_max_));
+    
+    RCLCPP_INFO(get_logger(), "%.3f %.3f %d %d %d", v_acc, w_out, throttle_val, steering_raw, braking_val);
+
     return {throttle_val, steering_hi, steering_lo, braking_val};
   }
 
@@ -170,8 +174,8 @@ private:
     double v_curr = have_odom_ ? odom_.twist.twist.linear.x : 0.0;
     double v_acc = v_filt_ - v_curr;
     auto mapped = map_values(v_acc, w_out);
+ 
 
-    // Publish CAN frame
     can_msgs::msg::Frame can_frame;
     can_frame.header.stamp = t;
     can_frame.header.frame_id = "can";

@@ -94,7 +94,7 @@ function RideTrackingContent({
 
   const statusInfo = getStatusInfo();
   const isArriving = currentRide?.status === "arriving";
-  const canCancel = currentRide?.status === "assigned" || currentRide?.status === "arriving";
+  const canCancel = currentRide?.status === "assigned" || currentRide?.status === "arriving" || currentRide?.status === "in_progress";
 
   return (
     <ScrollView style={styles.sheetContent} showsVerticalScrollIndicator={false}>

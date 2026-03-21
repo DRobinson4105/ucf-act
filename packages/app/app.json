@@ -1,63 +1,61 @@
 {
-  "expo": {
-    "name": "ACT - Campus Taxi",
-    "slug": "act-campus-taxi",
-    "version": "2.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.ucf.act",
-      "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
-        },
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-        "NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-        "NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-        "UIBackgroundModes": [
-          "location"
-        ],
-        "ITSAppUsesNonExemptEncryption": false
-      }
-    },
-    "plugins": [
-      "expo-router",
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "deploymentTarget": "17.0"
-          }
-        }
-      ],
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
-          "locationAlwaysPermission": "ACT needs your location to show your position on the map and provide ride services.",
-          "locationWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
-          "isIosBackgroundLocationEnabled": true,
-          "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true
-        }
-      ],
-      "expo-secure-store",
-      "expo-apple-authentication"
-    ],
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "81150332-57e1-4e4a-b2cd-a854a8aaf6ea"
-      }
-    }
-  }
+	"expo": {
+		"name": "ACT - Campus Taxi",
+		"slug": "act-campus-taxi",
+		"version": "4.0.0",
+		"orientation": "portrait",
+		"icon": "./assets/images/icon.png",
+		"scheme": "myapp",
+		"userInterfaceStyle": "dark",
+		"newArchEnabled": true,
+		"splash": {
+			"image": "./assets/images/splash-icon.png",
+			"resizeMode": "contain",
+			"backgroundColor": "#ffffff"
+		},
+		"ios": {
+			"supportsTablet": true,
+			"bundleIdentifier": "com.ucf.act",
+			"infoPlist": {
+				"NSAppTransportSecurity": {
+					"NSAllowsArbitraryLoads": true
+				},
+				"NSLocationAlwaysAndWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
+				"NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
+				"NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
+				"UIBackgroundModes": ["location"],
+				"ITSAppUsesNonExemptEncryption": false
+			}
+		},
+		"plugins": [
+			"expo-router",
+			[
+				"expo-build-properties",
+				{
+					"ios": {
+						"deploymentTarget": "17.0"
+					}
+				}
+			],
+			[
+				"expo-location",
+				{
+					"locationAlwaysAndWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
+					"locationAlwaysPermission": "ACT needs your location to show your position on the map and provide ride services.",
+					"locationWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
+					"isIosBackgroundLocationEnabled": true,
+					"isAndroidBackgroundLocationEnabled": true,
+					"isAndroidForegroundServiceEnabled": true
+				}
+			],
+			"expo-secure-store",
+			"expo-apple-authentication"
+		],
+		"extra": {
+			"router": {},
+			"eas": {
+				"projectId": "81150332-57e1-4e4a-b2cd-a854a8aaf6ea"
+			}
+		}
+	}
 }

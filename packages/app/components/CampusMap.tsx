@@ -62,6 +62,7 @@ export default function CampusMap({
   } | null>(null);
   const [walkingPath, setWalkingPath] = useState<PathNode[]>([]);
   const [vehiclePath, setVehiclePath] = useState<PathNode[]>([]);
+  const fullVehiclePathRef = useRef<PathNode[]>([]);
   const pathOpacity = useRef(new Animated.Value(1)).current;
   const [animatedOpacity, setAnimatedOpacity] = useState(1);
   const listenerRef = useRef<string | null>(null);
@@ -90,10 +91,15 @@ export default function CampusMap({
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === "granted") {
         const location = await Location.getCurrentPositionAsync({});
-        setUserLocation({
+        const coords = {
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
-        });
+        };
+        setUserLocation(coords);
+        mapRef.current?.animateToRegion(
+          { ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+          500
+        );
       }
     })();
   }, []);
@@ -118,7 +124,7 @@ export default function CampusMap({
         dropoffLocation.name
       );
 
-      findPath(start, goal)
+      findPath(start, goal, userLocation ?? undefined)
         .then((path) => {
           if (!isCancelled) {
             setWalkingPath(path);
@@ -174,47 +180,62 @@ export default function CampusMap({
     };
   }, [pickupLocation, dropoffLocation, pathOpacity]);
 
+  // Fetch full vehicle path only when the goal changes, not on every position update
+  const routeGoal = vehicleTarget ?? (pickupLocation ? { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude } : null);
+  const routeGoalKey = routeGoal ? `${routeGoal.latitude},${routeGoal.longitude}` : null;
+
   useEffect(() => {
     let isCancelled = false;
 
-    const routeGoal = vehicleTarget ?? (pickupLocation ? { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude } : null);
-
-    if (showRoute && routeGoal && vehiclePosition) {
-      const start: PathNode = {
-        latitude: vehiclePosition.latitude,
-        longitude: vehiclePosition.longitude,
-      };
-      const goal: PathNode = {
-        latitude: routeGoal.latitude,
-        longitude: routeGoal.longitude,
-      };
-
-      console.log(
-        "Finding vehicle path from cart to pickup location using pedestrian pathfinding"
-      );
-
-      findPath(start, goal)
-        .then((path) => {
-          if (!isCancelled) {
-            console.log("Vehicle path found with", path.length, "waypoints");
-            setVehiclePath(path);
-          }
-        })
-        .catch((error) => {
-          console.error("Error finding vehicle path:", error);
-          if (!isCancelled) {
-            console.log("Fallback: using direct line for vehicle path");
-            setVehiclePath([start, goal]);
-          }
-        });
-    } else {
+    if (!showRoute || !routeGoal || !vehiclePosition) {
+      fullVehiclePathRef.current = [];
       setVehiclePath([]);
+      return;
     }
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [showRoute, pickupLocation, vehiclePosition, vehicleTarget]);
+    const goal: PathNode = { latitude: routeGoal.latitude, longitude: routeGoal.longitude };
+    const start: PathNode = { latitude: vehiclePosition.latitude, longitude: vehiclePosition.longitude };
+
+    findPath(start, goal, userLocation ?? undefined)
+      .then((path) => {
+        if (!isCancelled) {
+          console.log("Vehicle path fetched with", path.length, "waypoints");
+          fullVehiclePathRef.current = path;
+          setVehiclePath(path);
+        }
+      })
+      .catch((error) => {
+        console.error("Error finding vehicle path:", error);
+        if (!isCancelled) {
+          fullVehiclePathRef.current = [start, goal];
+          setVehiclePath([start, goal]);
+        }
+      });
+
+    return () => { isCancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showRoute, routeGoalKey]);
+
+  // Trim the stored path from the nearest waypoint as the cart moves — no re-fetch
+  useEffect(() => {
+    if (!vehiclePosition || fullVehiclePathRef.current.length === 0) return;
+
+    const { latitude: vLat, longitude: vLon } = vehiclePosition;
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+
+    fullVehiclePathRef.current.forEach((pt, idx) => {
+      const dLat = pt.latitude - vLat;
+      const dLon = pt.longitude - vLon;
+      const dist = dLat * dLat + dLon * dLon;
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestIdx = idx;
+      }
+    });
+
+    setVehiclePath(fullVehiclePathRef.current.slice(nearestIdx));
+  }, [vehiclePosition]);
 
   const handleMarkerPress = (locationId: string) => {
     if (!interactive) return;
@@ -266,8 +287,8 @@ export default function CampusMap({
           mapType={Platform.OS === "web" ? undefined : "standard"}
           // customMapStyle={Platform.OS === "web" ? undefined : mapStyle}
           initialRegion={{
-            latitude: UCF_CENTER.latitude,
-            longitude: UCF_CENTER.longitude,
+            latitude: userLocation?.latitude ?? UCF_CENTER.latitude,
+            longitude: userLocation?.longitude ?? UCF_CENTER.longitude,
             latitudeDelta: 0.02,
             longitudeDelta: 0.02,
           }}
@@ -293,7 +314,7 @@ export default function CampusMap({
             />
           )}
 
-          {walkingPath.length > 0 && (
+          {walkingPath.length > 0 && !vehiclePosition && (
             <>
               <Polyline
                 coordinates={walkingPath}
