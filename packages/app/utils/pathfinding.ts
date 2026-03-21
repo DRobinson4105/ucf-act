@@ -240,11 +240,8 @@ async function fetchPedestrianPaths(
   throw lastError || new Error("All Overpass servers unavailable");
 }
 
-function isWithinCampusBounds(lat: number, lon: number): boolean {
-  const distance = getDistance(
-    { latitude: UCF_CENTER.latitude, longitude: UCF_CENTER.longitude },
-    { latitude: lat, longitude: lon }
-  );
+function isWithinCampusBounds(lat: number, lon: number, center: { latitude: number; longitude: number } = UCF_CENTER): boolean {
+  const distance = getDistance(center, { latitude: lat, longitude: lon });
   return distance <= MAX_CAMPUS_DISTANCE;
 }
 
@@ -386,16 +383,19 @@ function runAStar(
 
 export async function findPath(
   start: PathNode,
-  goal: PathNode
+  goal: PathNode,
+  center?: { latitude: number; longitude: number }
 ): Promise<PathNode[]> {
+  const effectiveCenter = center ?? UCF_CENTER;
+
   try {
     // Check if start and goal are within campus bounds
-    if (!isWithinCampusBounds(start.latitude, start.longitude)) {
+    if (!isWithinCampusBounds(start.latitude, start.longitude, effectiveCenter)) {
       console.log("Start location is outside campus bounds, returning direct line");
       return [start, goal];
     }
 
-    if (!isWithinCampusBounds(goal.latitude, goal.longitude)) {
+    if (!isWithinCampusBounds(goal.latitude, goal.longitude, effectiveCenter)) {
       console.log("Goal location is outside campus bounds, returning direct line");
       return [start, goal];
     }
@@ -406,10 +406,10 @@ export async function findPath(
     // Calculate bounding box but constrain it to campus area
     const campusPadding = MAX_CAMPUS_DISTANCE / 111000; // Convert meters to degrees (approx)
     const campusBbox = {
-      minLat: UCF_CENTER.latitude - campusPadding,
-      maxLat: UCF_CENTER.latitude + campusPadding,
-      minLon: UCF_CENTER.longitude - campusPadding,
-      maxLon: UCF_CENTER.longitude + campusPadding,
+      minLat: effectiveCenter.latitude - campusPadding,
+      maxLat: effectiveCenter.latitude + campusPadding,
+      minLon: effectiveCenter.longitude - campusPadding,
+      maxLon: effectiveCenter.longitude + campusPadding,
     };
 
     const routeBbox = {

@@ -8,8 +8,8 @@ export interface CampusLocation {
 }
 
 export const UCF_CENTER = {
-  latitude: 28.5189,
-  longitude: -81.6699,
+  latitude: 28.6024,
+  longitude: -81.2001,
 };
 
 export const CAMPUS_LOCATIONS: CampusLocation[] = [

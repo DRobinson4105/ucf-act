@@ -124,7 +124,7 @@ export default function CampusMap({
         dropoffLocation.name
       );
 
-      findPath(start, goal)
+      findPath(start, goal, userLocation ?? undefined)
         .then((path) => {
           if (!isCancelled) {
             setWalkingPath(path);
@@ -196,7 +196,7 @@ export default function CampusMap({
     const goal: PathNode = { latitude: routeGoal.latitude, longitude: routeGoal.longitude };
     const start: PathNode = { latitude: vehiclePosition.latitude, longitude: vehiclePosition.longitude };
 
-    findPath(start, goal)
+    findPath(start, goal, userLocation ?? undefined)
       .then((path) => {
         if (!isCancelled) {
           console.log("Vehicle path fetched with", path.length, "waypoints");
@@ -287,8 +287,8 @@ export default function CampusMap({
           mapType={Platform.OS === "web" ? undefined : "standard"}
           // customMapStyle={Platform.OS === "web" ? undefined : mapStyle}
           initialRegion={{
-            latitude: UCF_CENTER.latitude,
-            longitude: UCF_CENTER.longitude,
+            latitude: userLocation?.latitude ?? UCF_CENTER.latitude,
+            longitude: userLocation?.longitude ?? UCF_CENTER.longitude,
             latitudeDelta: 0.02,
             longitudeDelta: 0.02,
           }}

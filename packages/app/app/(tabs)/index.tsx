@@ -8,6 +8,7 @@ import { Calendar, MapPin, Search, X } from "lucide-react-native";
 import React from "react";
 import {
     ScrollView,
+    StyleSheet,
     Text,
     TouchableOpacity,
     View,
@@ -43,19 +44,21 @@ export default function HomeScreen() {
   return (
     <View className="flex-1 bg-background">
       {/* Live map — always visible as background */}
-      <CampusMap
-        selectedPickup={null}
-        selectedDropoff={null}
-        onSelectPickup={() => {}}
-        onSelectDropoff={() => {}}
-        selectingType="pickup"
-        allCarts={allCarts ?? []}
-        cartId={currentRide?.cartId}
-        hideUserLocation={currentRide?.status === "in_progress"}
-        showRoute={false}
-        interactive={false}
-        fullScreen
-      />
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <CampusMap
+          selectedPickup={null}
+          selectedDropoff={null}
+          onSelectPickup={() => {}}
+          onSelectDropoff={() => {}}
+          selectingType="pickup"
+          allCarts={allCarts ?? []}
+          cartId={currentRide?.cartId}
+          hideUserLocation={currentRide?.status === "in_progress"}
+          showRoute={false}
+          interactive={false}
+          fullScreen
+        />
+      </View>
 
       {/* Search bar overlay */}
       <View
