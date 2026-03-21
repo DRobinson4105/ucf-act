@@ -295,9 +295,9 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | --------------------------------------- | ----------------------------------------------------------------- |
 | `CONFIG_BYPASS_PLANNER_AUTONOMY_GATE`   | Force autonomy request true (bench mode without Orin)             |
 | `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner FAULT checks           |
-| `CONFIG_BYPASS_PLANNER_STATE_MIRROR`    | Simulate Planner state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_PLANNER_STATE_MIRROR`    | Simulate Planner state: force READY in NOT_READY/READY, force ENABLE+enable_complete in ENABLE/ACTIVE |
 | `CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS` | Ignore Control heartbeat timeout + Control FAULT checks           |
-| `CONFIG_BYPASS_CONTROL_STATE_MIRROR`    | Simulate Control state/enable_complete by mirroring Safety target |
+| `CONFIG_BYPASS_CONTROL_STATE_MIRROR`    | Simulate Control state: force READY in NOT_READY/READY, force ENABLE+enable_complete in ENABLE/ACTIVE |
 | `CONFIG_BYPASS_CAN_TWAI`                | Disable CAN/TWAI entirely (skip TWAI init/recovery and heartbeat TX/RX) |
 | `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button e-stop to inactive (not pressed)                |
 | `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote e-stop to inactive (not engaged)                  |

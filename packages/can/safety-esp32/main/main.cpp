@@ -1244,25 +1244,25 @@ void safety_task(void *param)
 			.autonomy_hold = false,
 		};
 
-		// Planner bypass: simulate a cooperative Planner that mirrors the
-		// current target state and always signals enable_complete.
+		// Planner bypass: simulate a cooperative Planner for bench bring-up.
+		// Bootstrap behavior:
+		// - When Safety target is NOT_READY/READY, force Planner READY so
+		//   Safety can advance NOT_READY -> READY without a real Planner.
+		// - When Safety target is ENABLE/ACTIVE, force Planner ENABLE and
+		//   enable_complete so Safety can continue ENABLE -> ACTIVE.
 #ifdef CONFIG_BYPASS_PLANNER_STATE_MIRROR
 		if (g_target_state == NODE_STATE_ACTIVE || g_target_state == NODE_STATE_ENABLE)
 			ss_in.planner_state = NODE_STATE_ENABLE;
-		else if (g_target_state == NODE_STATE_READY)
-			ss_in.planner_state = NODE_STATE_READY;
 		else
-			ss_in.planner_state = NODE_STATE_NOT_READY;
+			ss_in.planner_state = NODE_STATE_READY;
 		ss_in.planner_enable_complete = true;
 #endif
-		// Control bypass: same pattern for Control.
+		// Control bypass: same bootstrap-aware mirroring for Control.
 #ifdef CONFIG_BYPASS_CONTROL_STATE_MIRROR
 		if (g_target_state == NODE_STATE_ACTIVE || g_target_state == NODE_STATE_ENABLE)
 			ss_in.control_state = NODE_STATE_ENABLE;
-		else if (g_target_state == NODE_STATE_READY)
-			ss_in.control_state = NODE_STATE_READY;
 		else
-			ss_in.control_state = NODE_STATE_NOT_READY;
+			ss_in.control_state = NODE_STATE_READY;
 		ss_in.control_enable_complete = true;
 #endif
 
