@@ -15,7 +15,7 @@ planner_server:
       max_planning_time: 1.0
       motion_model_for_search: "DUBIN"
       cost_travel_multiplier: 3.0
-      angle_quantization_bins: 64
+      angle_quantization_bi ns: 64
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 10.0
       analytic_expansion_max_cost: 200
@@ -210,7 +210,7 @@ local_costmap:
       stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
         enabled: true
-        voxel_decay: 5.0
+        voxel_decay: 1.0
         decay_model: 0
         voxel_size: 0.05
         track_unknown_space: false
@@ -222,7 +222,7 @@ local_costmap:
         publish_voxel_map: true
         transform_tolerance: 1.0
         mapping_mode: false
-        observation_sources: livox
+        observation_sources: front_left_seg
 
         livox:
           topic: "/livox/lidar_filtered"
@@ -244,9 +244,11 @@ local_costmap:
           sensor_frame: "front_left"
           data_type: "PointCloud2"
           marking: true
-          clearing: true
+          clearing: false
           obstacle_range: 50.0
           filter: "voxel"
+          max_obstacle_height: 1.8
+          min_obstacle_height: 0.6
           voxel_min_points: 1
 
         front_right_seg:
@@ -254,8 +256,10 @@ local_costmap:
           sensor_frame: "front_right"
           data_type: "PointCloud2"
           marking: true
-          clearing: true
+          clearing: false
           obstacle_range: 50.0
+          max_obstacle_height: 1.8
+          min_obstacle_height: 0.6
           filter: "voxel"
           voxel_min_points: 1
 

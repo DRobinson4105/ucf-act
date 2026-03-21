@@ -24,27 +24,42 @@ def generate_launch_description():
         include("bringup", "cameras.launch.py"),
         include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
         include("bringup", "gps.launch.py"),
-        include("fast_lio", "mapping.launch.py"),
+        include("fast_lio", "mapping.launch.py", launch_arguments={"rviz": "false"}),
         include("bringup", "localization.launch.py"),
-        include("perception", "seg_all.launch.py"),
+        #include("perception", "seg_all.launch.py"),
         include("perception", "lidar_filter.launch.py"),
-
         include("bringup", "nav2_no_map.launch.py"),
-
 
         Node(
             package="navigation",
-            executable="clicked_point_path_publisher",
-            name="clicked_point_path_publisher",
+            executable="act_global_path_manager",
+            name="act_global_path_manager",
             output="screen",
             parameters=[{
-                "global_frame": "odom",
-                "base_frame": "base_link",
-                "clicked_topic": "/clicked_point",
-                "path_topic": "/global_path",
-                "spacing_m": 0.75
+                "map_frame": "odom",
+                "input_topic": "/ui/global_route_wgs84_json",
+                "output_topic_clean": "/global_path",
+                "output_topic_raw": "/global_path_raw",
+                "datum_lat": 28.6017759,
+                "datum_lon": -81.2005371,
+                "datum_alt": 0.0,
+                "v_max_mps": 3.58,
+                "a_lat_max_mps2": 1.0
             }],
         ),
+        # Node(
+        #     package="navigation",
+        #     executable="clicked_point_path_publisher",
+        #     name="clicked_point_path_publisher",
+        #     output="screen",
+        #     parameters=[{
+        #         "global_frame": "odom",
+        #         "base_frame": "base_link",
+        #         "clicked_topic": "/clicked_point",
+        #         "path_topic": "/global_path",
+        #         "spacing_m": 0.75
+        #     }],
+        # ),
         Node(
             package="navigation",
             executable="cmd_vel_adapter",
