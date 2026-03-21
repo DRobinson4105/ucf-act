@@ -26,7 +26,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
-from convex_client import push_telemetry, poll_assignment, complete_ride, get_ride_status
+from convex_client import push_telemetry, poll_assignment, arrived_at_pickup, complete_ride, get_ride_status
+from pathfinding import find_path
 
 TELEMETRY_INTERVAL_S = 2.0
 POLL_INTERVAL_S = 5.0
@@ -64,6 +65,9 @@ class CartBridgeNode(Node):
 
         # Current ride
         self._active_ride: Optional[dict] = None
+        # "to_pickup" → navigating to origin; "to_dropoff" → navigating to destination
+        self._phase: str = "to_pickup"
+        self._notified_arrival: bool = False
 
         # Subscriptions
         self.create_subscription(
@@ -119,18 +123,25 @@ class CartBridgeNode(Node):
         except Exception as e:
             self.get_logger().error(f"Telemetry push failed: {e}")
 
-        # Check ride completion
+        # Phase-aware proximity check
         if self._active_ride and self._lat is not None:
-            dest = self._active_ride.get("destination", {})
-            dest_lat = dest.get("latitude")
-            dest_lon = dest.get("longitude")
-            if dest_lat is not None and dest_lon is not None:
-                dist = haversine_m(self._lat, self._lon, dest_lat, dest_lon)
-                if dist <= COMPLETION_DISTANCE_M:
-                    self._finish_ride()
+            if self._phase == "to_pickup":
+                origin = self._active_ride.get("origin", {})
+                olat, olon = origin.get("latitude"), origin.get("longitude")
+                if olat is not None and olon is not None:
+                    dist = haversine_m(self._lat, self._lon, olat, olon)
+                    if dist <= COMPLETION_DISTANCE_M and not self._notified_arrival:
+                        self._notify_arrived_pickup()
+            elif self._phase == "to_dropoff":
+                dest = self._active_ride.get("destination", {})
+                dlat, dlon = dest.get("latitude"), dest.get("longitude")
+                if dlat is not None and dlon is not None:
+                    dist = haversine_m(self._lat, self._lon, dlat, dlon)
+                    if dist <= COMPLETION_DISTANCE_M:
+                        self._finish_ride()
 
     def _poll_timer(self) -> None:
-        # If a ride is active, check whether it was cancelled externally
+        # If a ride is active, check for status changes
         if self._active_ride is not None:
             try:
                 status = get_ride_status(self._active_ride["_id"])
@@ -140,6 +151,12 @@ class CartBridgeNode(Node):
                     )
                     self._publish_clear(self._active_ride["_id"])
                     self._active_ride = None
+                    self._phase = "to_pickup"
+                    self._notified_arrival = False
+                elif status == "in_progress" and self._phase == "to_pickup":
+                    # User has boarded — switch to phase 2: pickup → dropoff
+                    self._phase = "to_dropoff"
+                    self._publish_route_phase2()
             except Exception as e:
                 self.get_logger().error(f"Ride status check failed: {e}")
             return
@@ -148,38 +165,54 @@ class CartBridgeNode(Node):
             ride = poll_assignment()
             if ride:
                 self._active_ride = ride
+                self._phase = "to_pickup"
+                self._notified_arrival = False
                 self.get_logger().info(
                     f"Ride assigned: {ride['_id']} — "
                     f"origin ({ride['origin']['latitude']}, {ride['origin']['longitude']}) "
                     f"→ dest ({ride['destination']['latitude']}, {ride['destination']['longitude']})"
                 )
-                self._publish_route(ride)
+                self._publish_route_phase1(ride)
         except Exception as e:
             self.get_logger().error(f"Assignment poll failed: {e}")
 
     # ---- Ride management ------------------------------------------------- #
 
-    def _publish_route(self, ride: dict) -> None:
-        """Publish the ride route to act_global_path_manager."""
-        waypoints = [
-            {
-                "latitude": ride["origin"]["latitude"],
-                "longitude": ride["origin"]["longitude"],
-            },
-            {
-                "latitude": ride["destination"]["latitude"],
-                "longitude": ride["destination"]["longitude"],
-            },
-        ]
+    def _publish_route_phase1(self, ride: dict) -> None:
+        """Phase 1: cart current position → pickup (origin)."""
+        if self._lat is None or self._lon is None:
+            self.get_logger().warn("No GPS fix yet, cannot publish phase 1 route")
+            return
+        origin = ride["origin"]
+        waypoints = find_path(self._lat, self._lon, origin["latitude"], origin["longitude"])
+        self._publish_waypoints(ride["_id"], waypoints)
+        self.get_logger().info(f"Published phase 1 route: cart → pickup ({len(waypoints)} waypoints)")
+
+    def _publish_route_phase2(self) -> None:
+        """Phase 2: pickup (origin) → dropoff (destination)."""
+        ride = self._active_ride
+        if not ride:
+            return
+        origin = ride["origin"]
+        dest = ride["destination"]
+        waypoints = find_path(origin["latitude"], origin["longitude"], dest["latitude"], dest["longitude"])
+        self._publish_waypoints(ride["_id"], waypoints)
+        self.get_logger().info(f"Published phase 2 route: pickup → dropoff ({len(waypoints)} waypoints)")
+
+    def _publish_waypoints(self, route_id: str, waypoints: list) -> None:
         msg = String()
-        msg.data = json.dumps({
-            "route_id": ride["_id"],
-            "waypoints": waypoints,
-        })
+        msg.data = json.dumps({"route_id": route_id, "waypoints": waypoints})
         self._route_pub.publish(msg)
-        self.get_logger().info(
-            f"Published route: {len(waypoints)} waypoints to /ui/global_route_wgs84_json"
-        )
+
+    def _notify_arrived_pickup(self) -> None:
+        if not self._active_ride:
+            return
+        try:
+            arrived_at_pickup(self._active_ride["_id"])
+            self._notified_arrival = True
+            self.get_logger().info("Notified Convex: arrived at pickup — waiting for user to board")
+        except Exception as e:
+            self.get_logger().error(f"Failed to notify arrived at pickup: {e}")
 
     def _publish_clear(self, ride_id: str) -> None:
         msg = String()
@@ -201,6 +234,8 @@ class CartBridgeNode(Node):
         finally:
             self._publish_clear(ride_id)
             self._active_ride = None
+            self._phase = "to_pickup"
+            self._notified_arrival = False
 
 
 def main() -> None:

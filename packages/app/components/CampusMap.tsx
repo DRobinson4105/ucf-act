@@ -90,10 +90,15 @@ export default function CampusMap({
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === "granted") {
         const location = await Location.getCurrentPositionAsync({});
-        setUserLocation({
+        const coords = {
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
-        });
+        };
+        setUserLocation(coords);
+        mapRef.current?.animateToRegion(
+          { ...coords, latitudeDelta: 0.02, longitudeDelta: 0.02 },
+          500
+        );
       }
     })();
   }, []);
