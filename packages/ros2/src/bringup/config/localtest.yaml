@@ -92,7 +92,7 @@ local_costmap:
 
       plugins: ["stvl_layer", "inflation_layer"]
       
-      footprint: "[[1.9304, 0.5842]], [[1.9304, -0.5842]], [[-0.8382, -0.5842]], [[-0.8382, 0.5842]]"
+      footprint: "[[1.9304, 0.5842], [1.9304, -0.5842], [-0.8382, -0.5842], [-0.8382, 0.5842]]"
       
       stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
@@ -176,7 +176,7 @@ local_costmap:
 
 lifecycle_manager:
   ros__parameters:
-    use_sim_time: true
+    use_sim_time: false
     autostart: true
     bond_timeout: 10.0
     node_names:

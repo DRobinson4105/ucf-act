@@ -24,12 +24,15 @@ config THROTTLE_TEST_MODE
 
         Controls (via idf.py monitor or serial terminal):
           0-7  Set throttle level
-          d    Disable (mux off, level 0)
+          b    Toggle bypass relay (JD-2912)
+          t    Toggle throttle relay (SRD-05VDC)
           q    Quit (shutdown all actuators)
 
-        Safety behavior: requires F/R in FORWARD to arm. Immediately
-        disables all actuators if F/R leaves FORWARD or pedal is
-        pressed. Auto-recovers when conditions clear.
+        Safety behavior: requires F/R not in Reverse to arm.
+        Disables throttle relay if F/R moves to Reverse or pedal
+        is pressed. Zeros throttle level if F/R is in Neutral.
+        Auto-recovers when pedal is rearmed and F/R is not in
+        Reverse.
 
 menu "Test Bypasses"
 

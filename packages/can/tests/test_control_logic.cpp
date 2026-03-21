@@ -210,8 +210,34 @@ static void test_preconditions_null_returns_all_fail(void)
 	assert(fail == PRECONDITION_FAIL_ALL);
 }
 
-static void test_preconditions_fr_not_forward(void)
+static void test_preconditions_fr_reverse_blocks(void)
 {
+	precondition_inputs_t pre = {
+		.fr_state = FR_STATE_REVERSE,
+		.pedal_pressed = false,
+		.pedal_rearmed = true,
+		.fault_code = NODE_FAULT_NONE,
+	};
+	precondition_fail_t fail = control_check_preconditions(&pre);
+	assert((fail & PRECONDITION_FAIL_FR_IN_REVERSE) != 0);
+	assert((fail & PRECONDITION_FAIL_PEDAL_PRESSED) == 0);
+}
+
+static void test_preconditions_fr_invalid_blocks(void)
+{
+	precondition_inputs_t pre = {
+		.fr_state = FR_STATE_INVALID,
+		.pedal_pressed = false,
+		.pedal_rearmed = true,
+		.fault_code = NODE_FAULT_NONE,
+	};
+	precondition_fail_t fail = control_check_preconditions(&pre);
+	assert((fail & PRECONDITION_FAIL_FR_IN_REVERSE) != 0);
+}
+
+static void test_preconditions_fr_neutral_ok(void)
+{
+	// NEUTRAL should NOT fail preconditions (pre-bypass, FORWARD reads as NEUTRAL)
 	precondition_inputs_t pre = {
 		.fr_state = FR_STATE_NEUTRAL,
 		.pedal_pressed = false,
@@ -219,8 +245,8 @@ static void test_preconditions_fr_not_forward(void)
 		.fault_code = NODE_FAULT_NONE,
 	};
 	precondition_fail_t fail = control_check_preconditions(&pre);
-	assert((fail & PRECONDITION_FAIL_FR_NOT_FORWARD) != 0);
-	assert((fail & PRECONDITION_FAIL_PEDAL_PRESSED) == 0);
+	assert((fail & PRECONDITION_FAIL_FR_IN_REVERSE) == 0);
+	assert(fail == PRECONDITION_OK);
 }
 
 static void test_preconditions_pedal_not_rearmed(void)
@@ -257,6 +283,7 @@ static void test_preconditions_multiple_combine(void)
 	};
 	precondition_fail_t fail = control_check_preconditions(&pre);
 	assert(fail == PRECONDITION_FAIL_ALL);
+	assert((fail & PRECONDITION_FAIL_FR_IN_REVERSE) != 0);
 }
 
 // ============================================================================
@@ -399,7 +426,7 @@ static void test_enable_abort_safety_retreat(void)
 	assert(r.enable_work_done == false);
 }
 
-static void test_enable_abort_fr_not_forward(void)
+static void test_enable_abort_fr_reverse(void)
 {
 	control_inputs_t in = default_inputs();
 	in.target_state = NODE_STATE_ENABLE;
@@ -407,7 +434,20 @@ static void test_enable_abort_fr_not_forward(void)
 	in.pedal_pressed = false;
 	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
 	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) != 0);
-	assert(r.abort_reason == CONTROL_ABORT_REASON_FR_NOT_FORWARD);
+	assert(r.abort_reason == CONTROL_ABORT_REASON_FR_IN_REVERSE);
+}
+
+static void test_enable_neutral_does_not_abort(void)
+{
+	// NEUTRAL during ENABLE should NOT abort — pre-bypass, FORWARD reads as NEUTRAL
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.fr_state = FR_STATE_NEUTRAL;
+	in.enable_start_ms = 100;
+	in.now_ms = 400; // timer expired
+	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) == 0);
 }
 
 static void test_enable_stays_when_timer_not_expired(void)
@@ -460,6 +500,39 @@ static void test_active_override_fr_changed(void)
 	assert(r.new_state == NODE_STATE_OVERRIDE);
 	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
 	assert(r.override_reason == OVERRIDE_REASON_FR_CHANGED);
+}
+
+static void test_active_neutral_zeros_throttle(void)
+{
+	// NEUTRAL in ACTIVE: stay ACTIVE but throttle target forced to 0
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.fr_state = FR_STATE_NEUTRAL;
+	in.throttle_cmd = 5;
+	in.throttle_current = 3;
+	in.last_throttle_change_ms = 0;
+	in.now_ms = 1000;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	// Throttle should slew toward 0, not toward 5
+	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) != 0);
+	assert(r.throttle_level == 2); // current=3, target=0, slew down by 1
+}
+
+static void test_active_neutral_at_zero_no_change(void)
+{
+	// NEUTRAL in ACTIVE with throttle already at 0: no throttle action
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.fr_state = FR_STATE_NEUTRAL;
+	in.throttle_cmd = 5;
+	in.throttle_current = 0;
+	in.last_throttle_change_ms = 0;
+	in.now_ms = 1000;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) == 0);
+	assert(r.throttle_level == 0);
 }
 
 static void test_active_override_steering_error(void)
@@ -676,6 +749,28 @@ static void test_fr_invalid_from_enable(void)
 	assert(r.abort_reason == CONTROL_ABORT_REASON_SENSOR_INVALID);
 }
 
+static void test_fr_invalid_from_not_ready_no_fault(void)
+{
+	// Pre-bypass: FR_INVALID means reverse, not a wiring fault.
+	// Should stay NOT_READY (blocked by precondition), NOT enter FAULT.
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_INVALID;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_code == NODE_FAULT_NONE); // no fault triggered
+	assert((r.precondition_fail & PRECONDITION_FAIL_FR_IN_REVERSE) != 0);
+}
+
+static void test_fr_invalid_from_ready_no_fault(void)
+{
+	// Pre-bypass: FR_INVALID in READY drops to NOT_READY, no fault.
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_INVALID;
+	control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_code == NODE_FAULT_NONE);
+}
+
 static void test_fr_invalid_no_retrigger(void)
 {
 	control_inputs_t in = default_inputs();
@@ -701,13 +796,23 @@ static void test_override_stays_when_pedal_not_rearmed(void)
 	assert(r.new_state == NODE_STATE_OVERRIDE);
 }
 
-static void test_override_stays_when_fr_not_forward(void)
+static void test_override_stays_when_fr_reverse(void)
 {
 	control_inputs_t in = default_inputs();
-	in.fr_state = FR_STATE_REVERSE; // not forward
+	in.fr_state = FR_STATE_REVERSE;
 	in.pedal_rearmed = true;
 	control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_OVERRIDE);
+}
+
+static void test_override_recovers_when_fr_neutral(void)
+{
+	// NEUTRAL should allow override recovery (not blocked like REVERSE)
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_NEUTRAL;
+	in.pedal_rearmed = true;
+	control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_READY); // NEUTRAL passes preconditions
 }
 
 // ============================================================================
@@ -816,10 +921,12 @@ int main(void)
 	TEST(test_fault_injection_from_not_ready);
 	TEST(test_unknown_state_defaults_to_fault);
 
-	// Precondition checker (5)
+	// Precondition checker (7)
 	printf("\n  --- precondition checker ---\n");
 	TEST(test_preconditions_null_returns_all_fail);
-	TEST(test_preconditions_fr_not_forward);
+	TEST(test_preconditions_fr_reverse_blocks);
+	TEST(test_preconditions_fr_invalid_blocks);
+	TEST(test_preconditions_fr_neutral_ok);
 	TEST(test_preconditions_pedal_not_rearmed);
 	TEST(test_preconditions_active_fault);
 	TEST(test_preconditions_multiple_combine);
@@ -844,17 +951,20 @@ int main(void)
 	TEST(test_init_stays_when_dwell_not_expired);
 	TEST(test_init_dwell_timer_overflow);
 
-	// ENABLE abort scenarios (5)
+	// ENABLE abort scenarios (6)
 	printf("\n  --- ENABLE abort ---\n");
 	TEST(test_enable_abort_safety_retreat);
-	TEST(test_enable_abort_fr_not_forward);
+	TEST(test_enable_abort_fr_reverse);
+	TEST(test_enable_neutral_does_not_abort);
 	TEST(test_enable_stays_when_timer_not_expired);
 	TEST(test_enable_complete_fires_once);
 	TEST(test_enable_timer_exact_boundary);
 
-	// ACTIVE override variants (4)
+	// ACTIVE override variants (6)
 	printf("\n  --- ACTIVE override ---\n");
 	TEST(test_active_override_fr_changed);
+	TEST(test_active_neutral_zeros_throttle);
+	TEST(test_active_neutral_at_zero_no_change);
 	TEST(test_active_override_steering_error);
 	TEST(test_active_override_braking_error);
 	TEST(test_active_safety_retreat_priority_over_pedal);
@@ -876,16 +986,19 @@ int main(void)
 	TEST(test_motor_fault_from_ready);
 	TEST(test_motor_fault_ignored_when_already_faulted);
 
-	// FR_INVALID sensor fault (3)
+	// FR_INVALID sensor fault (5)
 	printf("\n  --- FR_INVALID sensor fault ---\n");
 	TEST(test_fr_invalid_from_active);
 	TEST(test_fr_invalid_from_enable);
+	TEST(test_fr_invalid_from_not_ready_no_fault);
+	TEST(test_fr_invalid_from_ready_no_fault);
 	TEST(test_fr_invalid_no_retrigger);
 
-	// OVERRIDE recovery edge cases (2)
+	// OVERRIDE recovery edge cases (3)
 	printf("\n  --- OVERRIDE recovery ---\n");
 	TEST(test_override_stays_when_pedal_not_rearmed);
-	TEST(test_override_stays_when_fr_not_forward);
+	TEST(test_override_stays_when_fr_reverse);
+	TEST(test_override_recovers_when_fr_neutral);
 
 	// FAULT recovery (3)
 	printf("\n  --- FAULT recovery ---\n");

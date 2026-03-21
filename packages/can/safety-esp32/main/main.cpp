@@ -22,6 +22,7 @@
 #include "gpio_input.h"
 #include "relay_srd05vdc.h"
 #include "ultrasonic_a02yyuw.h"
+#include "battery_monitor.h"
 #include "safety_logic.h"
 #include "system_state.h"
 #include "can_tx_track.h"
@@ -56,6 +57,9 @@
 #endif
 #ifdef CONFIG_BYPASS_INPUT_ULTRASONIC
 #error "PRODUCTION_BUILD: CONFIG_BYPASS_INPUT_ULTRASONIC must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_INPUT_BATTERY_MONITOR must be disabled"
 #endif
 #ifdef CONFIG_BYPASS_CAN_TWAI
 #error "PRODUCTION_BUILD: CONFIG_BYPASS_CAN_TWAI must be disabled"
@@ -150,6 +154,10 @@ constexpr gpio_num_t POWER_RELAY_GPIO = GPIO_NUM_2;
 constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
+// Battery monitor ADC inputs
+constexpr int BATTERY_VOLTAGE_GPIO = 0; // ADC1_CH0: pack voltage via 180k/10k divider
+constexpr int BATTERY_CURRENT_GPIO = 1; // ADC1_CH1: ACS758LCB-100B via 10k/15k divider
+
 // Ultrasonic sensor (A02YYUW)
 constexpr uart_port_t ULTRASONIC_A02YYUW_UART = UART_NUM_1;
 constexpr int ULTRASONIC_A02YYUW_TX_GPIO = GPIO_NUM_10; // Sensor RX (mode select)
@@ -203,6 +211,7 @@ uint8_t g_ultrasonic_health_counter = 0; // hysteresis counter
 TickType_t g_ultrasonic_init_tick = 0; // for startup grace period
 #endif
 volatile bool g_relay_init_ok = false;
+volatile bool g_battery_monitor_init_ok = false;
 volatile bool g_twai_ready = false;
 
 // Local hardware fault flag for LED indication.  When true, the heartbeat
@@ -228,6 +237,7 @@ gpio_input_config_t g_push_button_cfg;
 gpio_input_config_t g_rf_remote_cfg;
 relay_srd05vdc_config_t g_relay_cfg;
 ultrasonic_a02yyuw_config_t g_ultrasonic_cfg;
+battery_monitor_config_t g_battery_cfg;
 
 // Retry pacing: last timestamp (ms) when retry_failed_components ran.
 // Retries are infinite (no cap) but paced at RETRY_INTERVAL_MS to avoid
@@ -342,6 +352,18 @@ void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbe
 		ESP_LOGI(TAG_INIT, "RELAY: CONFIGURED: gpio=%d active_level=HIGH start=DISABLED", g_relay_cfg.gpio);
 	else
 		ESP_LOGE(TAG_INIT, "RELAY: FAILED: gpio=%d", g_relay_cfg.gpio);
+
+#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+	ESP_LOGW(TAG_INIT, "BATTERY_MONITOR: BYPASSED: disabled (voltage_gpio=%d current_gpio=%d)",
+	         BATTERY_VOLTAGE_GPIO, BATTERY_CURRENT_GPIO);
+#else
+	if (g_battery_monitor_init_ok)
+		ESP_LOGI(TAG_INIT, "BATTERY_MONITOR: CONFIGURED: voltage_gpio=%d current_gpio=%d",
+		         BATTERY_VOLTAGE_GPIO, BATTERY_CURRENT_GPIO);
+	else
+		ESP_LOGE(TAG_INIT, "BATTERY_MONITOR: FAILED: voltage_gpio=%d current_gpio=%d",
+		         BATTERY_VOLTAGE_GPIO, BATTERY_CURRENT_GPIO);
+#endif
 
 #ifdef CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS
 	ESP_LOGW(TAG_INIT, "PLANNER: BYPASSED: liveness/state/autonomy checks disabled");
@@ -537,6 +559,29 @@ void retry_failed_components(void)
 			g_ultrasonic_health_prev = false;
 			g_ultrasonic_health_seen = false;
 			g_ultrasonic_init_tick = xTaskGetTickCount();
+		}
+	}
+#endif
+
+#ifndef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+	if (!g_battery_monitor_init_ok)
+	{
+		[[maybe_unused]] static uint16_t s_retry_count = 0;
+		esp_err_t err = battery_monitor_init(&g_battery_cfg);
+		bool recovered = (err == ESP_OK);
+		if (!recovered)
+		{
+			s_retry_count++;
+			if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0)
+			{
+				ESP_LOGW(TAG, "BATTERY_MONITOR retry failed (%u attempts): %s", s_retry_count, esp_err_to_name(err));
+			}
+		}
+		if (recovered)
+		{
+			s_retry_count = 0;
+			g_battery_monitor_init_ok = true;
+			log_component_regained("BATTERY_MONITOR");
 		}
 	}
 #endif
@@ -1114,6 +1159,14 @@ void safety_task(void *param)
 		         node_state_to_string(control_state));
 #endif
 
+		// Update battery monitor (non-safety-critical, informational only)
+#ifndef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+		if (g_battery_monitor_init_ok)
+		{
+			battery_monitor_update(now_ms);
+		}
+#endif
+
 		// Evaluate all safety conditions (pure function — no side effects)
 		safety_decision_t decision = safety_evaluate(&inputs);
 
@@ -1391,6 +1444,56 @@ void heartbeat_task(void *param)
 		// Send Safety heartbeat (periodic)
 		send_safety_heartbeat(false);
 
+		// Send battery status at 1 Hz (every 10th heartbeat tick = 10 × 100ms)
+		{
+			static uint8_t battery_tx_divider = 0;
+			if (++battery_tx_divider >= 10)
+			{
+				battery_tx_divider = 0;
+
+				battery_status_t bat = {};
+#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+				bat.voltage_mv = 48000;
+				bat.current_10ma = 0;
+				bat.soc_pct = 50;
+				bat.flags = 0;
+#else
+				if (g_battery_monitor_init_ok)
+				{
+					battery_monitor_get_status(&bat);
+				}
+				else
+				{
+					bat.flags = BATTERY_FLAG_SENSOR_FAULT;
+				}
+#endif
+
+#ifndef CONFIG_BYPASS_CAN_TWAI
+				uint8_t bat_data[8] = {};
+				can_encode_battery_status(bat_data, &bat);
+
+				taskENTER_CRITICAL(&g_can_tx_lock);
+				bool can_send = g_twai_ready && !g_can_recovery_in_progress &&
+				                g_can_tx_in_flight < UINT8_MAX;
+				if (can_send)
+					g_can_tx_in_flight++;
+				taskEXIT_CRITICAL(&g_can_tx_lock);
+
+				if (can_send)
+				{
+					esp_err_t err = can_twai_send(CAN_ID_SAFETY_BATTERY_STATUS, bat_data, pdMS_TO_TICKS(10));
+
+					taskENTER_CRITICAL(&g_can_tx_lock);
+					if (g_can_tx_in_flight > 0)
+						g_can_tx_in_flight--;
+					taskEXIT_CRITICAL(&g_can_tx_lock);
+
+					track_can_tx(err);
+				}
+#endif
+			}
+		}
+
 		vTaskDelay(HEARTBEAT_SEND_INTERVAL);
 	}
 }
@@ -1509,6 +1612,32 @@ void main_task(void *param)
 	}
 #endif
 
+	// Initialize battery monitor (voltage + current sensing)
+	//   - Pack voltage: 180kΩ/10kΩ resistor divider → GPIO 0 (ADC1_CH0)
+	//   - Pack current: ACS758LCB-100B (5V supply, 20mV/A) with
+	//     10kΩ/15kΩ output divider → GPIO 1 (ADC1_CH1)
+	//   - Non-safety-critical: failure does NOT trigger e-stop
+	g_battery_cfg = {
+		.voltage_gpio = BATTERY_VOLTAGE_GPIO,
+		.current_gpio = BATTERY_CURRENT_GPIO,
+		.divider_ratio = 19,       // 180kΩ / 10kΩ → ratio 1:19
+		.current_zero_mv = 2500,   // ACS758 at 5V: VCC/2 = 2.5V at 0A
+		.current_sens_uv = 20,     // ACS758LCB-100B: 20mV/A = 20µV/mA
+		.current_output_scale = 0.6f, // 15k/(10k+15k) output divider
+		.capacity_mah = 150000,    // 150Ah nominal (adjust for your batteries)
+	};
+
+#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+	g_battery_monitor_init_ok = true;
+#else
+	err = battery_monitor_init(&g_battery_cfg);
+	g_battery_monitor_init_ok = (err == ESP_OK);
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG_INIT, "Battery monitor init failed: %s (will retry in background)", esp_err_to_name(err));
+	}
+#endif
+
 	// Initialize TWAI for CAN communication unless explicitly bypassed.
 #ifdef CONFIG_BYPASS_CAN_TWAI
 	g_twai_ready = false;
@@ -1577,6 +1706,10 @@ void main_task(void *param)
 #endif
 #ifdef CONFIG_BYPASS_INPUT_ULTRASONIC
 		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: INPUT_ULTRASONIC (forced clear and healthy)");
+		any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: INPUT_BATTERY_MONITOR (forced 50%% SOC)");
 		any_bypass = true;
 #endif
 #ifdef CONFIG_BYPASS_CAN_TWAI

@@ -577,7 +577,7 @@ public:
     cfg.outputTopicPointsClean = this->declare_parameter<std::string>("output_topic_points_clean", "/global_path_points_clean");
 
     cfg.inputReliability = this->declare_parameter<std::string>("input_reliability", "reliable");
-    cfg.inputDurability = this->declare_parameter<std::string>("input_durability", "volatile");
+    cfg.inputDurability = this->declare_parameter<std::string>("input_durability", "transient_local");
     cfg.inputDepth = this->declare_parameter<int>("input_depth", 10);
 
     cfg.outputReliability = this->declare_parameter<std::string>("output_reliability", "reliable");
@@ -788,6 +788,40 @@ private:
     return res;
   }
 
+  void publishClearOutputs(const Config &cfg, const std::string &routeId) {
+    const auto stamp = this->now();
+
+    nav_msgs::msg::Path emptyPath;
+    emptyPath.header.frame_id = cfg.mapFrame;
+    emptyPath.header.stamp = stamp;
+    rawPub_->publish(emptyPath);
+    cleanPub_->publish(emptyPath);
+
+    if (cfg.publishProfile && profilePub_) {
+      std_msgs::msg::Float32MultiArray arr;
+      profilePub_->publish(arr);
+    }
+
+    if (cfg.publishPoints && pointsRawPub_ && pointsCleanPub_) {
+      geometry_msgs::msg::PoseArray emptyPoints;
+      emptyPoints.header.frame_id = cfg.mapFrame;
+      emptyPoints.header.stamp = stamp;
+      pointsRawPub_->publish(emptyPoints);
+      pointsCleanPub_->publish(emptyPoints);
+    }
+
+    if (cfg.publishMeta && metaPub_) {
+      json meta;
+      meta["route_id"] = routeId;
+      meta["cleared"] = true;
+      meta["stamp_ns"] = stamp.nanoseconds();
+
+      std_msgs::msg::String msg;
+      msg.data = meta.dump();
+      metaPub_->publish(msg);
+    }
+  }
+
   void onRouteJson(const std_msgs::msg::String::SharedPtr msg) {
     if (!msg) return;
     const std::string &s = msg->data;
@@ -841,6 +875,7 @@ private:
 
     json waypoints;
     std::string routeId;
+    bool clearRequested = false;
 
     if (j.is_object() && j.contains("waypoints") && j["waypoints"].is_array()) {
       waypoints = j["waypoints"];
@@ -849,6 +884,18 @@ private:
       waypoints = j;
     } else {
       RCLCPP_ERROR(this->get_logger(), "json must be an array of points or {waypoints:[...]}");
+      return;
+    }
+
+    clearRequested = waypoints.empty();
+
+    if (clearRequested) {
+      if (haveLastRouteState_ && routeId == lastRouteId_ && lastRouteSignature_.empty()) return;
+
+      publishClearOutputs(cfg, routeId);
+      lastRouteId_ = routeId;
+      lastRouteSignature_.clear();
+      haveLastRouteState_ = true;
       return;
     }
 
@@ -861,6 +908,8 @@ private:
 
     std::vector<XY> rawPts;
     rawPts.reserve(waypoints.size());
+    std::string normalizedRouteSignature;
+    normalizedRouteSignature.reserve(waypoints.size() * 48);
 
     size_t skipped = 0;
     size_t invalid = 0;
@@ -895,6 +944,13 @@ private:
       double altTmp = 0.0;
       if (readNumber(wp, "altitude", altTmp) || readNumber(wp, "alt", altTmp)) alt = altTmp;
 
+      normalizedRouteSignature += std::to_string(std::llround(lat * 10000000.0));
+      normalizedRouteSignature.push_back(',');
+      normalizedRouteSignature += std::to_string(std::llround(lon * 10000000.0));
+      normalizedRouteSignature.push_back(',');
+      normalizedRouteSignature += std::to_string(std::llround(alt * 100.0));
+      normalizedRouteSignature.push_back(';');
+
       double x = 0.0, y = 0.0, z = 0.0;
       lc->Forward(lat, lon, alt, x, y, z);
       if (!std::isfinite(x) || !std::isfinite(y)) {
@@ -912,6 +968,8 @@ private:
     }
 
     if (skipped > 0 || invalid > 0) RCLCPP_WARN(this->get_logger(), "%sskipped=%zu invalid=%zu", tag.c_str(), skipped, invalid);
+
+    if (haveLastRouteState_ && routeId == lastRouteId_ && normalizedRouteSignature == lastRouteSignature_) return;
 
     const auto stamp = this->now();
     const int yawLook = std::max(1, cfg.yawLookaheadPts);
@@ -1039,6 +1097,10 @@ private:
       m.data = meta.dump();
       metaPub_->publish(m);
     }
+
+    lastRouteId_ = routeId;
+    lastRouteSignature_ = normalizedRouteSignature;
+    haveLastRouteState_ = true;
   }
 
   std::mutex cfgMutex_;
@@ -1060,6 +1122,9 @@ private:
   bool workerRunning_{false};
   std::string latestJson_;
   uint64_t latestSeq_{0};
+  bool haveLastRouteState_{false};
+  std::string lastRouteId_;
+  std::string lastRouteSignature_;
 };
 
 int main(int argc, char **argv) {

@@ -68,7 +68,8 @@ The Safety ESP32 continuously monitors:
 
 | ID    | Name             | Rate                              | Description                                                                           |
 | ----- | ---------------- | --------------------------------- | ------------------------------------------------------------------------------------- |
-| 0x100 | SAFETY_HEARTBEAT | 100ms + immediate on state change | System target state + e-stop fault code (same `node_heartbeat_t` format as all nodes) |
+| 0x100 | SAFETY_HEARTBEAT        | 100ms + immediate on state change | System target state + e-stop fault code (same `node_heartbeat_t` format as all nodes) |
+| 0x101 | SAFETY_BATTERY_STATUS   | 1 Hz (every 10th heartbeat tick)  | Pack voltage, current, SOC, and battery flags (`battery_status_t`)                    |
 
 Safety's heartbeat `state` field = system target state (NODE*STATE*_). Its `fault_code` field = e-stop reason (NODE*FAULT_ESTOP*_, 0 when safe).
 
@@ -99,6 +100,8 @@ The fault_code byte in Safety's heartbeat is a **bitmask** — multiple bits can
 
 | GPIO | Function              | Direction | Notes                                              |
 | ---- | --------------------- | --------- | -------------------------------------------------- |
+| 0    | Battery Voltage       | Input     | ADC1_CH0, 180kΩ/10kΩ divider (pack voltage)       |
+| 1    | Battery Current       | Input     | ADC1_CH1, ACS758LCB-100B via 10kΩ/15kΩ divider    |
 | 2    | Power Relay           | Output    | Active HIGH, pull-down, SRD-05VDC-SL-C module      |
 | 4    | CAN TX                | Output    | TWAI peripheral (SN65HVD230 transceiver)           |
 | 5    | CAN RX                | Input     | TWAI peripheral (SN65HVD230 transceiver)           |
@@ -130,6 +133,7 @@ Each subsection covers production (on-cart) and bench wiring for Safety ESP32 in
 | RF remote (EV1527)      | **Different** — receiver needs separate 12V supply on bench |
 | Ultrasonic (A02YYUW)    | Same                                                        |
 | Power relay (SRD-05VDC) | Same hardware — bench relay switches with no 24V load       |
+| Battery monitor (ACS758) | Same — voltage divider and current sensor wired identically |
 | Status LED (WS2812)     | Same                                                        |
 
 ### Ground Distribution (Safety ESP32)
@@ -137,7 +141,7 @@ Each subsection covers production (on-cart) and bench wiring for Safety ESP32 in
 Safety wiring uses all three ESP32 GND pins:
 
 - **GND pin A (dedicated):** Main 5V I/O rail return only
-- **GND pin B (clean inputs):** CAN transceiver, push button, ultrasonic
+- **GND pin B (clean inputs):** CAN transceiver, push button, ultrasonic, battery monitor (voltage divider and current sensor)
 - **GND pin C (relay/noisy):** Power relay module and RF receiver relay return
 
 Use a small harness splice/star point for each branch (or a small terminal block), then run one wire per ESP32 GND pin. Do not stack multiple wires into a single ESP32 header hole.
@@ -231,6 +235,34 @@ GPIO 2 drives an AEDIKO 1-channel 5V relay module (SRD-05VDC-SL-C, optocoupler-i
 
 GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status LED data line (no external wiring required). LED color is determined by software state logic, not GPIO level — the GPIO serves only as the RMT data output.
 
+### Battery Monitor (ACS758LCB-100B)
+
+GPIO 0 and GPIO 1 read pack voltage and current via ADC1. Non-safety-critical — failure does not trigger e-stop; it only affects SOC reporting on CAN (`0x101 SAFETY_BATTERY_STATUS`). The battery monitor retries initialization in the background if the ADC fails at startup.
+
+**Voltage sensing (3-wire):**
+
+| Wire Color | From                     | To                          |
+| ---------- | ------------------------ | --------------------------- |
+| Red        | Pack positive (+48V)     | 180kΩ resistor (high-side)  |
+| Yellow     | 180kΩ/10kΩ junction      | ESP32 GPIO 0 (ADC1_CH0)    |
+| Black      | 10kΩ resistor (low-side) | GND (clean-input branch)    |
+
+180kΩ (high-side) and 10kΩ (low-side) form a 1:19 divider, scaling 42–51.2V pack voltage to ~2.2–2.7V for the 12-bit ADC (3.3V reference).
+
+**Current sensing (5-wire):**
+
+| Wire Color | From                     | To                                            |
+| ---------- | ------------------------ | --------------------------------------------- |
+| Red        | ESP32 5V                 | ACS758 VCC                                    |
+| Black      | GND (clean-input branch) | ACS758 GND                                    |
+| —          | Pack main power cable    | Through ACS758 screw terminals (IP+ / IP−)    |
+| Orange     | ACS758 VIOUT             | 10kΩ resistor (high-side)                     |
+| Yellow     | 10kΩ/15kΩ junction       | ESP32 GPIO 1 (ADC1_CH1)                       |
+
+The ACS758LCB-100B is a hall-effect sensor — the pack power cable passes through the sensor's screw terminals with no electrical contact to the sense circuit. Output is VCC/2 (2.5V) at 0A with 20 mV/A sensitivity. The 10kΩ/15kΩ output divider scales the 0–5V output by 0.6× to fit the ESP32's 3.3V ADC range. 15kΩ low-side to GND (clean-input branch).
+
+**Same wiring for bench and production.** On the bench, use `CONFIG_BYPASS_INPUT_BATTERY_MONITOR` to skip ADC init and force 50% SOC if no sensors are connected.
+
 ## Components
 
 | Component            | Description                                                         |
@@ -242,6 +274,7 @@ GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status L
 | `can_protocol`       | Message definitions (shared)                                        |
 | `led_ws2812`         | WS2812 status LED driver (shared)                                   |
 | `heartbeat_monitor`  | CAN node liveness tracking (shared)                                 |
+| `battery_monitor`    | Pack voltage/current ADC sensing and SOC estimation (ACS758LCB-100B) |
 | `safety_logic`       | Extracted e-stop evaluation logic (shared, tested)                  |
 | `system_state`       | System state machine — target state advancement (shared, tested)    |
 
@@ -268,6 +301,7 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button e-stop to inactive (not pressed)                |
 | `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote e-stop to inactive (not engaged)                  |
 | `CONFIG_BYPASS_INPUT_ULTRASONIC`        | Force ultrasonic clear and healthy (skip sensor)                  |
+| `CONFIG_BYPASS_INPUT_BATTERY_MONITOR`   | Skip battery ADC init, force 50% SOC (bench without sensors)     |
 
 ## Debug Logging
 
@@ -314,6 +348,8 @@ HEARTBEAT_LED is non-critical and initialized once at startup.
 | `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE`     | off     | Log every valid ultrasonic distance reading (~5-10/sec) |
 | `CONFIG_LOG_INPUT_ULTRASONIC_RX`           | off     | Log raw ultrasonic UART RX bytes (extremely verbose)    |
 | `CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS` | off     | Log ultrasonic UART parse failures                      |
+| `CONFIG_LOG_INPUT_BATTERY_VOLTAGE`         | off     | Log battery voltage, current, and SOC every update (very verbose, 20 Hz) |
+| `CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES`     | on      | Log SOC percentage changes (>=1%) and voltage-based recalibration events |
 
 ### Actuators
 

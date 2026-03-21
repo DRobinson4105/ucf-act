@@ -4,6 +4,9 @@ from setuptools import find_packages, setup
 
 package_name = 'bringup'
 
+launch_files = [path for path in glob("launch/*") if osp.isfile(path)]
+config_files = [path for path in glob("config/*") if osp.isfile(path)]
+
 setup(
     name=package_name,
     version='0.0.0',
@@ -12,8 +15,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (osp.join("share", package_name, "launch"), glob("launch/*")),
-        (osp.join("share", package_name, "config"), glob("config/*")),
+        (osp.join("share", package_name, "launch"), launch_files),
+        (osp.join("share", package_name, "config"), config_files),
         (osp.join("share", package_name, "hook"), ["hooks/dotenv.sh"]),
     ],
     install_requires=['setuptools'],

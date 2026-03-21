@@ -21,16 +21,19 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
-from convex_client import push_telemetry, poll_assignment, complete_ride
+from convex_client import push_telemetry, poll_assignment, complete_ride, get_ride_status
 
 TELEMETRY_INTERVAL_S = 2.0
 POLL_INTERVAL_S = 5.0
 # meters — consider ride complete when within this distance
 COMPLETION_DISTANCE_M = 8.0
+
+TERMINAL_STATUSES = {"completed", "cancelled"}
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -63,11 +66,25 @@ class CartBridgeNode(Node):
         self._active_ride: Optional[dict] = None
 
         # Subscriptions
-        self.create_subscription(NavSatFix, "/fix", self._gps_callback, 10)
+        self.create_subscription(
+	    NavSatFix,
+	    "/fix",
+	    self._gps_callback,
+	    qos_profile_sensor_data,
+	)
         self.create_subscription(Odometry, "/odometry/global", self._odom_callback, 10)
 
         # Publisher — sends route to act_global_path_manager
-        self._route_pub = self.create_publisher(String, "/ui/global_route_wgs84_json", 10)
+        self._route_pub = self.create_publisher(
+            String,
+            "/ui/global_route_wgs84_json",
+            QoSProfile(
+                history=HistoryPolicy.KEEP_LAST,
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
 
         # Timers
         self.create_timer(TELEMETRY_INTERVAL_S, self._telemetry_timer)
@@ -113,7 +130,18 @@ class CartBridgeNode(Node):
                     self._finish_ride()
 
     def _poll_timer(self) -> None:
+        # If a ride is active, check whether it was cancelled externally
         if self._active_ride is not None:
+            try:
+                status = get_ride_status(self._active_ride["_id"])
+                if status in TERMINAL_STATUSES:
+                    self.get_logger().info(
+                        f"Ride {self._active_ride['_id']} is {status} externally — clearing"
+                    )
+                    self._publish_clear(self._active_ride["_id"])
+                    self._active_ride = None
+            except Exception as e:
+                self.get_logger().error(f"Ride status check failed: {e}")
             return
 
         try:
@@ -144,11 +172,22 @@ class CartBridgeNode(Node):
             },
         ]
         msg = String()
-        msg.data = json.dumps(waypoints)
+        msg.data = json.dumps({
+            "route_id": ride["_id"],
+            "waypoints": waypoints,
+        })
         self._route_pub.publish(msg)
         self.get_logger().info(
             f"Published route: {len(waypoints)} waypoints to /ui/global_route_wgs84_json"
         )
+
+    def _publish_clear(self, ride_id: str) -> None:
+        msg = String()
+        msg.data = json.dumps({
+            "route_id": ride_id,
+            "waypoints": [],
+        })
+        self._route_pub.publish(msg)
 
     def _finish_ride(self) -> None:
         if not self._active_ride:
@@ -160,6 +199,7 @@ class CartBridgeNode(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to complete ride {ride_id}: {e}")
         finally:
+            self._publish_clear(ride_id)
             self._active_ride = None
 
 
