@@ -9,6 +9,7 @@ import {
   LogOut,
   Mail,
   Settings,
+  Star,
   User,
 } from "lucide-react-native";
 import React from "react";
@@ -55,7 +56,7 @@ export default function ProfileScreen() {
     >
       <View style={styles.menuLeft}>
         <View style={styles.iconContainer}>
-          <Text>{icon}</Text>
+          {icon}
         </View>
         <Text style={styles.menuTitle}>{title}</Text>
       </View>
@@ -81,16 +82,36 @@ export default function ProfileScreen() {
           </View>
           <Text style={styles.userName}>{user?.name}</Text>
           <Text style={styles.userEmail}>{user?.email}</Text>
-          {user?.campusId && (
-            <View style={styles.campusIdBadge}>
-              <Text style={styles.campusIdText}>{user.campusId}</Text>
-            </View>
-          )}
-
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{rideHistory.length}</Text>
               <Text style={styles.statLabel}>Total Rides</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              {(() => {
+                const rated = rideHistory.filter(r => r.rating != null);
+                if (rated.length === 0) return <Text style={styles.statValue}>—</Text>;
+                const avg = rated.reduce((s, r) => s + (r.rating ?? 0), 0) / rated.length;
+                return (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <Text style={styles.statValue}>{avg.toFixed(1)}</Text>
+                    <Star size={16} color={Colors.accent} fill={Colors.accent} />
+                  </View>
+                );
+              })()}
+              <Text style={styles.statLabel}>Avg Rating</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>
+                {rideHistory.filter(r => {
+                  const now = new Date();
+                  return r.requestedAt.getMonth() === now.getMonth() &&
+                    r.requestedAt.getFullYear() === now.getFullYear();
+                }).length}
+              </Text>
+              <Text style={styles.statLabel}>This Month</Text>
             </View>
           </View>
         </View>
@@ -215,7 +236,13 @@ const styles = StyleSheet.create({
   statsContainer: {
     marginTop: 24,
     flexDirection: "row",
-    gap: 32,
+    alignItems: "center",
+    gap: 24,
+  },
+  statDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: Colors.border,
   },
   statItem: {
     alignItems: "center",

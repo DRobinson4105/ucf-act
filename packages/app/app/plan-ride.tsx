@@ -4,7 +4,6 @@ import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
 import { useRide } from "@/contexts/RideContext";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
 import {
@@ -22,19 +21,15 @@ import {
     Dimensions,
     FlatList,
     Keyboard,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
     ScrollView,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    TouchableWithoutFeedback,
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -76,12 +71,14 @@ function RideTrackingContent({
 
   const getStatusInfo = () => {
     switch (currentRide?.status) {
+      case "requested":
+        return { title: "Finding your cart…", subtitle: "Looking for an available ACT cart nearby" };
       case "assigned":
         return { title: "Cart on the way", subtitle: "Your ACT cart is heading to your pickup" };
       case "arriving":
-        return { title: "Cart has arrived!", subtitle: "Walk to your pickup point and tap Ready" };
+        return { title: "Cart has arrived!", subtitle: "Head to your pickup and tap when you're there" };
       case "in_progress":
-        return { title: "Trip in progress", subtitle: "Sit back and enjoy your autonomous ride" };
+        return { title: "On your way", subtitle: "Sit back and enjoy your autonomous ride" };
       default:
         return { title: "Ride status", subtitle: "" };
     }
@@ -94,7 +91,8 @@ function RideTrackingContent({
 
   const statusInfo = getStatusInfo();
   const isArriving = currentRide?.status === "arriving";
-  const canCancel = currentRide?.status === "assigned" || currentRide?.status === "arriving" || currentRide?.status === "in_progress";
+  const canCancel = !!currentRide &&
+    ["requested", "assigned", "arriving", "in_progress"].includes(currentRide.status);
 
   return (
     <ScrollView style={styles.sheetContent} showsVerticalScrollIndicator={false}>
@@ -105,7 +103,7 @@ function RideTrackingContent({
 
       {isArriving && (
         <TouchableOpacity style={styles.boardButton} onPress={boardRide} activeOpacity={0.8}>
-          <Text style={styles.boardButtonText}>I'm Ready — Board Cart</Text>
+          <Text style={styles.boardButtonText}>I'm Here</Text>
         </TouchableOpacity>
       )}
 
@@ -114,10 +112,10 @@ function RideTrackingContent({
           <View>
             <Text style={styles.licensePlate}>ACT-001</Text>
             <Text style={styles.vehicleDetails}>ACT Golf Cart • White</Text>
-            <Text style={styles.autonomousLabel}>🤖 Self-Driving Cart</Text>
+            <Text style={styles.autonomousLabel}>Autonomous · Free</Text>
           </View>
           <View style={styles.vehicleIcon}>
-            <Text style={styles.vehicleEmoji}>🚗</Text>
+            <Car size={28} color={Colors.accent} />
           </View>
         </View>
       </View>
@@ -151,121 +149,39 @@ function RideTrackingContent({
   );
 }
 
-interface RideReviewProps {
-  rideId?: string;
-  onDone: () => void;
-}
 
-function RideReview({ rideId, onDone }: RideReviewProps) {
-  const insets = useSafeAreaInsets();
-  const addReviewMutation = useMutation(api.rides.addReview);
-  const [rating, setRating] = useState(0);
-  const [comment, setComment] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleSubmit = async () => {
-    if (rating === 0 || !rideId) { onDone(); return; }
-    setSubmitting(true);
-    try {
-      await addReviewMutation({
-        rideId: rideId as Id<"rides">,
-        rating,
-        reviewComment: comment.trim() || undefined,
-      });
-    } catch (e) {
-      console.error("Review submit failed:", e);
-    }
-    onDone();
-  };
-
-  return (
-    <KeyboardAvoidingView
-      style={{ flex: 1, backgroundColor: Colors.background }}
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
-    >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <ScrollView
-          contentContainerStyle={[
-            reviewStyles.container,
-            { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          <Text style={reviewStyles.title}>How was your ride?</Text>
-          <Text style={reviewStyles.subtitle}>Your feedback helps improve the ACT experience</Text>
-
-          <View style={reviewStyles.starsRow}>
-            {[1, 2, 3, 4, 5].map((n) => (
-              <Pressable
-                key={`star-${n}`}
-                onPress={() => setRating(n)}
-                hitSlop={8}
-                style={reviewStyles.starButton}
-              >
-                <Text style={[reviewStyles.star, n <= rating && reviewStyles.starFilled]}>
-                  ★
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <TextInput
-            style={reviewStyles.commentInput}
-            placeholder="Add a comment (optional)"
-            placeholderTextColor={Colors.textSecondary}
-            value={comment}
-            onChangeText={setComment}
-            multiline
-            numberOfLines={4}
-            maxLength={300}
-            returnKeyType="done"
-            onSubmitEditing={Keyboard.dismiss}
-          />
-
-          <TouchableOpacity
-            style={[reviewStyles.submitButton, rating === 0 && reviewStyles.submitButtonDisabled]}
-            onPress={handleSubmit}
-            disabled={submitting}
-            activeOpacity={0.8}
-          >
-            <Text style={reviewStyles.submitButtonText}>
-              {submitting ? "Submitting..." : "Submit Review"}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={reviewStyles.skipButton} onPress={onDone}>
-            <Text style={reviewStyles.skipText}>Skip</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </TouchableWithoutFeedback>
-    </KeyboardAvoidingView>
-  );
-}
-
-function LoadingDot() {
-  const opacity = useRef(new Animated.Value(0.3)).current;
+function ThreeDotsLoader() {
+  const anim0 = useRef(new Animated.Value(0.3)).current;
+  const anim1 = useRef(new Animated.Value(0.3)).current;
+  const anim2 = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
-    const animation = Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, {
-          toValue: 1,
-          duration: 600,
-          useNativeDriver: true,
-        }),
-        Animated.timing(opacity, {
-          toValue: 0.3,
-          duration: 600,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [opacity]);
+    const makeAnim = (anim: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 380, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0.3, duration: 380, useNativeDriver: true }),
+          Animated.delay(760 - delay),
+        ])
+      );
+    const a0 = makeAnim(anim0, 0);
+    const a1 = makeAnim(anim1, 190);
+    const a2 = makeAnim(anim2, 380);
+    a0.start(); a1.start(); a2.start();
+    return () => { a0.stop(); a1.stop(); a2.stop(); };
+  }, [anim0, anim1, anim2]);
 
-  return <Animated.View style={[styles.loadingDot, { opacity }]} />;
+  return (
+    <View style={{ flexDirection: "row", gap: 10, alignItems: "center", justifyContent: "center" }}>
+      {[anim0, anim1, anim2].map((anim, i) => (
+        <Animated.View
+          key={i}
+          style={{ width: 11, height: 11, borderRadius: 6, backgroundColor: Colors.accent, opacity: anim }}
+        />
+      ))}
+    </View>
+  );
 }
 
 export default function PlanRideScreen() {
@@ -303,7 +219,6 @@ export default function PlanRideScreen() {
   const [previousDropoffLocation, setPreviousDropoffLocation] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("planning");
   const [selectedRide, setSelectedRide] = useState<string>(RIDE_OPTIONS[0].id);
-  const [completedRideId, setCompletedRideId] = useState<string | undefined>();
   const sheetRef = useRef<{ expand: () => void } | null>(null);
   const destinationInputRef = useRef<TextInput>(null);
   const pickupInputRef = useRef<TextInput>(null);
@@ -404,34 +319,29 @@ export default function PlanRideScreen() {
     setViewMode("planning");
   };
 
-  const prevRideIdRef = useRef<string | undefined>();
+  const prevRideIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!currentRide) return;
-
-    const activeStatuses = ["assigned", "arriving", "in_progress"];
-    if (viewMode === "finding" && activeStatuses.includes(currentRide.status)) {
+    // As soon as any ride record exists, leave the "finding" spinner
+    if (viewMode === "finding") {
       setViewMode("tracking");
     }
-
     if (viewMode === "tracking" && currentRide.status === "cancelled") {
       setViewMode("planning");
     }
   }, [viewMode, currentRide?.status]);
 
-  // Watch for ride completion via history (active ride disappears)
+  // Watch for ride completion (active ride disappears → dismiss plan-ride, review modal handles itself)
   const { rideHistory } = useRide();
   useEffect(() => {
     if (viewMode !== "tracking") return;
     if (!prevRideIdRef.current && currentRide) {
       prevRideIdRef.current = currentRide.id;
     }
-    // When active ride clears (completed), last history entry is the completed ride
     if (prevRideIdRef.current && !currentRide) {
-      const completed = rideHistory[0];
-      setCompletedRideId(completed?.id ?? prevRideIdRef.current);
       prevRideIdRef.current = undefined;
-      setViewMode("review");
+      router.dismiss();
     }
   }, [viewMode, currentRide, rideHistory]);
 
@@ -516,15 +426,6 @@ export default function PlanRideScreen() {
     ? { latitude: dropoffLocationObj.latitude, longitude: dropoffLocationObj.longitude }
     : undefined;
 
-  if (viewMode === "review") {
-    return (
-      <RideReview
-        rideId={completedRideId}
-        onDone={() => router.dismiss()}
-      />
-    );
-  }
-
   return (
     <View style={styles.container}>
       <CampusMap
@@ -570,9 +471,9 @@ export default function PlanRideScreen() {
         {viewMode === "finding" ? (
           <View style={styles.findingContent}>
             <View style={styles.loadingContainer}>
-              <LoadingDot />
+              <ThreeDotsLoader />
             </View>
-            <Text style={styles.findingTitle}>Finding available cart...</Text>
+            <Text style={styles.findingTitle}>Finding your cart…</Text>
             <Text style={styles.findingSubtitle}>
               This will only take a moment
             </Text>
@@ -1223,9 +1124,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  vehicleEmoji: {
-    fontSize: 32,
-  },
   rideLocationInfo: {
     gap: 16,
     marginBottom: 20,
@@ -1305,75 +1203,3 @@ const styles = StyleSheet.create({
   },
 });
 
-const reviewStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-    alignItems: "center",
-    paddingHorizontal: 32,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700" as const,
-    color: Colors.text,
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  subtitle: {
-    fontSize: 15,
-    color: Colors.textSecondary,
-    textAlign: "center",
-    marginBottom: 40,
-  },
-  starsRow: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 32,
-  },
-  commentInput: {
-    width: "100%",
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    padding: 16,
-    fontSize: 15,
-    color: Colors.text,
-    textAlignVertical: "top",
-    minHeight: 100,
-    marginBottom: 24,
-  },
-  submitButton: {
-    width: "100%",
-    backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  submitButtonDisabled: {
-    opacity: 0.4,
-  },
-  submitButtonText: {
-    fontSize: 16,
-    fontWeight: "700" as const,
-    color: Colors.white,
-  },
-  skipButton: {
-    paddingVertical: 8,
-  },
-  skipText: {
-    fontSize: 15,
-    color: Colors.textSecondary,
-  },
-  starButton: {
-    padding: 4,
-  },
-  star: {
-    fontSize: 48,
-    color: Colors.border,
-  },
-  starFilled: {
-    color: Colors.accent,
-  },
-});

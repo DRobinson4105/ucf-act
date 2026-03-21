@@ -1,13 +1,12 @@
 import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
 import { useRide } from "@/contexts/RideContext";
-import { Clock, MapPin } from "lucide-react-native";
+import { Clock, MapPin, Star } from "lucide-react-native";
 import React from "react";
 import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,9 +15,12 @@ function StarRating({ rating }: { rating: number }) {
   return (
     <View style={{ flexDirection: "row", gap: 2 }}>
       {[1, 2, 3, 4, 5].map((n) => (
-        <Text key={n} style={{ fontSize: 14, color: n <= rating ? Colors.accent : Colors.border }}>
-          ★
-        </Text>
+        <Star
+          key={n}
+          size={14}
+          color={n <= rating ? Colors.accent : Colors.border}
+          fill={n <= rating ? Colors.accent : "transparent"}
+        />
       ))}
     </View>
   );
@@ -68,7 +70,7 @@ export default function HistoryScreen() {
         ) : (
           <View style={styles.list}>
             {rideHistory.map((ride) => (
-              <TouchableOpacity key={ride.id} style={styles.rideCard}>
+              <View key={ride.id} style={styles.rideCard}>
                 <View style={styles.rideHeader}>
                   <Text style={styles.vehicleId}>{formatDate(ride.requestedAt)}</Text>
                   <View style={styles.statusBadge}>
@@ -85,29 +87,29 @@ export default function HistoryScreen() {
 
                   <View style={styles.locations}>
                     <View style={styles.locationRow}>
-                      <MapPin size={16} color={Colors.accent} />
+                      <MapPin size={16} color={Colors.textSecondary} />
                       <Text style={styles.locationText}>
                         {getLocationName(ride.pickupLocationId)}
                       </Text>
                     </View>
 
                     <View style={styles.locationRow}>
-                      <MapPin size={16} color={Colors.primary} />
-                      <Text style={styles.locationText}>
+                      <MapPin size={16} color={Colors.accent} />
+                      <Text style={[styles.locationText, { fontWeight: "600" }]}>
                         {getLocationName(ride.dropoffLocationId)}
                       </Text>
                     </View>
                   </View>
                 </View>
 
-                {(ride.rating != null || (ride.pickupAt && ride.completedAt)) && (
+                {(ride.rating != null || ride.completedAt) && (
                   <View style={styles.footer}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      {ride.pickupAt && ride.completedAt && (
+                      {ride.completedAt && (
                         <>
                           <Clock size={14} color={Colors.textSecondary} />
                           <Text style={styles.duration}>
-                            {getDuration(ride.pickupAt, ride.completedAt)}
+                            {getDuration(ride.requestedAt, ride.completedAt)}
                           </Text>
                         </>
                       )}
@@ -117,7 +119,7 @@ export default function HistoryScreen() {
                     )}
                   </View>
                 )}
-              </TouchableOpacity>
+              </View>
             ))}
           </View>
         )}
@@ -218,10 +220,13 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: Colors.accent,
+    backgroundColor: "transparent",
+    borderWidth: 2,
+    borderColor: Colors.textSecondary,
   },
   dotDestination: {
     backgroundColor: Colors.accent,
+    borderRadius: 2,
   },
   line: {
     width: 2,

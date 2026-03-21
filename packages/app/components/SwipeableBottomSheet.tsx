@@ -120,8 +120,8 @@ export default function SwipeableBottomSheet({
       ]}
       {...panResponder.panHandlers}
     >
-      <View className="items-center justify-center h-10 pt-3 pb-3">
-        <View className="w-10 h-1.5 bg-border rounded-full" />
+      <View className="items-center justify-center pt-4 pb-2">
+        <View className="w-14 h-1 bg-border rounded-full" />
       </View>
       {children}
     </Animated.View>

@@ -6,6 +6,12 @@ import createContextHook from "@nkzw/create-context-hook";
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+export interface PendingReview {
+  rideId: Id<"rides">;
+  pickupLocationId: string;
+  dropoffLocationId: string;
+}
+
 function findLocationId(lat: number, lon: number): string {
   // Match a Convex ride's lat/lon back to a CAMPUS_LOCATIONS id
   let best = CAMPUS_LOCATIONS[0];
@@ -27,9 +33,12 @@ export const [RideProvider, useRide] = createContextHook(() => {
   const requestRideMutation = useMutation(api.rides.requestRide);
   const cancelRideMutation = useMutation(api.rides.cancelRide);
   const boardRideMutation = useMutation(api.rides.boardRide);
+  const addReviewMutation = useMutation(api.rides.addReview);
 
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
   const prevStatusRef = useRef<RideStatus | null>(null);
+  const prevRideRef = useRef<Ride | null>(null);
 
   // Map Convex activeRide to the local Ride type consumed by UI components
   const currentRide: Ride | null = useMemo(() => {
@@ -86,6 +95,19 @@ export const [RideProvider, useRide] = createContextHook(() => {
       reviewComment: r.reviewComment,
     }));
   }, [rideHistoryData]);
+
+  // Detect ride completion (in_progress → gone) to trigger review screen
+  useEffect(() => {
+    const prev = prevRideRef.current;
+    prevRideRef.current = currentRide;
+    if (prev?.status === "in_progress" && !currentRide && prev.convexId) {
+      setPendingReview({
+        rideId: prev.convexId as Id<"rides">,
+        pickupLocationId: prev.pickupLocationId,
+        dropoffLocationId: prev.dropoffLocationId,
+      });
+    }
+  }, [currentRide]);
 
   // Derive notifications from status transitions
   useEffect(() => {
@@ -156,6 +178,23 @@ export const [RideProvider, useRide] = createContextHook(() => {
     []
   );
 
+  const submitReview = useCallback(
+    async (rating: number, comment?: string) => {
+      if (!pendingReview) return;
+      await addReviewMutation({
+        rideId: pendingReview.rideId,
+        rating,
+        reviewComment: comment,
+      });
+      setPendingReview(null);
+    },
+    [addReviewMutation, pendingReview]
+  );
+
+  const dismissReview = useCallback(() => {
+    setPendingReview(null);
+  }, []);
+
   const markNotificationAsRead = useCallback((id: string) => {
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, read: true } : n))
@@ -174,10 +213,13 @@ export const [RideProvider, useRide] = createContextHook(() => {
       rideHistory,
       notifications,
       isLoading,
+      pendingReview,
       requestRide,
       updateRideStatus,
       cancelRide,
       boardRide,
+      submitReview,
+      dismissReview,
       markNotificationAsRead,
       markAllNotificationsAsRead,
     }),
@@ -186,10 +228,13 @@ export const [RideProvider, useRide] = createContextHook(() => {
       rideHistory,
       notifications,
       isLoading,
+      pendingReview,
       requestRide,
       updateRideStatus,
       cancelRide,
       boardRide,
+      submitReview,
+      dismissReview,
       markNotificationAsRead,
       markAllNotificationsAsRead,
     ]

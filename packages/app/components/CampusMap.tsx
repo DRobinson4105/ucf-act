@@ -2,7 +2,7 @@ import { CAMPUS_LOCATIONS, UCF_CENTER } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
 import { findPath, PathNode } from "@/utils/pathfinding";
 import * as Location from "expo-location";
-import { MapPin, Navigation } from "lucide-react-native";
+import { Car, MapPin, Navigation } from "lucide-react-native";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -406,7 +406,7 @@ export default function CampusMap({
               title={cart.name}
             >
               <View className="w-[44px] h-[44px] rounded-full bg-surface/90 items-center justify-center border-2 border-border shadow-md">
-                <Text style={{ fontSize: 20 }}>🛺</Text>
+                <Car size={20} color={Colors.accent} />
               </View>
             </Marker>
           ))}

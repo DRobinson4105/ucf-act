@@ -1,6 +1,6 @@
 import Colors from "@/constants/colors";
 import { useRide } from "@/contexts/RideContext";
-import { Bell, CheckCheck } from "lucide-react-native";
+import { Bell, Car, CheckCheck, Info, Tag } from "lucide-react-native";
 import React from "react";
 import {
   ScrollView,
@@ -32,7 +32,12 @@ export default function NotificationsScreen() {
   };
 
   const getNotificationIcon = (type: string) => {
-    return <Bell size={20} color={Colors.accent} />;
+    switch (type) {
+      case "ride-update": return <Car size={20} color={Colors.accent} />;
+      case "system":      return <Info size={20} color={Colors.textSecondary} />;
+      case "promotion":   return <Tag size={20} color={Colors.success} />;
+      default:            return <Bell size={20} color={Colors.accent} />;
+    }
   };
 
   return (
