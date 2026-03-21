@@ -310,8 +310,15 @@ menu "Debug Logging"
             bool "Log pedal ADC every cycle"
             default n
             help
-                Log raw pedal ADC millivolt reading and threshold on every
-                control loop tick. Very verbose.
+                Log pedal ADC millivolt reading on every control loop tick,
+                including values below threshold. Very verbose.
+
+        config LOG_INPUT_PEDAL_EVENTS
+            bool "Log pedal threshold/rearm events"
+            default n
+            help
+                Log edge-triggered pedal input events: threshold met and
+                pedal re-armed after release dwell.
 
         config LOG_INPUT_FR_DEBOUNCE
             bool "Log F/R debounce transitions"

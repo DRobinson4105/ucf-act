@@ -64,9 +64,10 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 |------|----------|----------|------------------------------------|
 | 0    | sequence | uint8    | Rolling counter 0-255              |
 | 1    | throttle | uint8    | Throttle level 0-7                 |
-| 2-3  | steering | int16 LE | Steering position (encoder counts) |
-| 4-5  | braking  | int16 LE | Braking position (encoder counts)  |
-| 6-7  | reserved | -        | Zero-filled                        |
+| 2    | steering_msb | uint8 | Steering high byte (MSB) for steering command 0-720 |
+| 3    | steering_lsb | uint8 | Steering low byte (LSB) for steering command 0-720  |
+| 4    | braking  | uint8    | Braking command                    |
+| 5-7  | reserved | -        | Unused (Planner currently sends DLC=5) |
 
 ## Unified Node States (NODE_STATE_*)
 
