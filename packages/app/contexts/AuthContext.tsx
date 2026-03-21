@@ -3,22 +3,38 @@ import createContextHook from "@nkzw/create-context-hook";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const ONBOARDING_STORAGE_KEY = "act_onboarding_complete";
 export const TOKEN_STORAGE_KEY = "act_apple_token";
 
 // ---------------------------------------------------------------------------
-// Module-level Apple token singleton
-// Shared between ConvexProviderWithAuth (in _layout.tsx) and the app
+// JWT expiry helper — reads the `exp` claim directly from the token payload.
+// Apple identity tokens are valid for ~10 minutes; checking exp is more
+// reliable than a time-based heuristic.
+// ---------------------------------------------------------------------------
+function isJwtExpired(token: string): boolean {
+  try {
+    const [, payloadB64] = token.split(".");
+    // JWT uses base64url — convert to standard base64 before decoding
+    const padded = payloadB64.replace(/-/g, "+").replace(/_/g, "/");
+    const payload = JSON.parse(atob(padded));
+    // Add 30 s buffer for clock skew; exp is in seconds
+    return typeof payload.exp !== "number" || payload.exp * 1000 < Date.now() - 30_000;
+  } catch {
+    return true; // unparseable → assume expired
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level Apple token singleton — shared between ConvexProviderWithAuth
+// and the rest of the app
 // ---------------------------------------------------------------------------
 let _appleToken: string | null = null;
-let _appleTokenIssuedAt: number | null = null; // ms since epoch
 const _tokenListeners = new Set<() => void>();
 
 export function setAppleToken(token: string | null) {
   _appleToken = token;
-  _appleTokenIssuedAt = token ? Date.now() : null;
   _tokenListeners.forEach((fn) => fn());
 }
 
@@ -30,11 +46,12 @@ export function useAppleTokenAuth() {
   useEffect(() => {
     SecureStore.getItemAsync(TOKEN_STORAGE_KEY).then((stored) => {
       if (stored) {
-        _appleToken = stored;
-        // We don't know how old the stored token is; treat it as 8 min old so
-        // forceRefresh calls still return it (giving a ~1 min grace window before
-        // we'd clear a genuinely expired token).
-        _appleTokenIssuedAt = Date.now() - 8 * 60 * 1000;
+        if (!isJwtExpired(stored)) {
+          _appleToken = stored;
+        } else {
+          // Silently discard an expired persisted token
+          SecureStore.deleteItemAsync(TOKEN_STORAGE_KEY).catch(() => {});
+        }
       }
       setIsLoading(false);
       rerender((n) => n + 1);
@@ -50,12 +67,11 @@ export function useAppleTokenAuth() {
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
       if (forceRefreshToken) {
-        // Apple identity tokens can't be refreshed silently. Only clear the
-        // token if it's genuinely expired (>9 min old). If it was issued
-        // recently, Convex called forceRefresh due to a timing race on the
-        // first mutation — not actual expiry — so return the token to re-auth.
-        const ageMs = _appleTokenIssuedAt ? Date.now() - _appleTokenIssuedAt : Infinity;
-        if (ageMs > 9 * 60 * 1000) {
+        // Convex calls forceRefresh when the server rejects the token.
+        // If the JWT is genuinely expired, clear it and return null so the
+        // user is redirected to sign-in. If it's still valid, return it —
+        // the rejection was a timing race on first connect, not real expiry.
+        if (!_appleToken || isJwtExpired(_appleToken)) {
           await SecureStore.deleteItemAsync(TOKEN_STORAGE_KEY);
           setAppleToken(null);
           return null;
@@ -87,10 +103,12 @@ interface User {
 export const [AuthProvider, useAuth] = createContextHook(() => {
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const convexUser = useQuery(api.users.currentUser);
+  const storeUserMutation = useMutation(api.users.storeUser);
   const updateUserMutation = useMutation(api.users.updateUser);
 
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
   const [onboardingLoaded, setOnboardingLoaded] = useState(false);
+  const storeUserCalledRef = useRef(false);
 
   // Load onboarding completion flag
   useEffect(() => {
@@ -100,13 +118,34 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       .finally(() => setOnboardingLoaded(true));
   }, []);
 
-  // Reset onboarding if auth is lost (e.g. token expired)
+  // Reset onboarding and storeUser gate when auth is lost
   useEffect(() => {
-    if (!authLoading && !isAuthenticated && hasCompletedOnboarding) {
-      setHasCompletedOnboarding(false);
-      AsyncStorage.removeItem(ONBOARDING_STORAGE_KEY).catch(() => {});
+    if (!authLoading && !isAuthenticated) {
+      storeUserCalledRef.current = false;
+      if (hasCompletedOnboarding) {
+        setHasCompletedOnboarding(false);
+        AsyncStorage.removeItem(ONBOARDING_STORAGE_KEY).catch(() => {});
+      }
     }
   }, [authLoading, isAuthenticated, hasCompletedOnboarding]);
+
+  // Create/update the Convex user record as soon as the SDK confirms auth.
+  // useConvexAuth().isAuthenticated is only true AFTER the server has validated
+  // the token — so no retry loop is needed here.
+  useEffect(() => {
+    if (!isAuthenticated || storeUserCalledRef.current) return;
+    storeUserCalledRef.current = true;
+    (async () => {
+      const pendingName = await AsyncStorage.getItem("act_pending_name");
+      try {
+        await storeUserMutation({ name: pendingName || undefined });
+        if (pendingName) await AsyncStorage.removeItem("act_pending_name");
+      } catch (e) {
+        storeUserCalledRef.current = false; // allow one retry on next render
+        console.error("storeUser error:", e);
+      }
+    })();
+  }, [isAuthenticated, storeUserMutation]);
 
   const isLoading =
     authLoading ||

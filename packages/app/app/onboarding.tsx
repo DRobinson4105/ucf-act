@@ -1,4 +1,3 @@
-import { api } from "@/convex/_generated/api";
 import Colors from "@/constants/colors";
 import { setAppleToken, TOKEN_STORAGE_KEY, useAuth } from "@/contexts/AuthContext";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
@@ -8,8 +7,7 @@ import * as SecureStore from "expo-secure-store";
 import * as Location from "expo-location";
 import { router } from "expo-router";
 import { Bell, Check } from "lucide-react-native";
-import React, { useCallback, useState } from "react";
-import { useMutation } from "convex/react";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   Platform,
@@ -25,36 +23,10 @@ type OnboardingStep = "welcome" | "location" | "notifications" | "complete";
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const { completeOnboarding } = useAuth();
-  const storeUserMutation = useMutation(api.users.storeUser);
 
   const [step, setStep] = useState<OnboardingStep>("welcome");
   const [isLoading, setIsLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-
-  // Retry storeUser until the Convex WebSocket auth handshake completes.
-  // useConvexAuth().isAuthenticated reflects our hook state (token present),
-  // NOT server confirmation — so we can't gate on it. Instead we retry with
-  // exponential backoff until the mutation succeeds.
-  const storeUserWithRetry = useCallback(
-    async (attemptsLeft = 6, delay = 150) => {
-      const pendingName = await AsyncStorage.getItem("act_pending_name");
-      try {
-        await storeUserMutation({ name: pendingName || undefined });
-        await AsyncStorage.removeItem("act_pending_name");
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (
-          (msg.includes("without authentication") || msg.includes("Unauthenticated")) &&
-          attemptsLeft > 0
-        ) {
-          setTimeout(() => storeUserWithRetry(attemptsLeft - 1, Math.min(delay * 2, 2000)), delay);
-        } else {
-          console.error("storeUser failed permanently:", e);
-        }
-      }
-    },
-    [storeUserMutation]
-  );
 
   const totalSteps = 3;
   const currentStepNumber = { welcome: 0, location: 1, notifications: 2, complete: 3 }[step];
@@ -85,14 +57,13 @@ export default function OnboardingScreen() {
         if (parts.length > 0) name = parts.join(" ");
       }
 
-      // Store name so storeUserWithRetry can pick it up
+      // Persist the name so AuthContext can pass it to storeUser once auth is confirmed
       if (name) await AsyncStorage.setItem("act_pending_name", name);
-      // Set token — triggers ConvexProviderWithAuth to begin WebSocket auth
+      // Set token — ConvexProviderWithAuth picks this up and completes the
+      // WebSocket auth handshake; AuthContext's useEffect then calls storeUser
+      // once useConvexAuth().isAuthenticated becomes true (server-confirmed).
       await SecureStore.setItemAsync(TOKEN_STORAGE_KEY, credential.identityToken);
       setAppleToken(credential.identityToken);
-      // Fire storeUser in background with retry; the first attempt may arrive
-      // before the server auth handshake completes — retries handle that gap.
-      storeUserWithRetry();
 
       setStep("location");
     } catch (err: unknown) {
