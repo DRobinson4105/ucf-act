@@ -23,8 +23,8 @@ SegNode::SegNode() : rclcpp::Node("seg_node"), m_act_logger([this](act::util::Se
   std::string trtModelPath = this->declare_parameter<std::string>("trt_model_path", "");
   std::string outTopic = this->declare_parameter<std::string>("out_topic", "/seg_mask");
   std::string inTopic = this->declare_parameter<std::string>("in_topic", "/image_raw");
-  double frequency = this->declare_parameter<double>("frequency", 1.0);
-  std::vector<double> subVals = this->declare_parameter<std::vector<double>>("sub_vals", {0.0, 0.0, 0.0});
+    double frequency = this->declare_parameter<double>("frequency", 1.0);
+    std::vector<double> subVals = this->declare_parameter<std::vector<double>>("sub_vals", {0.0, 0.0, 0.0});
   std::vector<double> divVals = this->declare_parameter<std::vector<double>>("div_vals", {1.0, 1.0, 1.0});
   bool normalize = this->declare_parameter<bool>("normalize", true);
   
@@ -91,7 +91,7 @@ sensor_msgs::msg::Image SegNode::convertToImage(std::vector<OutputType> segMap) 
     for (int j = 0; j < m_width; j++) {
       const int idx = i * m_width + j;
 
-      out.data[idx] = (cl0[idx] > cl1[idx]) ? 255 : 0;
+      out.data[idx] = (cl0[idx]  > cl1[idx]) ? 255 : 0;
     }
   }
 
