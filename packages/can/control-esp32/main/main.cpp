@@ -452,12 +452,19 @@ void update_driver_inputs(uint32_t now_ms)
 			g_pedal_mv = pedal_mv;
 
 #ifdef CONFIG_LOG_INPUT_PEDAL_ADC
-			if (g_pedal_mv >= PEDAL_ADC_THRESHOLD_MV)
-				ESP_LOGI(TAG, "Pedal: %u mV (threshold: %u mV)", g_pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV);
+			ESP_LOGI(TAG, "Pedal ADC: %u mV (threshold: %u mV)", g_pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV);
 #endif
 
 			if (g_pedal_mv >= PEDAL_ADC_THRESHOLD_MV)
 			{
+
+#ifdef CONFIG_LOG_INPUT_PEDAL_EVENTS
+				if (!g_pedal_was_above)
+				{
+					ESP_LOGI(TAG, "Pedal threshold met: %u mV (threshold: %u mV)", g_pedal_mv,
+					         (unsigned)PEDAL_ADC_THRESHOLD_MV);
+				}
+#endif
 				g_pedal_was_above = true;
 				g_pedal_below_threshold_since = 0;
 			}
@@ -469,7 +476,9 @@ void update_driver_inputs(uint32_t now_ms)
 				if (g_pedal_below_threshold_since > 0 && (now_ms - g_pedal_below_threshold_since) >= PEDAL_REARM_MS)
 				{
 					g_pedal_was_above = false;
-#ifdef CONFIG_LOG_INPUT_PEDAL_ADC
+					g_pedal_below_threshold_since = 0;
+
+#ifdef CONFIG_LOG_INPUT_PEDAL_EVENTS
 					ESP_LOGI(TAG, "Pedal re-armed");
 #endif
 				}
@@ -1886,8 +1895,8 @@ void can_rx_task(void *param)
 			}
 
 			g_cmd.throttle_cmd = throttle_level;
-			g_cmd.steering_cmd = cmd.steering_position;
-			g_cmd.braking_cmd = cmd.braking_position;
+			g_cmd.steering_cmd = (int16_t)cmd.steering_position;
+			g_cmd.braking_cmd = (int16_t)cmd.braking_position;
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
 #ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX

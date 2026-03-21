@@ -73,7 +73,7 @@ Tests the `can_protocol` header (shared protocol definitions used by all nodes).
 | Category                       | What it covers                                                                                             |
 |--------------------------------|------------------------------------------------------------------------------------------------------------|
 | LE16 pack/unpack               | Unsigned and signed 16-bit little-endian: zero, max, arbitrary value, INT16_MIN, INT16_MAX                 |
-| Planner command encode/decode  | Round-trip with typical values, zeroes, INT16 extremes, wire format byte order verification                |
+| Planner command encode/decode  | Round-trip with typical values and boundary values, short-DLC reject, throttle clamp, wire format byte order verification |
 | Safety heartbeat encode/decode | Round-trip advancing/retreating states, reserved byte zeroing                                              |
 | Heartbeat encode/decode        | Round-trip basic, with fault, with enable_complete flag, with autonomy_request flag, reserved byte zeroing |
 | String helpers                 | `node_state_to_string()` all values + unknown, `node_fault_to_string()` all ranges + unknown               |

@@ -10,8 +10,9 @@ High-level rules:
 
 - `READY` means local preconditions are currently satisfied.
 - `NOT_READY` means local preconditions are not satisfied (not a fault).
+- `OVERRIDE` means a human-intervention retreat path (pedal/FR/position-error trigger while ACTIVE).
 - `FAULT` means a component/runtime error condition; it is distinct from `NOT_READY`.
-- `OVERRIDE` is a human-intervention retreat path, separate from `FAULT`.
+- Safety only commands target states `NOT_READY`/`READY`/`ENABLE`/`ACTIVE`; `OVERRIDE` and `FAULT` are local Control live states reported in Control heartbeat.
 - `FAULT` and `OVERRIDE` both recover to `NOT_READY` or `READY` based on current preconditions.
 
 ### States
@@ -23,8 +24,8 @@ High-level rules:
 | READY     | Manual mode with local autonomy preconditions satisfied. Waiting for Safety to advance.                               |
 | ENABLE    | Enable relay energized, waiting to switch throttle source. Sets `HEARTBEAT_FLAG_ENABLE_COMPLETE` when done.           |
 | ACTIVE    | Autonomous mode. Executing throttle/steering/braking commands from Planner.                                           |
-| OVERRIDE  | Safe state after driver takeover. All actuators disabled, manual control restored. Separate from FAULT.               |
-| FAULT     | Faulted state. Entered from any state on local component/runtime fault; returns to NOT_READY/READY once faults clear. |
+| OVERRIDE  | Safe retreat after driver/manual intervention while ACTIVE. Autonomous outputs are disabled.                          |
+| FAULT     | Faulted state after local component/runtime error. Autonomous outputs are disabled until fault clears.                |
 
 ### Transitions
 
@@ -58,16 +59,16 @@ Note: The anti-arcing microswitch is in series after the throttle microswitch. B
 
 Note: F/R NEUTRAL while ACTIVE does NOT trigger override. Instead, throttle is zeroed (cart can't drive in neutral anyway) while steering/braking continue. The system resumes normal throttle when FORWARD is engaged. F/R state is transmitted to the Orin via heartbeat byte 4 so it can prompt the user to put the cart in forward.
 
-**`ACTIVE -> NOT_READY/READY`** occurs when Safety target retreats (e-stop, node fault/override/timeout, or Planner/Orin autonomy halt).
+**`ACTIVE -> NOT_READY/READY`** occurs when Safety target retreats (e-stop, node fault/override/timeout, or Planner/Orin autonomy halt / error).
 This is a commanded retreat from Safety, not a human override event.
 
 **`ANY -> FAULT`** occurs when a local component/runtime fault is detected.
 
-**`FAULT -> NOT_READY/READY`** occurs when local fault conditions clear and required components recover. Recovery target is recomputed from current preconditions.
+**`FAULT -> NOT_READY/READY`** occurs when local fault conditions clear and required components recover.
 
 **`OVERRIDE -> NOT_READY/READY`** auto-clears when all conditions are met:
 
-- F/R switch not in Reverse (FORWARD or NEUTRAL)
+- F/R switch not in Reverse or Invalid (FORWARD or NEUTRAL)
 - Pedal re-armed (released for 500ms)
 
 Recovery target is recomputed from current preconditions.
@@ -81,7 +82,7 @@ Note: The system automatically returns to NOT_READY/READY based on current preco
 | ID    | Name             | Description                                                             |
 | ----- | ---------------- | ----------------------------------------------------------------------- |
 | 0x100 | SAFETY_HEARTBEAT | System target state, e-stop fault code (same `node_heartbeat_t` format) |
-| 0x111 | PLANNER_COMMAND  | Commands (sequence, throttle 0-7, steering_pos, braking_pos)            |
+| 0x111 | PLANNER_COMMAND  | Commands (sequence, throttle, steering_msb, steering_lsb for steering 0-720, braking; DLC=5) |
 
 ### Sends (Standard 11-bit Frames)
 
@@ -121,12 +122,12 @@ Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 ### LED Behavior
 
-| Color        | State                                       |
-| ------------ | ------------------------------------------- |
-| Solid green  | Local Control state READY                   |
-| Solid orange | Local Control state ENABLE                  |
-| Solid blue   | Local Control state ACTIVE                  |
-| Solid red    | Non-nominal local state (OVERRIDE or FAULT) |
+| Color        | State                                                |
+| ------------ | ---------------------------------------------------- |
+| Solid green  | Local Control state READY                            |
+| Solid blue   | Local Control state ACTIVE                           |
+| Solid red    | Local Control state FAULT                            |
+| Solid yellow | Local Control state INIT/NOT_READY/ENABLE/OVERRIDE |
 
 ## Wiring
 
@@ -457,7 +458,8 @@ Retries are unbounded for failed required components, paced at 500ms intervals (
 
 | Flag                           | Default | Effect                                               |
 | ------------------------------ | ------- | ---------------------------------------------------- |
-| `CONFIG_LOG_INPUT_PEDAL_ADC`   | off     | Log pedal ADC millivolt readings (extremely verbose) |
+| `CONFIG_LOG_INPUT_PEDAL_ADC`   | off     | Log all pedal ADC millivolt readings every cycle (including below threshold; extremely verbose) |
+| `CONFIG_LOG_INPUT_PEDAL_EVENTS` | off     | Log edge-triggered pedal threshold/rearm events     |
 | `CONFIG_LOG_INPUT_FR_DEBOUNCE` | off     | Log F/R switch debounce transitions                  |
 | `CONFIG_LOG_INPUT_FR_STATE`    | off     | Log F/R selector state changes                       |
 
