@@ -285,6 +285,7 @@ The ACS758LCB-100B is a hall-effect sensor — the pack power cable passes throu
 - **Checksum**: `(0xFF + HIGH + LOW) & 0xFF`
 - **Stop threshold**: 1000mm (~3.3 ft)
 - **Sample timeout**: 200ms (stale readings ignored)
+- **Health timeout**: 500ms based on checksum-valid frame reception (out-of-range/no-echo frames remain healthy)
 
 ## Test Bypasses
 

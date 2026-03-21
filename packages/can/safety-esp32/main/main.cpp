@@ -126,6 +126,12 @@ constexpr uint32_t RETRY_INTERVAL_MS = 500; // component retry cadence (infinite
 // At 50ms loop cadence, 3 samples = 150ms disengage hold.
 constexpr uint8_t ESTOP_DISENGAGE_COUNT = 3;
 
+// Ultrasonic obstacle debounce: require N consecutive close/clear reads before
+// toggling the latched obstacle state.
+// At 50ms loop cadence, 2 samples = 100ms engage hold, 3 samples = 150ms clear hold.
+constexpr uint8_t ULTRASONIC_ENGAGE_COUNT = 2;
+constexpr uint8_t ULTRASONIC_DISENGAGE_COUNT = 3;
+
 // Ultrasonic health hysteresis: require N consecutive agreeing health samples
 // before changing health state. Prevents flap around timeout boundary.
 // At 50ms loop cadence, 3 samples = 150ms hysteresis window.
@@ -164,6 +170,7 @@ constexpr int ULTRASONIC_A02YYUW_TX_GPIO = GPIO_NUM_10; // Sensor RX (mode selec
 constexpr int ULTRASONIC_A02YYUW_RX_GPIO = GPIO_NUM_11; // Sensor TX (data output)
 constexpr int ULTRASONIC_A02YYUW_BAUD_RATE = 9600;
 constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 1000;
+constexpr uint16_t ULTRASONIC_CLEAR_DISTANCE_MM = 1200;
 
 // ============================================================================
 // Global State
@@ -228,6 +235,12 @@ uint8_t g_push_button_clear_count = 0;
 bool g_push_button_debounced = false; // debounced "active" state
 uint8_t g_rf_remote_clear_count = 0;
 bool g_rf_remote_debounced = false; // debounced "active" state
+
+// Ultrasonic obstacle debounce/hysteresis state.
+// Engage/clear require N consecutive reads to avoid one-sample chatter.
+uint8_t g_ultrasonic_close_count = 0;
+uint8_t g_ultrasonic_clear_count = 0;
+bool g_ultrasonic_too_close_debounced = false;
 
 // ============================================================================
 // Component Configurations
@@ -1052,11 +1065,39 @@ void safety_task(void *param)
 			filtered_ultrasonic_healthy = raw_ultrasonic_healthy;
 		}
 
+		// Ultrasonic obstacle debounce + hysteresis:
+		// - Engage after ULTRASONIC_ENGAGE_COUNT consecutive close reads.
+		// - While latched, use a larger clear threshold to avoid chatter near edge.
+		// - Require ULTRASONIC_DISENGAGE_COUNT consecutive clear reads to disengage.
+		bool raw_ultrasonic_too_close = false;
+		if (g_ultrasonic_init_ok)
+		{
+			uint16_t threshold_mm =
+				g_ultrasonic_too_close_debounced ? ULTRASONIC_CLEAR_DISTANCE_MM : ULTRASONIC_STOP_DISTANCE_MM;
+			raw_ultrasonic_too_close = ultrasonic_a02yyuw_is_too_close(threshold_mm, NULL);
+		}
+
+		if (raw_ultrasonic_too_close)
+		{
+			if (g_ultrasonic_close_count < ULTRASONIC_ENGAGE_COUNT)
+				g_ultrasonic_close_count++;
+			if (g_ultrasonic_close_count >= ULTRASONIC_ENGAGE_COUNT)
+				g_ultrasonic_too_close_debounced = true;
+			g_ultrasonic_clear_count = 0;
+		}
+		else
+		{
+			g_ultrasonic_close_count = 0;
+			if (g_ultrasonic_clear_count < ULTRASONIC_DISENGAGE_COUNT)
+				g_ultrasonic_clear_count++;
+			if (g_ultrasonic_clear_count >= ULTRASONIC_DISENGAGE_COUNT)
+				g_ultrasonic_too_close_debounced = false;
+		}
+
 		safety_inputs_t inputs = {
 			.push_button_active = g_push_button_debounced,
 			.rf_remote_active = g_rf_remote_debounced,
-			.ultrasonic_too_close =
-				g_ultrasonic_init_ok ? ultrasonic_a02yyuw_is_too_close(ULTRASONIC_STOP_DISTANCE_MM, NULL) : false,
+			.ultrasonic_too_close = g_ultrasonic_too_close_debounced,
 			.ultrasonic_healthy = filtered_ultrasonic_healthy,
 			.planner_alive = true,  // updated below from heartbeat monitor
 			.control_alive = true,  // updated below from heartbeat monitor

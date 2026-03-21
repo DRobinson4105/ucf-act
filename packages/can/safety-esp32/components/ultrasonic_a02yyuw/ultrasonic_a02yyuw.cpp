@@ -31,7 +31,8 @@ constexpr TickType_t MAX_SAMPLE_AGE = pdMS_TO_TICKS(200); // Reject stale readin
 constexpr uint16_t DISTANCE_MIN_MM = 30;
 constexpr uint16_t DISTANCE_MAX_MM = 4500;
 
-// Sensor health timeout - if no data for this long, sensor is considered unhealthy
+// Sensor health timeout - if no checksum-valid frame is seen for this long,
+// sensor is considered unhealthy.
 constexpr TickType_t SENSOR_HEALTH_TIMEOUT = pdMS_TO_TICKS(500);
 
 // ============================================================================
@@ -42,6 +43,8 @@ portMUX_TYPE s_ultrasonic_lock = portMUX_INITIALIZER_UNLOCKED;
 uint16_t s_last_distance_mm = 0;
 TickType_t s_last_update_tick = 0;
 bool s_has_measurement = false;
+TickType_t s_last_frame_tick = 0;
+bool s_has_frame = false;
 TaskHandle_t s_rx_task = nullptr;
 bool s_uart_installed = false;
 uint32_t s_range_drop_count = 0;
@@ -71,15 +74,18 @@ void ultrasonic_a02yyuw_reset_parser_state(void)
 		s_parser_frame[i] = 0;
 }
 
+void ultrasonic_a02yyuw_mark_frame_seen(void);
+
 /**
  * @brief Parse A02YYUW UART byte stream for valid distance frames.
  *
  * Processes raw UART bytes through a stateful parser that accumulates
  * 4-byte frames in the format [0xFF] [HIGH] [LOW] [CHECKSUM] where
  * checksum = (0xFF + HIGH + LOW) & 0xFF.  Out-of-range readings
- * (below 30mm or above 4500mm) are silently dropped.  If multiple
- * valid frames appear in a single buffer, the last (freshest) value
- * is returned.
+ * (below 30mm or above 4500mm) are dropped for distance reporting,
+ * but still count as healthy frame traffic.  If multiple valid
+ * in-range frames appear in a single buffer, the last (freshest)
+ * value is returned.
  *
  * @param data         Raw UART receive buffer
  * @param len          Number of bytes in the buffer
@@ -111,6 +117,10 @@ bool ultrasonic_a02yyuw_parse_stream(const uint8_t *data, int len, uint16_t *dis
 			uint8_t sum = (uint8_t)(s_parser_frame[0] + s_parser_frame[1] + s_parser_frame[2]);
 			if (sum == s_parser_frame[3])
 			{
+				// A checksum-valid frame means the UART stream/link is healthy,
+				// even when the reported distance is out-of-range.
+				ultrasonic_a02yyuw_mark_frame_seen();
+
 				uint16_t parsed_mm = (uint16_t)((s_parser_frame[1] << 8) | s_parser_frame[2]);
 				if (parsed_mm >= DISTANCE_MIN_MM && parsed_mm <= DISTANCE_MAX_MM)
 				{
@@ -152,6 +162,21 @@ void ultrasonic_a02yyuw_update_distance(uint16_t distance_mm)
 	s_last_distance_mm = distance_mm;
 	s_last_update_tick = xTaskGetTickCount();
 	s_has_measurement = true;
+	taskEXIT_CRITICAL(&s_ultrasonic_lock);
+}
+
+/**
+ * @brief Record that at least one checksum-valid UART frame was observed.
+ *
+ * Health is tied to frame freshness, not distance range validity. This keeps
+ * the sensor healthy when clear-path returns are out-of-range/no-echo while
+ * still requiring fresh in-range samples for obstacle distance checks.
+ */
+void ultrasonic_a02yyuw_mark_frame_seen(void)
+{
+	taskENTER_CRITICAL(&s_ultrasonic_lock);
+	s_last_frame_tick = xTaskGetTickCount();
+	s_has_frame = true;
 	taskEXIT_CRITICAL(&s_ultrasonic_lock);
 }
 
@@ -299,6 +324,8 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config)
 	s_has_measurement = false;
 	s_last_distance_mm = 0;
 	s_last_update_tick = 0;
+	s_has_frame = false;
+	s_last_frame_tick = 0;
 	taskEXIT_CRITICAL(&s_ultrasonic_lock);
 	s_range_drop_count = 0;
 
@@ -332,6 +359,8 @@ void ultrasonic_a02yyuw_deinit(void)
 	s_has_measurement = false;
 	s_last_distance_mm = 0;
 	s_last_update_tick = 0;
+	s_has_frame = false;
+	s_last_frame_tick = 0;
 	taskEXIT_CRITICAL(&s_ultrasonic_lock);
 	ultrasonic_a02yyuw_reset_parser_state();
 	s_range_drop_count = 0;
@@ -384,7 +413,7 @@ bool ultrasonic_a02yyuw_is_healthy(void)
 	TickType_t now = xTaskGetTickCount();
 
 	taskENTER_CRITICAL(&s_ultrasonic_lock);
-	bool healthy = s_has_measurement && (now - s_last_update_tick <= SENSOR_HEALTH_TIMEOUT);
+	bool healthy = s_has_frame && (now - s_last_frame_tick <= SENSOR_HEALTH_TIMEOUT);
 	taskEXIT_CRITICAL(&s_ultrasonic_lock);
 
 	return healthy;

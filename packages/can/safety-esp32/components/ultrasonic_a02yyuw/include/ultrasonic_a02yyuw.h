@@ -112,11 +112,13 @@ bool ultrasonic_a02yyuw_is_too_close(uint16_t threshold_mm, uint16_t *out_distan
 // ============================================================================
 
 /**
- * @brief Check if the sensor is healthy (has received valid data recently).
+ * @brief Check if the sensor is healthy (has received recent valid frames).
  *
- * Returns true when the sensor has reported data within the last 500 ms.
- * Use this to detect sensor failure or disconnection in safety systems;
- * a false return should be treated as a fault condition.
+ * Returns true when at least one checksum-valid UART frame has been received
+ * within the last 500 ms. Frame health is tracked independently from
+ * distance-range validity: out-of-range/no-echo frames can still be healthy.
+ * Use this to detect sensor failure or disconnection in safety systems; a
+ * false return should be treated as a fault condition.
  *
  * @return true if sensor data is current, false if stale or absent
  */
