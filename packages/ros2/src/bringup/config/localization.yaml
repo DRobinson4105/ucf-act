@@ -11,7 +11,7 @@ ekf_local_node:
     permit_corrected_publication: false
     publish_acceleration: false
     publish_tf: true
-    map_frame: mapf
+    map_frame: map
     odom_frame: odom
     base_link_frame: base_link
     world_frame: odom
@@ -43,6 +43,17 @@ navsat_transform_node:
     broadcast_cartesian_transform: false
     broadcast_cartesian_transform_as_parent_frame: false
     
+gps_fusion_node:
+  ros__parameters:
+    # Minimum cart speed (m/s) before yaw from /odometry/local is accepted.
+    # Prevents frozen/drifted yaw from being written while stationary.
+    speed_threshold: 0.05
+    # GPS position variance (m²) written into /odometry/global covariance.
+    # Tune up for noisy GPS, down for RTK.
+    gps_pos_variance: 1.0
+    # Yaw variance (rad²) written into /odometry/global covariance.
+    yaw_variance: 0.05
+
 ekf_global_node:
   ros__parameters:
     # use_sim_time: true
@@ -55,7 +66,7 @@ ekf_global_node:
     debug: false
     permit_corrected_publication: false
     publish_acceleration: false
-    publish_tf: false
+    publish_tf: true
     map_frame: map
     odom_frame: odom
     base_link_frame: base_link

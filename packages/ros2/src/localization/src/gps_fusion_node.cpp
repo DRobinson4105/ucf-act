@@ -8,7 +8,7 @@
 GpsFusionNode::GpsFusionNode()
 : rclcpp::Node("gps_fusion_node")
 {
-  declare_parameter("speed_threshold",  0.3);
+  declare_parameter("speed_threshold",  0.05);
   declare_parameter("gps_pos_variance", 1.0);
   declare_parameter("yaw_variance",     0.05);
 
