@@ -105,8 +105,7 @@ async function fetchPedestrianPaths(
   const overpassQuery = `
     [out:json][timeout:30];
     (
-      way["highway"~"^(footway|path|pedestrian|steps|cycleway|service|residential|living_street|tertiary|tertiary_link|unclassified|secondary|secondary_link|primary|primary_link)$"](${minLat},${minLon},${maxLat},${maxLon});
-      way["footway"](${minLat},${minLon},${maxLat},${maxLon});
+      way["highway"](${minLat},${minLon},${maxLat},${maxLon});
     );
     out body;
     >;

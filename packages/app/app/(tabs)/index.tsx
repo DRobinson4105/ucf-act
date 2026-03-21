@@ -29,7 +29,7 @@ export default function HomeScreen() {
 
   const isTracking = !!currentRide && ["assigned", "arriving", "in_progress"].includes(currentRide.status);
   const isArriving = currentRide?.status === "arriving";
-  const canCancel = currentRide?.status === "assigned" || currentRide?.status === "arriving";
+  const canCancel = currentRide?.status === "assigned" || currentRide?.status === "arriving" || currentRide?.status === "in_progress";
 
   const getTrackingText = () => {
     switch (currentRide?.status) {
