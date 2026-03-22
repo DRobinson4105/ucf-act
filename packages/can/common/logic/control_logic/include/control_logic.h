@@ -181,8 +181,8 @@ typedef struct
 	// Stepper outputs (valid when state is ACTIVE and no override triggered)
 	bool send_steering;        // true if steering position changed
 	bool send_braking;         // true if braking position changed
-	int32_t steering_position; // position to send
-	int16_t braking_position;  // position to send
+	int32_t steering_position; // current clamped steering target (also used for PT streaming)
+	int16_t braking_position;  // current clamped braking target (also used for PT streaming)
 	int32_t new_last_steering; // updated dedup tracker
 	int16_t new_last_braking;  // updated dedup tracker
 

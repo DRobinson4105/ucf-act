@@ -108,9 +108,14 @@ typedef struct stepper_motor_uim2852
 	uint8_t last_cw_sent; // Last control word sent
 
 	// PT (Position-Time) interpolation mode state
-	bool pt_mode_active; // true while PT interpolation is running
-	bool pt_fifo_empty;  // set by PVT FIFO empty notification (0x2A)
-	bool pt_fifo_low;    // set by PVT FIFO low warning notification (0x2B)
+	bool pt_mode_active;   // true after PT FIFO mode is armed with PV=start_row
+	bool pt_motion_started; // true after BG has been sent for the current PT FIFO run
+	bool pt_fifo_empty;    // set by PVT FIFO empty notification (0x2A)
+	bool pt_fifo_low;      // set by PVT FIFO low warning notification (0x2B)
+	uint16_t pt_frame_time_ms; // fixed PT frame time configured via MP[4]
+	uint16_t pt_write_index;   // next PT table row to write (0-511)
+	uint8_t pt_prefill_count;  // number of PT rows queued before BG start
+	uint8_t pt_low_water_mark; // queue-low threshold configured via MP[5]
 
 	// Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
 	// Forward-declared as void* to avoid circular typedef; actual type matches
@@ -221,16 +226,17 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
 // ============================================================================
 // Position-Time (PT) Interpolation Mode
 // ============================================================================
-// PT mode queues (position, time) waypoints in the motor's internal FIFO.
-// The motor smoothly interpolates between waypoints for jerk-free motion.
-// Each control loop tick feeds one (position, time_ms) waypoint via pt_feed().
+// PT mode queues absolute position waypoints in the motor's internal FIFO.
+// The motor uses MP[4] as the fixed segment time for every PT row.
+// Each PT frame interval feeds one PT row via pt_feed().
 
 /**
- * @brief Configure PT mode: enable FIFO notifications (IE[10], IE[11])
+ * @brief Configure PT FIFO mode and enable FIFO notifications.
  *
- * Enables PVT FIFO empty and FIFO low warning notifications so the host
- * can detect when the motor's waypoint buffer needs refilling.
- * Call once during enable sequence, before pt_start().
+ * Resets the PT/PVT queue, selects FIFO mode, programs the fixed PT frame
+ * time (MP[4]), sets a queue-low threshold (MP[5]), and enables the FIFO
+ * empty / low notifications. Call once during enable sequence, before
+ * pt_start().
  *
  * @param motor Motor instance
  * @return ESP_OK on success
@@ -238,10 +244,10 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Start PT interpolation (PV mode=1, start=true)
+ * @brief Arm PT FIFO mode at row 0.
  *
- * Begins consuming queued waypoints from the motor's internal FIFO.
- * The host should begin feeding waypoints via pt_feed() immediately.
+ * Sends PV=0 to select the starting PT row.  Actual motion begins later
+ * when pt_feed() has preloaded a small number of PT rows and issues BG.
  *
  * @param motor Motor instance
  * @return ESP_OK on success
@@ -249,10 +255,10 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Stop PT interpolation (PV mode=1, start=false, then ST)
+ * @brief Stop PT interpolation with a deceleration stop.
  *
- * Stops consuming waypoints and decelerates to a stop.
- * Clears pt_mode_active flag.
+ * Issues ST, clears PT FIFO tracking state, and marks the PT stream as
+ * inactive in software.
  *
  * @param motor Motor instance
  * @return ESP_OK on success
@@ -260,11 +266,12 @@ esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_pt_stop(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Feed a position+time waypoint into the PT FIFO (QF quick feed)
+ * @brief Feed a PT row into the PT FIFO table.
  *
- * Sends a single packed CAN frame containing the target position and
- * the time interval to reach it.  Call this at the control loop rate
- * (e.g. every 20ms with time_ms=20).
+ * Writes the next PT table row using the desired absolute position.  The
+ * time argument is retained for API compatibility and must match the fixed
+ * PT frame time configured via MP[4].  After a small startup prefill, the
+ * function automatically sends BG once to start the PT engine.
  *
  * @param motor    Motor instance
  * @param position Absolute target position in pulses (signed)

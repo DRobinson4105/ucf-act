@@ -79,6 +79,23 @@ static void pack_le16(uint8_t *dst, uint16_t value)
 	dst[1] = (uint8_t)((value >> 8) & 0xFF);
 }
 
+/**
+ * @brief Pack a signed 24-bit value into a byte buffer as little-endian.
+ *
+ * Stores the least-significant 24 bits of @p value in dst[0]..dst[2].
+ * Used by the QF instruction, whose velocity field is 24-bit signed.
+ *
+ * @param dst    [out] Destination buffer (must have room for at least 3 bytes)
+ * @param value  Signed value to store
+ */
+static void pack_le24_signed(uint8_t *dst, int32_t value)
+{
+	uint32_t u = (uint32_t)value;
+	dst[0] = (uint8_t)(u & 0xFF);
+	dst[1] = (uint8_t)((u >> 8) & 0xFF);
+	dst[2] = (uint8_t)((u >> 16) & 0xFF);
+}
+
 // ============================================================================
 // Frame Building Helpers (shared packing patterns)
 // ============================================================================
@@ -339,16 +356,19 @@ uint8_t stepper_uim2852_build_sn(uint8_t *data)
 // PT/PVT Interpolated Motion Frame Builders
 // ============================================================================
 
-uint8_t stepper_uim2852_build_pv(uint8_t *data, uint8_t mode, bool start)
+uint8_t stepper_uim2852_build_pv(uint8_t *data, uint16_t start_row)
 {
 	memset(data, 0, 8);
-	data[0] = (uint8_t)((mode & 0x03) | (start ? 0x80 : 0x00));
-	return 1;
+	pack_le16(data, start_row);
+	return 2;
 }
 
-uint8_t stepper_uim2852_build_pt(uint8_t *data, int32_t position, uint32_t time_ms)
+uint8_t stepper_uim2852_build_pt(uint8_t *data, uint16_t row, int32_t position)
 {
-	return build_val32_pair(data, position, (int32_t)time_ms);
+	memset(data, 0, 8);
+	pack_le16(&data[0], row);
+	pack_le32(&data[2], position);
+	return 8;
 }
 
 uint8_t stepper_uim2852_build_qp(uint8_t *data, int32_t position)
@@ -366,9 +386,13 @@ uint8_t stepper_uim2852_build_qt(uint8_t *data, uint32_t time_ms)
 	return build_val32(data, (int32_t)time_ms);
 }
 
-uint8_t stepper_uim2852_build_qf(uint8_t *data, int32_t position, uint32_t time_ms)
+uint8_t stepper_uim2852_build_qf(uint8_t *data, uint8_t time_ms, int32_t velocity, int32_t position)
 {
-	return build_val32_pair(data, position, (int32_t)time_ms);
+	memset(data, 0, 8);
+	data[0] = time_ms;
+	pack_le24_signed(&data[1], velocity);
+	pack_le32(&data[4], position);
+	return 8;
 }
 
 uint8_t stepper_uim2852_build_bl(uint8_t *data, uint16_t pulses)

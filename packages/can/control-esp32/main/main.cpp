@@ -119,6 +119,7 @@ constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
 constexpr TickType_t CAN_RX_TIMEOUT = pdMS_TO_TICKS(10);                             // wait per RX poll
 constexpr TickType_t CONTROL_LOOP_INTERVAL = pdMS_TO_TICKS(20);                      // state/actuation tick (50 Hz)
 constexpr TickType_t HEARTBEAT_SEND_INTERVAL = pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS); // protocol cadence
+constexpr uint8_t PT_STREAM_STARTUP_FRAMES = 2; // one active segment + one spare segment
 constexpr uint32_t INIT_DWELL_MS = 500;                        // minimum dwell in INIT before READY
 constexpr uint32_t ENABLE_SEQUENCE_MS = 200;                   // ENABLE dwell before enable_complete
 constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;            // throttle: max 1 level step per interval
@@ -1432,6 +1433,86 @@ void send_control_heartbeat(void)
 	}
 }
 
+static bool tick_deadline_reached(TickType_t now, TickType_t deadline)
+{
+	return (int32_t)(now - deadline) >= 0;
+}
+
+/**
+ * @brief Feed one PT row on the motor's 100 ms cadence, reusing the last target when needed.
+ *
+ * The control loop runs at 20 ms, but the planner only updates every 100 ms.
+ * This helper maintains a one-segment cushion in the motor's PT FIFO by:
+ * - preloading two PT rows when PT motion starts (or restarts after FIFO empty)
+ * - enqueueing one new PT row every PT frame interval
+ * - attempting the enqueue up to one control tick early so a single late tick
+ *   can retry before the current motor segment expires
+ *
+ * The position passed in is the latest clamped planner-derived target. If the
+ * planner skipped a cycle, the caller simply passes the same target again, and
+ * the helper keeps the FIFO alive by repeating that hold position.
+ *
+ * @param motor           Motor instance
+ * @param position        Absolute PT target position to queue
+ * @param now_tick        Current RTOS tick
+ * @param next_feed_tick  [in/out] Next scheduled PT enqueue deadline
+ * @param fed_frame       [out] True if at least one PT frame was sent
+ * @return ESP_OK on success, or the first pt_feed error encountered
+ */
+static esp_err_t feed_pt_stream_if_due(stepper_motor_uim2852_t *motor, int32_t position, TickType_t now_tick,
+                                       TickType_t *next_feed_tick, bool *fed_frame)
+{
+	if (!motor || !next_feed_tick || !fed_frame)
+		return ESP_ERR_INVALID_ARG;
+
+	*fed_frame = false;
+
+	TickType_t interval_ticks = pdMS_TO_TICKS(motor->pt_frame_time_ms);
+	if (interval_ticks == 0)
+		interval_ticks = 1;
+
+	TickType_t early_margin = CONTROL_LOOP_INTERVAL;
+	if (early_margin > interval_ticks)
+		early_margin = interval_ticks;
+
+	bool priming_stream = !motor->pt_motion_started;
+	uint8_t frames_to_send = 0;
+
+	if (priming_stream)
+	{
+		frames_to_send = 1;
+		if (motor->pt_prefill_count < PT_STREAM_STARTUP_FRAMES)
+			frames_to_send = (uint8_t)(PT_STREAM_STARTUP_FRAMES - motor->pt_prefill_count);
+	}
+	else
+	{
+		if (*next_feed_tick == 0)
+			*next_feed_tick = now_tick + interval_ticks;
+
+		TickType_t send_check_tick = now_tick + early_margin;
+		if (tick_deadline_reached(send_check_tick, *next_feed_tick))
+			frames_to_send = 1;
+	}
+
+	for (uint8_t i = 0; i < frames_to_send; ++i)
+	{
+		esp_err_t err = stepper_motor_uim2852_pt_feed(motor, position, motor->pt_frame_time_ms);
+		if (err != ESP_OK)
+			return err;
+		*fed_frame = true;
+	}
+
+	if (*fed_frame)
+	{
+		if (priming_stream)
+			*next_feed_tick = now_tick + interval_ticks;
+		else
+			*next_feed_tick += interval_ticks;
+	}
+
+	return ESP_OK;
+}
+
 /**
  * @brief Immediately disable all autonomous actuators to a safe state.
  *
@@ -1548,7 +1629,7 @@ void execute_start_enable()
  * @brief Complete the autonomous enable sequence.
  *
  * Releases stepper brakes, enables motor drivers (MO=1), configures
- * and starts PT interpolation mode, energizes the throttle source
+ * and arms PT FIFO mode, energizes the throttle source
  * relay, and switches the multiplexer to autonomous mode.  If any
  * stepper enable or PT setup fails, rolls back all changes and
  * returns without completing.
@@ -1597,7 +1678,7 @@ void execute_complete_enable()
 		return;
 	}
 
-	// Configure and start PT interpolation mode.
+	// Configure and arm PT FIFO mode.
 	// This must happen after MO=1 succeeds and before the control loop
 	// begins feeding position commands.
 	esp_err_t pt_err = ESP_OK;
@@ -1884,6 +1965,8 @@ void control_task(void *param)
 #endif
 	int32_t last_steering_sent = STEPPER_DEDUP_RESET;
 	int16_t last_braking_sent = STEPPER_DEDUP_RESET;
+	TickType_t next_steering_pt_feed_tick = 0;
+	TickType_t next_braking_pt_feed_tick = 0;
 
 	g_throttle_current = 0;
 
@@ -1903,6 +1986,7 @@ void control_task(void *param)
 	while (true)
 	{
 		uint32_t now_ms = get_time_ms();
+		TickType_t now_tick = xTaskGetTickCount();
 
 		retry_failed_components();
 
@@ -2140,28 +2224,63 @@ void control_task(void *param)
 			(void)attempt_fault_recovery();
 		}
 
-		// Send stepper commands when position changed.
-		// PT mode: feed (position, 20ms) waypoint into motor FIFO.
+		// Feed PT rows on the motor's 100 ms cadence using the latest clamped
+		// planner-derived target. If Planner skips a cycle, we repeat the last
+		// target so the FIFO does not run dry.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-		if (step.send_steering)
+		if (g_stepper_steering_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
-			esp_err_t err = stepper_motor_uim2852_pt_feed(&g_steering_stepper, step.steering_position, 20);
-			if (err != ESP_OK)
+			bool fed_frame = false;
+			esp_err_t err = feed_pt_stream_if_due(&g_steering_stepper, step.steering_position, now_tick,
+			                                      &next_steering_pt_feed_tick, &fed_frame);
+			if (err != ESP_OK && step.send_steering)
 			{
 				step.new_last_steering = last_steering_sent; // keep old value on failure
 			}
-			track_can_tx(err);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+			if (err != ESP_OK)
+			{
+				ESP_LOGI(TAG_TX, "Steering PT feed failed: %s", esp_err_to_name(err));
+			}
+			else if (fed_frame && step.send_steering)
+			{
+				ESP_LOGI(TAG_TX, "Steering -> %d", step.steering_position);
+			}
+#endif
+			if (fed_frame || err != ESP_OK)
+				track_can_tx(err);
+		}
+		else
+		{
+			next_steering_pt_feed_tick = 0;
 		}
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-		if (step.send_braking)
+		if (g_stepper_braking_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
-			esp_err_t err = stepper_motor_uim2852_pt_feed(&g_braking_stepper, step.braking_position, 20);
-			if (err != ESP_OK)
+			bool fed_frame = false;
+			esp_err_t err = feed_pt_stream_if_due(&g_braking_stepper, step.braking_position, now_tick,
+			                                      &next_braking_pt_feed_tick, &fed_frame);
+			if (err != ESP_OK && step.send_braking)
 			{
 				step.new_last_braking = last_braking_sent; // keep old value on failure
 			}
-			track_can_tx(err);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+			if (err != ESP_OK)
+			{
+				ESP_LOGI(TAG_TX, "Braking PT feed failed: %s", esp_err_to_name(err));
+			}
+			else if (fed_frame && step.send_braking)
+			{
+				ESP_LOGI(TAG_TX, "Braking -> %d", step.braking_position);
+			}
+#endif
+			if (fed_frame || err != ESP_OK)
+				track_can_tx(err);
+		}
+		else
+		{
+			next_braking_pt_feed_tick = 0;
 		}
 #endif
 

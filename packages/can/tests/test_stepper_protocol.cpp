@@ -803,33 +803,33 @@ static void test_ic_parameter_indices(void)
 static void test_build_pv_pt_start(void)
 {
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_pv(data, 1, true); // PT linear, start
-	assert(dl == 1);
-	assert((data[0] & 0x03) == 1); // mode = PT linear
-	assert((data[0] & 0x80) != 0); // start bit set
+	uint8_t dl = stepper_uim2852_build_pv(data, 0); // start from row 0
+	assert(dl == 2);
+	assert(data[0] == 0x00);
+	assert(data[1] == 0x00);
 }
 
 static void test_build_pv_pvt_stop(void)
 {
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_pv(data, 0, false); // PVT, stop
-	assert(dl == 1);
-	assert((data[0] & 0x03) == 0); // mode = PVT
-	assert((data[0] & 0x80) == 0); // start bit clear
+	uint8_t dl = stepper_uim2852_build_pv(data, 266); // arbitrary PT/PVT start row
+	assert(dl == 2);
+	assert(data[0] == 0x0A);
+	assert(data[1] == 0x01);
 }
 
 static void test_build_pt_positive(void)
 {
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_pt(data, 3200, 20);
+	uint8_t dl = stepper_uim2852_build_pt(data, 3, 3200);
 	assert(dl == 8);
+	// Row = 3 -> 0x0003 LE
+	assert(data[0] == 0x03);
+	assert(data[1] == 0x00);
 	// Position = 3200 = 0x0C80 LE: 0x80, 0x0C, 0x00, 0x00
-	assert(data[0] == 0x80);
-	assert(data[1] == 0x0C);
-	assert(data[2] == 0x00);
-	assert(data[3] == 0x00);
-	// Time = 20 = 0x14 LE: 0x14, 0x00, 0x00, 0x00
-	assert(data[4] == 0x14);
+	assert(data[2] == 0x80);
+	assert(data[3] == 0x0C);
+	assert(data[4] == 0x00);
 	assert(data[5] == 0x00);
 	assert(data[6] == 0x00);
 	assert(data[7] == 0x00);
@@ -838,30 +838,36 @@ static void test_build_pt_positive(void)
 static void test_build_pt_negative(void)
 {
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_pt(data, -1600, 100);
+	uint8_t dl = stepper_uim2852_build_pt(data, 266, -1600);
 	assert(dl == 8);
+	// Row = 266 = 0x010A LE
+	assert(data[0] == 0x0A);
+	assert(data[1] == 0x01);
 	// Position = -1600 = 0xFFFFF9C0
-	assert(data[0] == 0xC0);
-	assert(data[1] == 0xF9);
-	assert(data[2] == 0xFF);
-	assert(data[3] == 0xFF);
-	// Time = 100 = 0x64
-	assert(data[4] == 0x64);
+	assert(data[2] == 0xC0);
+	assert(data[3] == 0xF9);
+	assert(data[4] == 0xFF);
+	assert(data[5] == 0xFF);
+	assert(data[6] == 0x00);
+	assert(data[7] == 0x00);
 }
 
 static void test_build_qf(void)
 {
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_qf(data, 6400, 50);
+	uint8_t dl = stepper_uim2852_build_qf(data, 50, -1000, 10000);
 	assert(dl == 8);
-	// Position = 6400 = 0x1900
-	assert(data[0] == 0x00);
-	assert(data[1] == 0x19);
-	assert(data[2] == 0x00);
-	assert(data[3] == 0x00);
 	// Time = 50 = 0x32
-	assert(data[4] == 0x32);
-	assert(data[5] == 0x00);
+	assert(data[0] == 0x32);
+	// Velocity = -1000 = 0xFFFC18 in signed 24-bit LE
+	assert(data[1] == 0x18);
+	assert(data[2] == 0xFC);
+	assert(data[3] == 0xFF);
+	// Position = 10000 = 0x00002710 LE
+	assert(data[4] == 0x10);
+	assert(data[5] == 0x27);
+	assert(data[6] == 0x00);
+	assert(data[7] == 0x00);
 }
 
 static void test_build_qp(void)

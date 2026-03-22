@@ -15,6 +15,13 @@ static const char *TAG = "STEPPER";
 // Default timeout for CAN transmit
 static const TickType_t TX_TIMEOUT = pdMS_TO_TICKS(20);
 
+// PT FIFO defaults aligned with the planner's 100 ms command cadence.
+static const uint16_t PT_FRAME_TIME_MS_DEFAULT = 100;
+static const uint8_t PT_FIFO_LOW_WATER_DEFAULT = 1;
+static const uint8_t PT_FIFO_PREFILL_FRAMES = 2;
+static const uint16_t PT_START_ROW = 0;
+static const uint16_t PT_TABLE_ROWS = 512;
+
 // (Notification callback is now per-motor, stored in stepper_motor_uim2852_t)
 
 // ============================================================================
@@ -35,13 +42,14 @@ static const TickType_t TX_TIMEOUT = pdMS_TO_TICKS(20);
  * @param dl     Data length (0-8)
  * @return ESP_OK on success, or an error code from the TWAI driver
  */
-static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, const uint8_t *data, uint8_t dl)
+static esp_err_t send_instruction_internal(stepper_motor_uim2852_t *motor, uint8_t cw, const uint8_t *data, uint8_t dl,
+                                           bool request_ack)
 {
 	if (!motor || !motor->initialized)
 		return ESP_ERR_INVALID_STATE;
 
-	// Add ACK bit if configured
-	uint8_t cw_to_send = motor->config.request_ack ? (cw | STEPPER_UIM2852_CW_ACK_BIT) : cw;
+	// Add ACK bit when explicitly requested for this instruction.
+	uint8_t cw_to_send = request_ack ? (cw | STEPPER_UIM2852_CW_ACK_BIT) : cw;
 
 	// Calculate 29-bit CAN ID
 	uint32_t can_id = stepper_uim2852_make_can_id(motor->config.node_id, cw_to_send);
@@ -53,11 +61,20 @@ static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, co
 	{
 		motor->last_command_tick = xTaskGetTickCount();
 		motor->last_cw_sent = cw;
-		if (motor->config.request_ack)
+		if (request_ack)
 			motor->ack_pending = true;
 	}
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+	else
+		ESP_LOGW(TAG, "Node %u: TX failed for CW=0x%02X: %s", motor->config.node_id, cw, esp_err_to_name(err));
+#endif
 
 	return err;
+}
+
+static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, const uint8_t *data, uint8_t dl)
+{
+	return send_instruction_internal(motor, cw, data, dl, motor->config.request_ack);
 }
 
 // ============================================================================
@@ -98,6 +115,8 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
 
 	motor->microstep_resolution = 16; // Assume 16 until queried
 	motor->pulses_per_rev = 3200;     // 16 * 200
+	motor->pt_frame_time_ms = PT_FRAME_TIME_MS_DEFAULT;
+	motor->pt_low_water_mark = PT_FIFO_LOW_WATER_DEFAULT;
 
 	// Create binary semaphore for synchronous query_param
 	motor->query_sem = xSemaphoreCreateBinary();
@@ -314,31 +333,46 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	if (!motor || !motor->initialized)
 		return ESP_ERR_INVALID_STATE;
 
+	if (motor->pt_frame_time_ms < 5 || motor->pt_frame_time_ms > 30000)
+		return ESP_ERR_INVALID_ARG;
+
 	uint8_t data[8];
 	uint8_t dl;
 	esp_err_t err;
 
-	// CW 0x22: queue resetter (MP[0]=0)
+	// Reset the PT/PVT queue and select PT FIFO mode per the manual:
+	// MP[0]=0, MP[1]=0, MP[2]=0, MP[3]=0, MP[4]=frame_time, MP[5]=queue-low.
 	const uint8_t cw22_mp0_data[3] = {0x00, 0x00, 0x00};
-	err = send_instruction(motor, 0x22, cw22_mp0_data, 3);
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_mp0_data, 3);
 	if (err != ESP_OK)
 		return err;
 
-	// CW 0x22: set frame execution time (MP[4]=100)
-	const uint8_t cw22_time_data[3] = {0x04, 0x64, 0x00};
-	err = send_instruction(motor, 0x22, cw22_time_data, 3);
+	const uint8_t cw22_first_row_data[3] = {0x01, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_first_row_data, 3);
 	if (err != ESP_OK)
 		return err;
 
-	// CW 0x22: set PT mode to PVT FIFO mode (MP[3]=0)
+	const uint8_t cw22_last_row_data[3] = {0x02, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_last_row_data, 3);
+	if (err != ESP_OK)
+		return err;
+
 	const uint8_t cw22_data[3] = {0x03, 0x00, 0x00};
-	err = send_instruction(motor, 0x22, cw22_data, 3);
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_data, 3);
 	if (err != ESP_OK)
 		return err;
 
-	// CW 0x22: MP[5]=1
-	const uint8_t cw22_mp5_data[3] = {0x05, 0x01, 0x00};
-	err = send_instruction(motor, 0x22, cw22_mp5_data, 3);
+	data[0] = 0x04;
+	data[1] = (uint8_t)(motor->pt_frame_time_ms & 0xFF);
+	data[2] = (uint8_t)(motor->pt_frame_time_ms >> 8);
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	data[0] = 0x05;
+	data[1] = motor->pt_low_water_mark;
+	data[2] = 0x00;
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
 	if (err != ESP_OK)
 		return err;
 
@@ -354,6 +388,19 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	if (err != ESP_OK)
 		return err;
 
+	taskENTER_CRITICAL(&motor->lock);
+	motor->pt_mode_active = false;
+	motor->pt_motion_started = false;
+	motor->pt_fifo_empty = false;
+	motor->pt_fifo_low = false;
+	motor->pt_write_index = PT_START_ROW;
+	motor->pt_prefill_count = 0;
+	taskEXIT_CRITICAL(&motor->lock);
+
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+	ESP_LOGI(TAG, "Node %u: PT configured (FIFO mode, %u ms frames, low-water=%u)", motor->config.node_id,
+	         (unsigned)motor->pt_frame_time_ms, (unsigned)motor->pt_low_water_mark);
+#endif
 	return ESP_OK;
 }
 
@@ -363,17 +410,22 @@ esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor)
 		return ESP_ERR_INVALID_STATE;
 
 	uint8_t data[8];
-	// PV mode=1 (PT linear interpolation), start=true
-	uint8_t dl = stepper_uim2852_build_pv(data, 1, true);
+	uint8_t dl = stepper_uim2852_build_pv(data, PT_START_ROW);
 	esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_PV, data, dl);
 
 	if (err == ESP_OK)
 	{
 		taskENTER_CRITICAL(&motor->lock);
 		motor->pt_mode_active = true;
+		motor->pt_motion_started = false;
 		motor->pt_fifo_empty = false;
 		motor->pt_fifo_low = false;
+		motor->pt_write_index = PT_START_ROW;
+		motor->pt_prefill_count = 0;
 		taskEXIT_CRITICAL(&motor->lock);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+		ESP_LOGI(TAG, "Node %u: PT FIFO armed at row %u", motor->config.node_id, (unsigned)PT_START_ROW);
+#endif
 	}
 	return err;
 }
@@ -384,25 +436,24 @@ esp_err_t stepper_motor_uim2852_pt_stop(stepper_motor_uim2852_t *motor)
 		return ESP_ERR_INVALID_STATE;
 
 	uint8_t data[8];
-	uint8_t dl;
-	esp_err_t err;
-
-	// PV mode=1, start=false — stop consuming FIFO waypoints
-	dl = stepper_uim2852_build_pv(data, 1, false);
-	err = send_instruction(motor, STEPPER_UIM2852_CW_PV, data, dl);
-	// Continue even on error — best-effort stop
-
-	// Deceleration stop to halt any residual motion
-	dl = stepper_uim2852_build_st(data);
+	uint8_t dl = stepper_uim2852_build_st(data);
 	esp_err_t st_err = send_instruction(motor, STEPPER_UIM2852_CW_ST, data, dl);
 
 	taskENTER_CRITICAL(&motor->lock);
 	motor->pt_mode_active = false;
+	motor->pt_motion_started = false;
 	motor->motion_in_progress = false;
+	motor->pt_fifo_empty = false;
+	motor->pt_fifo_low = false;
+	motor->pt_write_index = PT_START_ROW;
+	motor->pt_prefill_count = 0;
 	taskEXIT_CRITICAL(&motor->lock);
 
-	// Return first error if any
-	return (err != ESP_OK) ? err : st_err;
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+	ESP_LOGI(TAG, "Node %u: PT interpolation stopped", motor->config.node_id);
+#endif
+
+	return st_err;
 }
 
 esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t position, uint32_t time_ms)
@@ -414,9 +465,20 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 	if (!motor->pt_mode_active)
 		return ESP_ERR_INVALID_STATE;
 
+	if (time_ms != motor->pt_frame_time_ms)
+		return ESP_ERR_INVALID_ARG;
+
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_qf(data, position, time_ms);
-	esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_QF, data, dl);
+	uint16_t row = 0;
+	bool start_now = false;
+
+	taskENTER_CRITICAL(&motor->lock);
+	row = motor->pt_write_index;
+	taskEXIT_CRITICAL(&motor->lock);
+
+	uint8_t dl = stepper_uim2852_build_pt(data, row, position);
+	// PT row writes are high-rate FIFO traffic; do not request ACK for each row.
+	esp_err_t err = send_instruction_internal(motor, STEPPER_UIM2852_CW_PT, data, dl, false);
 
 	if (err == ESP_OK)
 	{
@@ -424,7 +486,35 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 		motor->pt_fifo_empty = false;
 		motor->pt_fifo_low = false;
 		motor->target_position = position;
+		motor->pt_write_index = (uint16_t)((motor->pt_write_index + 1) % PT_TABLE_ROWS);
+		if (!motor->pt_motion_started && motor->pt_prefill_count < PT_FIFO_PREFILL_FRAMES)
+			motor->pt_prefill_count++;
+		start_now = (!motor->pt_motion_started && motor->pt_prefill_count >= PT_FIFO_PREFILL_FRAMES);
 		taskEXIT_CRITICAL(&motor->lock);
+
+		if (start_now)
+		{
+			uint8_t bg_data[8];
+			uint8_t bg_dl = stepper_uim2852_build_bg(bg_data);
+			esp_err_t bg_err = send_instruction_internal(motor, STEPPER_UIM2852_CW_BG, bg_data, bg_dl, false);
+			if (bg_err != ESP_OK)
+				return bg_err;
+
+			taskENTER_CRITICAL(&motor->lock);
+			motor->pt_motion_started = true;
+			motor->motion_in_progress = true;
+			motor->status.in_position = false;
+			motor->status.stopped = false;
+			taskEXIT_CRITICAL(&motor->lock);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+			ESP_LOGI(TAG, "Node %u: PT FIFO prefilled (%u rows), BG sent", motor->config.node_id,
+			         (unsigned)PT_FIFO_PREFILL_FRAMES);
+#endif
+		}
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
+		ESP_LOGI(TAG, "Node %u: PT row=%u pos=%ld t=%lu ms", motor->config.node_id, (unsigned)row, (long)position,
+		         (unsigned long)time_ms);
+#endif
 	}
 	return err;
 }
@@ -558,13 +648,22 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 				{
 					taskENTER_CRITICAL(&motor->lock);
 					motor->pt_fifo_empty = true;
+					motor->pt_motion_started = false;
+					motor->motion_in_progress = false;
+					motor->pt_prefill_count = 0;
 					taskEXIT_CRITICAL(&motor->lock);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+					ESP_LOGI(TAG, "Node %u: PVT FIFO empty", motor->config.node_id);
+#endif
 				}
 				else if (notif.type == STEPPER_UIM2852_STATUS_PVT_FIFO_LOW)
 				{
 					taskENTER_CRITICAL(&motor->lock);
 					motor->pt_fifo_low = true;
 					taskEXIT_CRITICAL(&motor->lock);
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
+					ESP_LOGI(TAG, "Node %u: PVT FIFO low", motor->config.node_id);
+#endif
 				}
 
 				// Call per-motor notification callback if set

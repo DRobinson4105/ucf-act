@@ -419,6 +419,11 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 			clamped_braking = (int16_t)control_clamp_command(inputs->braking_cmd, inputs->braking_min, inputs->braking_max);
 		}
 
+		// Expose the clamped targets even when they have not changed so the
+		// caller can keep PT FIFO mode fed on its own schedule.
+		r.steering_position = clamped_steering;
+		r.braking_position = clamped_braking;
+
 		// Stepper dedup (uses clamped values)
 		if (clamped_steering != inputs->last_steering_sent)
 		{

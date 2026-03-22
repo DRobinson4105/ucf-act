@@ -992,7 +992,7 @@ static void test_target_position_set_by_pt_feed(void)
 	init_default_motor(&motor);
 	motor.pt_mode_active = true;
 
-	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 3200, 20);
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 3200, 100);
 	assert(err == ESP_OK);
 	assert(stepper_motor_uim2852_get_target_position(&motor) == 3200);
 }
@@ -1042,7 +1042,7 @@ static void test_target_position_not_set_on_feed_failure(void)
 	assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
 
 	mock_twai_send_result = ESP_FAIL;
-	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 6400, 20);
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 6400, 100);
 	assert(err == ESP_FAIL);
 	// target_position should NOT have been updated
 	assert(stepper_motor_uim2852_get_target_position(&motor) == 0);
@@ -1250,23 +1250,38 @@ static void test_set_limits_tx_failure(void)
 // PT Mode API tests
 // ============================================================================
 
-static void test_pt_configure_enables_fifo_notifications(void)
+static void test_pt_configure_sets_fifo_mode_and_notifications(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 
 	esp_err_t err = stepper_motor_uim2852_pt_configure(&motor);
 	assert(err == ESP_OK);
-	// Should send IE[10]=1 (FIFO empty) and IE[11]=1 (FIFO low)
-	assert(mock_sent_count == 2);
-	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_IE);
-	assert(mock_sent_frames[0].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_EMPTY);
-	assert(mock_sent_frames[0].data[1] == 1);
-	assert(mock_sent_frames[0].data[2] == 0);
-	assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_IE);
-	assert(mock_sent_frames[1].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_LOW);
-	assert(mock_sent_frames[1].data[1] == 1);
-	assert(mock_sent_frames[1].data[2] == 0);
+	assert(mock_sent_count == 8);
+	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[0].data[0] == 0x00); // MP[0] reset
+	assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[1].data[0] == 0x01); // MP[1] first row
+	assert(get_sent_cw_base(2) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[2].data[0] == 0x02); // MP[2] last row
+	assert(get_sent_cw_base(3) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[3].data[0] == 0x03); // MP[3] FIFO mode
+	assert(get_sent_cw_base(4) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[4].data[0] == 0x04); // MP[4] frame time
+	assert(mock_sent_frames[4].data[1] == 100);
+	assert(mock_sent_frames[4].data[2] == 0);
+	assert(get_sent_cw_base(5) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[5].data[0] == 0x05); // MP[5] queue low
+	assert(mock_sent_frames[5].data[1] == 1);
+	assert(mock_sent_frames[5].data[2] == 0);
+	assert(get_sent_cw_base(6) == STEPPER_UIM2852_CW_IE);
+	assert(mock_sent_frames[6].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_EMPTY);
+	assert(mock_sent_frames[6].data[1] == 1);
+	assert(mock_sent_frames[6].data[2] == 0);
+	assert(get_sent_cw_base(7) == STEPPER_UIM2852_CW_IE);
+	assert(mock_sent_frames[7].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_LOW);
+	assert(mock_sent_frames[7].data[1] == 1);
+	assert(mock_sent_frames[7].data[2] == 0);
 }
 
 static void test_pt_start_sends_pv_and_sets_active(void)
@@ -1279,57 +1294,85 @@ static void test_pt_start_sends_pv_and_sets_active(void)
 	assert(err == ESP_OK);
 	assert(mock_sent_count == 1);
 	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PV);
-	// PV data: d0 = (mode & 0x03) | (start ? 0x80 : 0x00) = 1 | 0x80 = 0x81
-	assert(mock_sent_frames[0].data[0] == 0x81);
+	assert(mock_sent_frames[0].data[0] == 0x00);
+	assert(mock_sent_frames[0].data[1] == 0x00);
 	assert(motor.pt_mode_active == true);
+	assert(motor.pt_motion_started == false);
 	assert(motor.pt_fifo_empty == false);
 	assert(motor.pt_fifo_low == false);
+	assert(motor.pt_write_index == 0);
+	assert(motor.pt_prefill_count == 0);
 }
 
-static void test_pt_stop_sends_pv_stop_then_st(void)
+static void test_pt_stop_sends_st_only(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 	motor.pt_mode_active = true;
+	motor.pt_motion_started = true;
 	motor.motion_in_progress = true;
+	motor.pt_fifo_empty = true;
+	motor.pt_fifo_low = true;
+	motor.pt_write_index = 7;
+	motor.pt_prefill_count = 3;
 
 	esp_err_t err = stepper_motor_uim2852_pt_stop(&motor);
 	assert(err == ESP_OK);
-	assert(mock_sent_count == 2);
-	// First frame: PV stop
-	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PV);
-	// PV data: d0 = (1 & 0x03) | 0x00 = 0x01
-	assert(mock_sent_frames[0].data[0] == 0x01);
-	// Second frame: ST
-	assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_ST);
+	assert(mock_sent_count == 1);
+	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_ST);
 	assert(motor.pt_mode_active == false);
+	assert(motor.pt_motion_started == false);
 	assert(motor.motion_in_progress == false);
+	assert(motor.pt_fifo_empty == false);
+	assert(motor.pt_fifo_low == false);
+	assert(motor.pt_write_index == 0);
+	assert(motor.pt_prefill_count == 0);
 }
 
-static void test_pt_feed_sends_qf_frame(void)
+static void test_pt_feed_sends_pt_row_frame(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 	motor.pt_mode_active = true;
 
-	// Feed position=1600, time=20ms
-	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 1600, 20);
+	// Feed position=1600, time=100ms
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 1600, 100);
 	assert(err == ESP_OK);
 	assert(mock_sent_count == 1);
-	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_QF);
+	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_PT);
 	assert(mock_sent_frames[0].len == 8);
+	// row = 0
+	assert(mock_sent_frames[0].data[0] == 0x00);
+	assert(mock_sent_frames[0].data[1] == 0x00);
 	// position = 1600 = 0x00000640 LE
-	assert(mock_sent_frames[0].data[0] == 0x40);
-	assert(mock_sent_frames[0].data[1] == 0x06);
-	assert(mock_sent_frames[0].data[2] == 0x00);
-	assert(mock_sent_frames[0].data[3] == 0x00);
-	// time = 20 = 0x00000014 LE
-	assert(mock_sent_frames[0].data[4] == 0x14);
+	assert(mock_sent_frames[0].data[2] == 0x40);
+	assert(mock_sent_frames[0].data[3] == 0x06);
+	assert(mock_sent_frames[0].data[4] == 0x00);
 	assert(mock_sent_frames[0].data[5] == 0x00);
 	assert(mock_sent_frames[0].data[6] == 0x00);
 	assert(mock_sent_frames[0].data[7] == 0x00);
-	// target_position updated
 	assert(motor.target_position == 1600);
+	assert(motor.pt_write_index == 1);
+	assert(motor.pt_motion_started == false);
+}
+
+static void test_pt_feed_sends_bg_after_prefill(void)
+{
+	stepper_motor_uim2852_t motor;
+	init_default_motor(&motor);
+	motor.pt_mode_active = true;
+
+	assert(stepper_motor_uim2852_pt_feed(&motor, 100, 100) == ESP_OK);
+	assert(mock_sent_count == 1);
+	assert(motor.pt_motion_started == false);
+
+	assert(stepper_motor_uim2852_pt_feed(&motor, 200, 100) == ESP_OK);
+	assert(mock_sent_count == 3);
+	assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_PT);
+	assert(get_sent_cw_base(2) == STEPPER_UIM2852_CW_BG);
+	assert(motor.pt_motion_started == true);
+	assert(motor.motion_in_progress == true);
+	assert(motor.pt_write_index == 2);
 }
 
 static void test_pt_feed_rejects_when_not_active(void)
@@ -1340,7 +1383,7 @@ static void test_pt_feed_rejects_when_not_active(void)
 	motor.pt_fifo_empty = true;
 	motor.pt_fifo_low = true;
 
-	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 1600, 20);
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 1600, 100);
 	assert(err == ESP_ERR_INVALID_STATE);
 	assert(mock_sent_count == 0);
 	assert(motor.target_position == 42);
@@ -1356,10 +1399,21 @@ static void test_pt_feed_clears_fifo_flags(void)
 	motor.pt_fifo_empty = true;
 	motor.pt_fifo_low = true;
 
-	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 0, 20);
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 0, 100);
 	assert(err == ESP_OK);
 	assert(motor.pt_fifo_empty == false);
 	assert(motor.pt_fifo_low == false);
+}
+
+static void test_pt_feed_rejects_wrong_frame_time(void)
+{
+	stepper_motor_uim2852_t motor;
+	init_default_motor(&motor);
+	motor.pt_mode_active = true;
+
+	esp_err_t err = stepper_motor_uim2852_pt_feed(&motor, 1600, 20);
+	assert(err == ESP_ERR_INVALID_ARG);
+	assert(mock_sent_count == 0);
 }
 
 static void test_process_frame_fifo_empty_notification(void)
@@ -1367,6 +1421,9 @@ static void test_process_frame_fifo_empty_notification(void)
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 	motor.pt_fifo_empty = false;
+	motor.pt_motion_started = true;
+	motor.motion_in_progress = true;
+	motor.pt_prefill_count = 2;
 	callback_call_count = 0;
 	memset(&last_callback_notif, 0, sizeof(last_callback_notif));
 	stepper_motor_uim2852_set_notify_callback(&motor, test_notify_callback);
@@ -1379,6 +1436,9 @@ static void test_process_frame_fifo_empty_notification(void)
 	bool processed = stepper_motor_uim2852_process_frame(&motor, &msg);
 	assert(processed == true);
 	assert(motor.pt_fifo_empty == true);
+	assert(motor.pt_motion_started == false);
+	assert(motor.motion_in_progress == false);
+	assert(motor.pt_prefill_count == 0);
 	assert(callback_call_count == 1);
 	assert(last_callback_notif.type == STEPPER_UIM2852_STATUS_PVT_FIFO_EMPTY);
 	assert(last_callback_notif.is_alarm == false);
@@ -1416,20 +1476,24 @@ static void test_pt_state_tracking_through_lifecycle(void)
 	assert(motor.pt_fifo_empty == false);
 	assert(motor.pt_fifo_low == false);
 
-	// Configure — no state change
+	// Configure - no state change
 	stepper_motor_uim2852_pt_configure(&motor);
 	assert(motor.pt_mode_active == false);
+	assert(motor.pt_motion_started == false);
 
-	// Start — active
+	// Start - active but BG not sent yet
 	stepper_motor_uim2852_pt_start(&motor);
 	assert(motor.pt_mode_active == true);
+	assert(motor.pt_motion_started == false);
 
-	// Feed — stays active, target updates
-	stepper_motor_uim2852_pt_feed(&motor, 3200, 20);
+	// Feed enough rows to prefill and start motion
+	stepper_motor_uim2852_pt_feed(&motor, 3200, 100);
+	stepper_motor_uim2852_pt_feed(&motor, 3200, 100);
 	assert(motor.pt_mode_active == true);
+	assert(motor.pt_motion_started == true);
 	assert(motor.target_position == 3200);
 
-	// Stop — inactive
+	// Stop - inactive
 	mock_reset_all();
 	motor.initialized = true;
 	motor.query_sem = (SemaphoreHandle_t)1;
@@ -1590,12 +1654,14 @@ int main(void)
 
 	// PT mode API
 	printf("\n  --- PT mode API ---\n");
-	TEST(test_pt_configure_enables_fifo_notifications);
+	TEST(test_pt_configure_sets_fifo_mode_and_notifications);
 	TEST(test_pt_start_sends_pv_and_sets_active);
-	TEST(test_pt_stop_sends_pv_stop_then_st);
-	TEST(test_pt_feed_sends_qf_frame);
+	TEST(test_pt_stop_sends_st_only);
+	TEST(test_pt_feed_sends_pt_row_frame);
+	TEST(test_pt_feed_sends_bg_after_prefill);
 	TEST(test_pt_feed_rejects_when_not_active);
 	TEST(test_pt_feed_clears_fifo_flags);
+	TEST(test_pt_feed_rejects_wrong_frame_time);
 	TEST(test_process_frame_fifo_empty_notification);
 	TEST(test_process_frame_fifo_low_notification);
 	TEST(test_pt_state_tracking_through_lifecycle);

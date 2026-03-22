@@ -107,7 +107,7 @@ Tests the `stepper_motor_uim2852` driver component using mocked ESP-IDF/FreeRTOS
 | Deinit/reinit safety         | Clears initialized flag, NULL motor, already-deinitialized, reinit safe, enable after deinit fails |
 | Liveness watchdog            | OK within timeout, timeout exceeded, not enabled, no response yet, exact boundary, tick wrap, NULL motor, uninitialized |
 | Set limits                   | Sends LM+IC frames, uninitialized guard, NULL motor, TX failure             |
-| PT mode API                  | Configure enables FIFO notifications, start sends PV, stop sends PV+ST, feed sends QF, feed clears FIFO flags, FIFO empty/low notifications, full lifecycle state tracking |
+| PT mode API                  | Configure sets PT FIFO MP/IE parameters, start sends PV row select, stop sends ST, feed writes PT rows on the configured cadence and auto-sends BG after startup prefill, FIFO empty/low notifications, full lifecycle state tracking |
 
 ### `test_safety_logic.cpp`
 
