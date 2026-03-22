@@ -1834,7 +1834,7 @@ void can_rx_task(void *param)
 			}
 
 			g_cmd.throttle_cmd = throttle_level;
-			g_cmd.steering_cmd = (int32_t)cmd.steering_position;
+			g_cmd.steering_cmd = ((int32_t)cmd.steering_position - 360) * (3200 * 50) / 360;
 			g_cmd.braking_cmd = (int16_t)cmd.braking_position;
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
