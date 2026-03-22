@@ -72,9 +72,9 @@ typedef struct
 	{                                          \
 		.node_id = 5,                          \
 		.producer_id = 4,                      \
-		.default_accel = 50000,                \
-		.default_decel = 50000,                \
-		.stop_decel = 200000,                  \
+		.default_accel = 5000,                 \
+		.default_decel = 5000,                 \
+		.stop_decel = 8000,                    \
 		.request_ack = true,                   \
 	}
 

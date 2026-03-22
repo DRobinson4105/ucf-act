@@ -400,7 +400,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		// Clamp steering/braking commands to safe envelopes before dedup.
 		// If min == max == 0, envelope is not configured; force neutral (0)
 		// instead of passing through raw planner commands.
-		int16_t clamped_steering = inputs->steering_cmd;
+		int32_t clamped_steering = inputs->steering_cmd;
 		int16_t clamped_braking = inputs->braking_cmd;
 		if (inputs->steering_min == 0 && inputs->steering_max == 0)
 		{
@@ -416,7 +416,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		}
 		else
 		{
-			clamped_braking = control_clamp_command(inputs->braking_cmd, inputs->braking_min, inputs->braking_max);
+			clamped_braking = (int16_t)control_clamp_command(inputs->braking_cmd, inputs->braking_min, inputs->braking_max);
 		}
 
 		// Stepper dedup (uses clamped values)
@@ -491,7 +491,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 	return r;
 }
 
-int16_t control_clamp_command(int16_t value, int16_t min, int16_t max)
+int32_t control_clamp_command(int32_t value, int32_t min, int32_t max)
 {
 	if (value < min)
 		return min;

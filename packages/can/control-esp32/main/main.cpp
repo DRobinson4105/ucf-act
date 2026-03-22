@@ -149,10 +149,10 @@ constexpr uint32_t STEPPER_QUERY_INTERVAL_MS = 200;
 // programmed into the motor's hardware software-limits (LM) during configure
 // as a secondary safety net.
 
-constexpr int16_t STEERING_POSITION_MIN = -3200; // negative limit (pulses)
-constexpr int16_t STEERING_POSITION_MAX = 3200;  // positive limit (pulses)
-constexpr int16_t BRAKING_POSITION_MIN = -1600;  // negative limit (pulses)
-constexpr int16_t BRAKING_POSITION_MAX = 1600;   // positive limit (pulses)
+constexpr int32_t STEERING_POSITION_MIN = -3200 * 50; // negative limit (pulses)
+constexpr int32_t STEERING_POSITION_MAX = 3200 * 50;  // positive limit (pulses)
+constexpr int16_t BRAKING_POSITION_MIN = -28000; // lower limit (pulses)
+constexpr int16_t BRAKING_POSITION_MAX = 0;      // upper limit (pulses)
 
 // ============================================================================
 // Retry & Fault Constants
@@ -229,7 +229,7 @@ struct command_snapshot_t
 	node_state_t target_state;     // from Safety heartbeat
 	node_fault_t estop_fault_code; // from Safety heartbeat (NODE_FAULT_ESTOP_*)
 	int8_t throttle_cmd;
-	int16_t steering_cmd;
+	int32_t steering_cmd;
 	int16_t braking_cmd;
 	node_fault_t motor_fault_code; // set by CAN RX on stepper error
 	TickType_t last_planner_cmd_tick;
@@ -692,24 +692,8 @@ void log_startup_device_status(bool twai_ready, bool mux_ready, bool throttle_re
 	if (err != ESP_OK)
 		return err;
 
-	// ---- Hot-start safe-init sequence ----
-	// The motor may already be powered (e.g. 24V relay was left on, or
-	// power cycled while the ESP32 rebooted).  If auto-enable was
-	// previously set (IC[0]=1), the motor driver could be energized
-	// right now with no limits and no emergency-stop decel configured.
-	//
-	// Immediately command:
-	//   1. MO=0  (driver off)  — de-energize coils, stop any motion
-	//   2. MT[5]=1 (brake on)  — mechanically lock the shaft
-	// These are fire-and-forget: if the motor is not powered, they are
-	// harmless (CAN TX succeeds but motor ignores; configure() will
-	// still query MT[0] to verify communication).
+	// Hot-start safe-init: disable driver immediately in case motor is already powered.
 	(void)stepper_motor_uim2852_disable(motor); // MO=0
-	{
-		uint8_t bdata[8];
-		uint8_t bdl = stepper_uim2852_build_brake(bdata, true); // MT[5]=1
-		(void)stepper_motor_uim2852_send_instruction(motor, STEPPER_UIM2852_CW_MT, bdata, bdl);
-	}
 
 	err = stepper_motor_uim2852_configure(motor);
 	if (err != ESP_OK)
@@ -903,10 +887,9 @@ void mark_component_lost(volatile bool *ready, const char *name, const char *det
 /**
  * @brief Execute the safe shutdown sequence for a stepper motor.
  *
- * Issues emergency stop, engages the mechanical brake, then disables
- * the motor driver (MO=0).  Each step is best-effort via
- * handle_runtime_error — failures are logged but do not abort the
- * sequence so subsequent steps still execute.
+ * Issues emergency stop then disables the motor driver (MO=0).
+ * Each step is best-effort via handle_runtime_error — failures are
+ * logged but do not abort the sequence so subsequent steps still execute.
  *
  * @param motor  Motor instance to shut down
  * @param ready  Pointer to the motor's health flag
@@ -915,30 +898,7 @@ void mark_component_lost(volatile bool *ready, const char *name, const char *det
 [[maybe_unused]] void stepper_shutdown(stepper_motor_uim2852_t *motor, volatile bool *ready, const char *label)
 {
 	handle_runtime_error(stepper_motor_uim2852_emergency_stop(motor), ready, label, "emergency stop command failed");
-	// Engage brake before disabling driver (spec: ST -> brake -> MO=0)
-	{
-		uint8_t bdata[8];
-		uint8_t bdl = stepper_uim2852_build_brake(bdata, true);
-		handle_runtime_error(stepper_motor_uim2852_send_instruction(motor, STEPPER_UIM2852_CW_MT, bdata, bdl), ready,
-		                     label, "brake command failed");
-	}
 	handle_runtime_error(stepper_motor_uim2852_disable(motor), ready, label, "disable command failed");
-}
-
-/**
- * @brief Release a stepper motor's mechanical brake (MT[5]=0).
- *
- * Must be called before enabling the motor driver (MO=1) when the
- * brake safety interlock (IC[8]=1) is configured.  Fire-and-forget:
- * errors are silently ignored.
- *
- * @param motor  Motor instance whose brake to release
- */
-[[maybe_unused]] void stepper_release_brake(stepper_motor_uim2852_t *motor)
-{
-	uint8_t bdata[8];
-	uint8_t bdl = stepper_uim2852_build_brake(bdata, false);
-	(void)stepper_motor_uim2852_send_instruction(motor, STEPPER_UIM2852_CW_MT, bdata, bdl);
 }
 
 /**
@@ -1626,17 +1586,6 @@ void execute_complete_enable()
 	esp_err_t steer_err = ESP_OK;
 	esp_err_t brake_err = ESP_OK;
 
-	// Release brakes before enabling motor drivers.
-	// With brake safety interlock (IC[8]=1), MO=1 will be rejected if
-	// the brake is still engaged — so release must come first.
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-	stepper_release_brake(&g_steering_stepper);
-#endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-	stepper_release_brake(&g_braking_stepper);
-#endif
-	vTaskDelay(pdMS_TO_TICKS(5)); // allow brake release to settle
-
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
 	steer_err = stepper_motor_uim2852_enable(&g_steering_stepper);
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
@@ -1883,7 +1832,7 @@ void can_rx_task(void *param)
 			}
 
 			g_cmd.throttle_cmd = throttle_level;
-			g_cmd.steering_cmd = (int16_t)cmd.steering_position;
+			g_cmd.steering_cmd = (int32_t)cmd.steering_position;
 			g_cmd.braking_cmd = (int16_t)cmd.braking_position;
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
@@ -1952,7 +1901,7 @@ void control_task(void *param)
 	node_state_t prev_target_state = 0xFF;
 	node_fault_t prev_estop_fault = 0xFF;
 #endif
-	int16_t last_steering_sent = STEPPER_DEDUP_RESET;
+	int32_t last_steering_sent = STEPPER_DEDUP_RESET;
 	int16_t last_braking_sent = STEPPER_DEDUP_RESET;
 
 	g_throttle_current = 0;
@@ -2018,12 +1967,12 @@ void control_task(void *param)
 		{
 			TickType_t now_tick = xTaskGetTickCount();
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-			if (can_comm_ready && g_stepper_steering_ready &&
+		/*	if (can_comm_ready && g_stepper_steering_ready &&
 			    stepper_motor_uim2852_check_liveness(&g_steering_stepper, now_tick, STEPPER_LIVENESS_TIMEOUT))
 			{
 				cmd_local.motor_fault_code = NODE_FAULT_MOTOR_COMM;
 				mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "liveness timeout");
-			}
+			} */
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 			if (can_comm_ready && g_stepper_braking_ready &&
