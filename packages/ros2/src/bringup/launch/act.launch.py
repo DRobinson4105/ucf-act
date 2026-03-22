@@ -68,7 +68,7 @@ def generate_launch_description():
             parameters=[{
                 "cmd_in_topic": "/cmd_vel_nav",
                 "odom_topic": "/odometry/local",
-                "out_topic": "/act/drive_cmd",
+                "can_topic": "/act/drive_cmd",
                 "speed_limit_topic": "/speed_limit",
                 "publish_hz": 25.0,
                 "v_max": 3.58,

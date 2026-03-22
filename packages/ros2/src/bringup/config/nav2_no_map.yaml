@@ -15,7 +15,7 @@ planner_server:
       max_planning_time: 1.0
       motion_model_for_search: "DUBIN"
       cost_travel_multiplier: 3.0
-      angle_quantization_bi ns: 64
+      angle_quantization_bins: 64
       analytic_expansion_ratio: 3.5
       analytic_expansion_max_length: 10.0
       analytic_expansion_max_cost: 200

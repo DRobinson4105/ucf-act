@@ -1,5 +1,3 @@
-# control-esp32
-
 ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (Jetson AGX Orin) over CAN and controls/monitors throttle, steering, and braking actuators. Follows the system target state broadcast by Safety ESP32.
 
 ## State Machine

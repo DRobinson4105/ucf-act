@@ -77,6 +77,34 @@ static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, co
 	return send_instruction_internal(motor, cw, data, dl, motor->config.request_ack);
 }
 
+static esp_err_t send_ms_query(stepper_motor_uim2852_t *motor, uint8_t index)
+{
+	if (!motor || !motor->initialized)
+		return ESP_ERR_INVALID_STATE;
+
+	uint8_t data[8];
+	uint8_t dl = stepper_uim2852_build_ms(data, index);
+
+	taskENTER_CRITICAL(&motor->lock);
+	motor->query_pending_cw = STEPPER_UIM2852_CW_MS;
+	motor->query_pending_idx = index;
+	taskEXIT_CRITICAL(&motor->lock);
+
+	esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
+	if (err != ESP_OK)
+	{
+		taskENTER_CRITICAL(&motor->lock);
+		if (motor->query_pending_cw == STEPPER_UIM2852_CW_MS && motor->query_pending_idx == index)
+		{
+			motor->query_pending_cw = 0;
+			motor->query_pending_idx = 0;
+		}
+		taskEXIT_CRITICAL(&motor->lock);
+	}
+
+	return err;
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -311,6 +339,15 @@ esp_err_t stepper_motor_uim2852_set_decel(stepper_motor_uim2852_t *motor, uint32
 
 esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor)
 {
+	if (!motor || !motor->initialized)
+		return ESP_ERR_INVALID_STATE;
+
+	taskENTER_CRITICAL(&motor->lock);
+	bool motion_in_progress = motor->motion_in_progress;
+	taskEXIT_CRITICAL(&motor->lock);
+	if (motion_in_progress)
+		return ESP_ERR_INVALID_STATE;
+
 	uint8_t data[8];
 	uint8_t dl = stepper_uim2852_build_og(data);
 
@@ -319,6 +356,8 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor)
 	{
 		taskENTER_CRITICAL(&motor->lock);
 		motor->absolute_position = 0;
+		motor->target_position = 0;
+		motor->status.relative_position = 0;
 		taskEXIT_CRITICAL(&motor->lock);
 	}
 	return err;
@@ -525,16 +564,12 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 
 esp_err_t stepper_motor_uim2852_query_status(stepper_motor_uim2852_t *motor)
 {
-	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_ms(data, STEPPER_UIM2852_MS_FLAGS_RELPOS);
-	return send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
+	return send_ms_query(motor, STEPPER_UIM2852_MS_FLAGS_RELPOS);
 }
 
 esp_err_t stepper_motor_uim2852_query_position(stepper_motor_uim2852_t *motor)
 {
-	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_ms(data, STEPPER_UIM2852_MS_SPEED_ABSPOS);
-	return send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
+	return send_ms_query(motor, STEPPER_UIM2852_MS_SPEED_ABSPOS);
 }
 
 esp_err_t stepper_motor_uim2852_clear_status(stepper_motor_uim2852_t *motor)
