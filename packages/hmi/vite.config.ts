@@ -2,20 +2,21 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-// packages/hmi/node_modules/convex — the only place convex is installed on Vercel
-const convexRoot = path.resolve(__dirname, 'node_modules/convex')
+// Anchor for resolving convex/* as if imported from inside packages/hmi/node_modules
+const hmiNodeModules = path.resolve(__dirname, 'node_modules')
 
 export default defineConfig({
   plugins: [
     react(),
     // Redirect all "convex" and "convex/*" imports to HMI's own node_modules.
-    // This is needed because ../app/convex/_generated/api imports convex/server
-    // but convex is only installed under packages/hmi, not packages/app.
+    // Uses a fake importer inside packages/hmi so that Node module resolution
+    // finds the correct file via convex's package.json exports map.
     {
       name: 'resolve-convex-from-hmi',
-      resolveId(source) {
+      async resolveId(source, _importer, options) {
         if (source === 'convex' || source.startsWith('convex/')) {
-          return path.join(convexRoot, source.slice('convex'.length))
+          const fakeImporter = path.join(hmiNodeModules, '.fake-importer.js')
+          return this.resolve(source, fakeImporter, { ...options, skipSelf: true })
         }
       },
     },
