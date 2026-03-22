@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Everything except packages/hmi and the convex generated API it needs
+packages/app/ios/
+packages/app/android/
+packages/app/.expo/
+packages/app/dist/
+packages/app/assets/
+packages/app/app/
+packages/app/components/
+packages/app/constants/
+packages/app/contexts/
+packages/app/hooks/
+packages/app/mocks/
+packages/app/types/
+packages/app/utils/
+packages/app/bun.lock
+packages/app/package-lock.json
+
+packages/ros2/
+packages/can/
+packages/cart-bridge/
+packages/model-training/
+
+# Build outputs
+dist/
+build/
+.expo/
+
+# Misc
+.DS_Store
+*.p8
+*.p12
+*.pem
+.env
+.env.*
