@@ -1,10 +1,21 @@
-import CampusMap from "@/components/CampusMap";
-import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
+import { CAMPUS_LOCATIONS, CampusLocation } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
-import { api } from "@/convex/_generated/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { useRide } from "@/contexts/RideContext";
 import { useDebouncedNavigation } from "@/hooks/useDebouncedNavigation";
-import { Car, MapPin, Search, Star, X } from "lucide-react-native";
+import {
+  BookOpen,
+  Building2,
+  Car,
+  MapPin,
+  ParkingSquare,
+  Search,
+  Star,
+  TreePine,
+  Users,
+  UtensilsCrossed,
+  X,
+} from "lucide-react-native";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -17,10 +28,29 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useQuery } from "convex/react";
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function locationIcon(type: CampusLocation["type"], color: string) {
+  const size = 18;
+  switch (type) {
+    case "academic":     return <BookOpen size={size} color={color} />;
+    case "residential":  return <Users size={size} color={color} />;
+    case "dining":       return <UtensilsCrossed size={size} color={color} />;
+    case "recreation":   return <TreePine size={size} color={color} />;
+    case "parking":      return <ParkingSquare size={size} color={color} />;
+    default:             return <Building2 size={size} color={color} />;
+  }
+}
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const {
     currentRide, cancelRide, boardRide, rideHistory,
     pendingReview, submitReview, dismissReview,
@@ -29,7 +59,6 @@ export default function HomeScreen() {
   const [reviewRating, setReviewRating] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
-  const allCarts = useQuery(api.carts.getAll, {});
 
   useEffect(() => {
     const isActive = !!currentRide && !["completed", "cancelled"].includes(currentRide.status);
@@ -49,7 +78,7 @@ export default function HomeScreen() {
 
   const recentLocations = rideHistory
     .map((ride) => CAMPUS_LOCATIONS.find((l) => l.id === ride.dropoffLocationId))
-    .filter((loc): loc is (typeof CAMPUS_LOCATIONS)[0] => loc !== undefined)
+    .filter((loc): loc is CampusLocation => loc !== undefined)
     .filter((loc, i, arr) => arr.findIndex((l) => l.id === loc.id) === i)
     .slice(0, 3);
 
@@ -61,11 +90,11 @@ export default function HomeScreen() {
 
   const getStatusDotColor = () => {
     switch (currentRide?.status) {
-      case "requested": return Colors.textSecondary;
-      case "assigned":  return Colors.accent;
-      case "arriving":  return Colors.success;
+      case "requested":   return Colors.textSecondary;
+      case "assigned":    return Colors.accent;
+      case "arriving":    return Colors.success;
       case "in_progress": return Colors.primary;
-      default: return Colors.accent;
+      default:            return Colors.accent;
     }
   };
 
@@ -81,145 +110,163 @@ export default function HomeScreen() {
 
   const pickupName  = CAMPUS_LOCATIONS.find(l => l.id === currentRide?.pickupLocationId)?.shortName  ?? "Pickup";
   const dropoffName = CAMPUS_LOCATIONS.find(l => l.id === currentRide?.dropoffLocationId)?.shortName ?? "Destination";
+  const firstName   = user?.name?.split(" ")[0];
 
   return (
-    <View className="flex-1 bg-background">
-      {/* Live map — always visible as background */}
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <CampusMap
-          selectedPickup={null}
-          selectedDropoff={null}
-          onSelectPickup={() => {}}
-          onSelectDropoff={() => {}}
-          selectingType="pickup"
-          allCarts={allCarts ?? []}
-          cartId={currentRide?.cartId}
-          hideUserLocation={currentRide?.status === "in_progress"}
-          showRoute={false}
-          interactive={false}
-          fullScreen
-        />
-      </View>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* ── Header ──────────────────────────────────── */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.greetingLabel}>{greeting()}{firstName ? `, ${firstName}` : ""}</Text>
+            <Text style={styles.greetingSub}>UCF Autonomous Campus Transit</Text>
+          </View>
+          <View style={styles.logoMark}>
+            <Car size={22} color={Colors.accent} />
+          </View>
+        </View>
 
-      {/* Search bar overlay */}
-      <View className="absolute left-0 right-0 px-5" style={{ top: insets.top + 16 }}>
+        {/* ── Where to CTA ────────────────────────────── */}
         <TouchableOpacity
-          className="flex-row items-center bg-card rounded-2xl px-4 py-4 gap-3 shadow-md border border-border"
+          style={[styles.searchBar, isTracking && styles.searchBarDisabled]}
           onPress={() => router.push("/plan-ride")}
-          activeOpacity={isTracking ? 1 : 0.7}
+          activeOpacity={isTracking ? 1 : 0.75}
           disabled={router.isNavigating || isTracking}
         >
-          <Search size={22} color={isTracking ? Colors.textSecondary : Colors.accent} />
-          <Text
-            className="flex-1 text-lg font-semibold"
-            style={{ color: isTracking ? Colors.textSecondary : Colors.text }}
-          >
+          <Search size={20} color={isTracking ? Colors.textSecondary : Colors.accent} />
+          <Text style={[styles.searchText, isTracking && styles.searchTextDisabled]}>
             {isTracking ? "Ride in progress" : "Where to?"}
           </Text>
         </TouchableOpacity>
-      </View>
 
-      {/* Active ride tracking card */}
-      {isTracking && currentRide && (
-        <View
-          className="absolute left-0 right-0 bottom-0 bg-surface rounded-t-3xl px-5 pt-3 shadow-2xl border-t border-border"
-          style={{ paddingBottom: insets.bottom + 20 }}
-        >
-          <View style={styles.handle} />
-
-          {/* Status indicator */}
-          <View className="flex-row items-center gap-2.5 mb-1">
-            <Animated.View
-              style={[styles.statusDot, { backgroundColor: getStatusDotColor(), opacity: pulseAnim }]}
-            />
-            <Text className="text-lg font-bold text-text">{getTrackingText().title}</Text>
-          </View>
-          <Text className="text-sm text-textSecondary mb-4" style={{ paddingLeft: 20.5 }}>
-            {getTrackingText().sub}
-          </Text>
-
-          {/* Route chip */}
-          <View className="flex-row items-center bg-card rounded-xl px-4 py-3 mb-4 gap-2 border border-border">
-            <View style={styles.originDot} />
-            <Text className="text-sm text-textSecondary" numberOfLines={1} style={{ flex: 1 }}>
-              {pickupName}
-            </Text>
-            <Text className="text-textSecondary" style={{ marginHorizontal: 2 }}>→</Text>
-            <View style={styles.destDot} />
-            <Text className="text-sm font-semibold text-text" numberOfLines={1} style={{ flex: 1 }}>
-              {dropoffName}
-            </Text>
-          </View>
-
-          {/* Cart info row */}
-          <View className="flex-row items-center gap-3 mb-4">
-            <View className="w-12 h-12 bg-card rounded-xl items-center justify-center border border-border">
-              <Car size={22} color={Colors.accent} />
+        {/* ── Active ride card ─────────────────────────── */}
+        {isTracking && currentRide && (
+          <View style={styles.rideCard}>
+            {/* Status */}
+            <View style={styles.rideStatusRow}>
+              <Animated.View
+                style={[styles.statusDot, { backgroundColor: getStatusDotColor(), opacity: pulseAnim }]}
+              />
+              <Text style={styles.rideStatusTitle}>{getTrackingText().title}</Text>
             </View>
-            <View className="flex-1">
-              <Text className="text-base font-semibold text-text">ACT-001</Text>
-              <Text className="text-sm text-textSecondary">Autonomous Golf Cart · Free</Text>
+            <Text style={styles.rideStatusSub}>{getTrackingText().sub}</Text>
+
+            {/* Route chip */}
+            <View style={styles.routeChip}>
+              <View style={styles.originDot} />
+              <Text style={styles.routeFrom} numberOfLines={1}>{pickupName}</Text>
+              <Text style={styles.routeArrow}>→</Text>
+              <View style={styles.destDot} />
+              <Text style={styles.routeTo} numberOfLines={1}>{dropoffName}</Text>
             </View>
+
+            {/* Cart row */}
+            <View style={styles.cartRow}>
+              <View style={styles.cartIcon}>
+                <Car size={20} color={Colors.accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cartName}>ACT-001</Text>
+                <Text style={styles.cartSub}>Autonomous Golf Cart · Free</Text>
+              </View>
+            </View>
+
+            {isArriving && (
+              <TouchableOpacity style={styles.boardBtn} onPress={boardRide} activeOpacity={0.8}>
+                <Text style={styles.boardBtnText}>I'm Here</Text>
+              </TouchableOpacity>
+            )}
+
+            {canCancel && (
+              <TouchableOpacity style={styles.cancelBtn} onPress={cancelRide} activeOpacity={0.8}>
+                <X size={15} color={Colors.error} />
+                <Text style={styles.cancelBtnText}>Cancel Ride</Text>
+              </TouchableOpacity>
+            )}
           </View>
+        )}
 
-          {/* Primary action */}
-          {isArriving && (
-            <TouchableOpacity
-              className="rounded-2xl py-4 items-center mb-3"
-              style={{ backgroundColor: Colors.accent }}
-              onPress={boardRide}
-              activeOpacity={0.8}
+        {/* ── Campus stops ─────────────────────────────── */}
+        {!isTracking && (
+          <>
+            <Text style={styles.sectionLabel}>Campus Stops</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipsRow}
             >
-              <Text className="font-bold text-base" style={{ color: Colors.black }}>I'm Here</Text>
-            </TouchableOpacity>
-          )}
+              {CAMPUS_LOCATIONS.map((loc) => (
+                <TouchableOpacity
+                  key={loc.id}
+                  style={styles.chip}
+                  onPress={() =>
+                    router.push({ pathname: "/plan-ride", params: { destinationId: loc.id } })
+                  }
+                  disabled={router.isNavigating}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.chipIcon}>
+                    {locationIcon(loc.type, Colors.accent)}
+                  </View>
+                  <Text style={styles.chipText} numberOfLines={1}>{loc.shortName}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
 
-          {/* Cancel */}
-          {canCancel && (
-            <TouchableOpacity
-              className="flex-row items-center justify-center gap-2 rounded-xl py-3.5 border"
-              style={{
-                borderColor: "rgba(239,68,68,0.35)",
-                backgroundColor: "rgba(239,68,68,0.06)",
-                marginTop: isArriving ? 0 : 0,
-              }}
-              onPress={cancelRide}
-              activeOpacity={0.8}
-            >
-              <X size={16} color={Colors.error} />
-              <Text className="font-semibold text-sm" style={{ color: Colors.error }}>
-                Cancel Ride
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
+            {/* ── Recent ───────────────────────────────────── */}
+            {recentLocations.length > 0 && (
+              <>
+                <Text style={styles.sectionLabel}>Recent</Text>
+                {recentLocations.map((loc) => (
+                  <TouchableOpacity
+                    key={loc.id}
+                    style={styles.recentRow}
+                    onPress={() =>
+                      router.push({ pathname: "/plan-ride", params: { destinationId: loc.id } })
+                    }
+                    disabled={router.isNavigating}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.recentIconWrap}>
+                      <MapPin size={17} color={Colors.accent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.recentName}>{loc.name}</Text>
+                      <Text style={styles.recentSub}>{loc.shortName}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </ScrollView>
 
-      {/* Post-ride review modal */}
+      {/* ── Post-ride review modal ───────────────────── */}
       <Modal
         visible={!!pendingReview}
         transparent
         animationType="slide"
         onRequestClose={dismissReview}
       >
-        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.55)" }}>
-          <View
-            className="bg-surface rounded-t-3xl px-6 pt-4"
-            style={{ paddingBottom: insets.bottom + 16 }}
-          >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
             <View style={styles.handle} />
 
-            <Text className="text-2xl font-bold text-text mb-1">How was your ride?</Text>
+            <Text style={styles.reviewTitle}>How was your ride?</Text>
             {pendingReview && (
-              <Text className="text-sm text-textSecondary mb-6">
+              <Text style={styles.reviewRoute}>
                 {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.pickupLocationId)?.name ?? "Pickup"}
                 {" → "}
                 {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.dropoffLocationId)?.name ?? "Dropoff"}
               </Text>
             )}
 
-            {/* Stars */}
-            <View className="flex-row justify-center mb-2" style={{ gap: 8 }}>
+            <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((n) => (
                 <TouchableOpacity
                   key={n}
@@ -237,11 +284,9 @@ export default function HomeScreen() {
             </View>
 
             {reviewRating === 0 ? (
-              <Text className="text-xs text-textSecondary text-center mb-4">
-                Tap a star to rate your ride
-              </Text>
+              <Text style={styles.starHint}>Tap a star to rate your ride</Text>
             ) : (
-              <View className="mb-4" />
+              <View style={{ height: 16 }} />
             )}
 
             <TextInput
@@ -251,25 +296,11 @@ export default function HomeScreen() {
               onChangeText={setReviewComment}
               multiline
               numberOfLines={3}
-              style={{
-                backgroundColor: Colors.card,
-                borderRadius: 12,
-                padding: 14,
-                color: Colors.text,
-                borderWidth: 1,
-                borderColor: Colors.border,
-                marginBottom: 16,
-                minHeight: 76,
-                textAlignVertical: "top",
-                fontSize: 15,
-              }}
+              style={styles.commentInput}
             />
 
             <TouchableOpacity
-              style={[
-                styles.submitBtn,
-                reviewRating === 0 && styles.submitBtnDisabled,
-              ]}
+              style={[styles.submitBtn, reviewRating === 0 && styles.submitBtnDisabled]}
               onPress={() => {
                 if (reviewRating === 0) return;
                 submitReview(reviewRating, reviewComment.trim() || undefined);
@@ -278,16 +309,13 @@ export default function HomeScreen() {
               }}
               activeOpacity={reviewRating === 0 ? 1 : 0.8}
             >
-              <Text style={[
-                styles.submitBtnText,
-                reviewRating === 0 && styles.submitBtnTextDisabled,
-              ]}>
+              <Text style={[styles.submitBtnText, reviewRating === 0 && styles.submitBtnTextDisabled]}>
                 Submit Review
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              className="items-center py-3"
+              style={styles.skipBtn}
               onPress={() => {
                 dismissReview();
                 setReviewRating(0);
@@ -295,75 +323,336 @@ export default function HomeScreen() {
               }}
               activeOpacity={0.7}
             >
-              <Text className="text-sm text-textSecondary">Skip for now</Text>
+              <Text style={styles.skipText}>Skip for now</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
-
-      {/* Recent locations — only when not tracking */}
-      {!isTracking && recentLocations.length > 0 && (
-        <View
-          className="absolute left-0 right-0 bottom-0 bg-surface rounded-t-3xl px-5 pt-3 shadow-xl border-t border-border"
-          style={{ paddingBottom: insets.bottom + 8 }}
-        >
-          <View style={styles.handle} />
-          <Text className="text-base font-bold text-text mb-3 px-1">Recent Locations</Text>
-          <ScrollView showsVerticalScrollIndicator={false}>
-            {recentLocations.map((location) => (
-              <TouchableOpacity
-                key={location.id}
-                className="flex-row items-center bg-card rounded-2xl p-4 mb-3 gap-4 border border-border"
-                onPress={() =>
-                  router.push({ pathname: "/plan-ride", params: { destinationId: location.id } })
-                }
-                disabled={router.isNavigating}
-                activeOpacity={0.7}
-              >
-                <View className="w-10 h-10 rounded-xl bg-surface items-center justify-center border border-white/5">
-                  <MapPin size={18} color={Colors.accent} />
-                </View>
-                <View className="flex-1">
-                  <Text className="text-base font-semibold text-text">{location.name}</Text>
-                  <Text className="text-sm text-textSecondary">{location.shortName}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  handle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: Colors.border,
-    alignSelf: "center",
-    marginBottom: 16,
+  root: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  scroll: {
+    paddingHorizontal: 20,
+    paddingBottom: 32,
+  },
+
+  // Header
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  greetingLabel: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  greetingSub: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  logoMark: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Search bar
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: Colors.card,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 24,
+  },
+  searchBarDisabled: {
+    opacity: 0.6,
+  },
+  searchText: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: Colors.text,
+    flex: 1,
+  },
+  searchTextDisabled: {
+    color: Colors.textSecondary,
+  },
+
+  // Active ride card
+  rideCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 20,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 24,
+    gap: 0,
+  },
+  rideStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
   },
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
   },
+  rideStatusTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: Colors.text,
+  },
+  rideStatusSub: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 14,
+    paddingLeft: 16,
+  },
+  routeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 14,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
   originDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 4,
     backgroundColor: Colors.textSecondary,
   },
   destDot: {
-    width: 8,
-    height: 8,
+    width: 7,
+    height: 7,
     borderRadius: 2,
     backgroundColor: Colors.accent,
   },
+  routeFrom: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  routeArrow: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  routeTo: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: Colors.text,
+  },
+  cartRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 16,
+  },
+  cartIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cartName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  cartSub: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  boardBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  boardBtnText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: Colors.black,
+  },
+  cancelBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 12,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.35)",
+    backgroundColor: "rgba(239,68,68,0.06)",
+  },
+  cancelBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.error,
+  },
+
+  // Section label
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: Colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 12,
+  },
+
+  // Campus stop chips (horizontal scroll)
+  chipsRow: {
+    gap: 10,
+    paddingBottom: 4,
+    marginBottom: 28,
+  },
+  chip: {
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: Colors.card,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    minWidth: 80,
+  },
+  chipIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.surface,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: Colors.text,
+    textAlign: "center",
+  },
+
+  // Recent rows
+  recentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  recentIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  recentName: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  recentSub: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+
+  // Review modal
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  modalSheet: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+  },
+  handle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.border,
+    alignSelf: "center",
+    marginBottom: 20,
+  },
+  reviewTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  reviewRoute: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 20,
+  },
+  starsRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
+    marginBottom: 8,
+  },
+  starHint: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  commentInput: {
+    backgroundColor: Colors.card,
+    borderRadius: 12,
+    padding: 14,
+    color: Colors.text,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+    minHeight: 76,
+    textAlignVertical: "top",
+    fontSize: 15,
+  },
   submitBtn: {
-    borderRadius: 16,
+    borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
     marginBottom: 4,
@@ -379,6 +668,14 @@ const styles = StyleSheet.create({
     color: Colors.black,
   },
   submitBtnTextDisabled: {
+    color: Colors.textSecondary,
+  },
+  skipBtn: {
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  skipText: {
+    fontSize: 14,
     color: Colors.textSecondary,
   },
 });
