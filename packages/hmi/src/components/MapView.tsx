@@ -2,9 +2,10 @@ import React, { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { GPSPosition } from '../types'
+import { UCF_CENTER } from '../constants/campus-locations'
 
 interface MapViewProps {
-  position: GPSPosition
+  position: GPSPosition | null
   path: [number, number][]
 }
 
@@ -12,56 +13,39 @@ export const MapView: React.FC<MapViewProps> = ({ position, path }) => {
   const mapRef = useRef<L.Map | null>(null)
   const markerRef = useRef<L.Marker | null>(null)
   const pathRef = useRef<L.Polyline | null>(null)
-
   const mapContainerRef = useRef<HTMLDivElement>(null)
+  const lastPanRef = useRef<{ lat: number; lng: number } | null>(null)
 
+  // Initialize map once — centered at UCF until real cart GPS arrives
   useEffect(() => {
     if (!mapRef.current && mapContainerRef.current) {
-      // Initialize map
       mapRef.current = L.map(mapContainerRef.current, {
-        center: [position.lat, position.lng],
+        center: [UCF_CENTER.latitude, UCF_CENTER.longitude],
         zoom: 17,
-        zoomControl: false, // Tesla UI usually hides these or customizes them
+        zoomControl: false,
         attributionControl: false,
-        scrollWheelZoom: true, // Allow interaction
+        scrollWheelZoom: true,
         doubleClickZoom: true,
         dragging: true,
         touchZoom: true
       })
 
-      // Add dark tile layer
       L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '',
         maxZoom: 19
       }).addTo(mapRef.current)
 
-      // Add current position marker
-      const customIcon = L.divIcon({
-        className: 'custom-marker',
-        html: '<div style="background: #3b82f6; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
-      })
-
-      markerRef.current = L.marker([position.lat, position.lng], { icon: customIcon })
-        .addTo(mapRef.current)
-
-      // Add path polyline
       pathRef.current = L.polyline(path, {
-        color: '#3b82f6', // Tesla Blue
+        color: '#3b82f6',
         weight: 5,
         opacity: 0.8,
         lineCap: 'round',
         lineJoin: 'round'
       }).addTo(mapRef.current)
 
-      // Force a resize to ensuring tiles load correctly - important for layout changes
-      setTimeout(() => {
-          mapRef.current?.invalidateSize()
-      }, 100)
+      setTimeout(() => { mapRef.current?.invalidateSize() }, 100)
     }
 
-    // Cleanup only on unmount
     return () => {
       if (mapRef.current) {
         mapRef.current.remove()
@@ -70,28 +54,40 @@ export const MapView: React.FC<MapViewProps> = ({ position, path }) => {
         pathRef.current = null
       }
     }
-  }, []) // Empty dependency array to run only once
+  }, [])
 
   // Handle path updates
   useEffect(() => {
-    if (pathRef.current && path.length > 0) {
-      pathRef.current.setLatLngs(path)
-      // Optional: Fit map to route when loaded
-      // mapRef.current?.fitBounds(pathRef.current.getBounds(), { padding: [20, 20] })
-    }
+    if (!pathRef.current) return
+    pathRef.current.setLatLngs(path.length > 0 ? path : [])
   }, [path])
 
-  // Separate effect for updating the view
+  // Follow cart GPS — marker is only created/moved when real position is available
   useEffect(() => {
-     if (!mapRef.current || !markerRef.current) return
+    if (!mapRef.current || !position) return
 
-     // Update marker
-     markerRef.current.setLatLng([position.lat, position.lng])
+    // Skip if coordinates haven't actually changed (guards against stale effect fires)
+    const last = lastPanRef.current
+    if (last && last.lat === position.lat && last.lng === position.lng) return
+    lastPanRef.current = { lat: position.lat, lng: position.lng }
 
-     // Update map center smoothly
-     mapRef.current.panTo([position.lat, position.lng], { animate: true, duration: 1 })
+    const customIcon = L.divIcon({
+      className: 'custom-marker',
+      html: '<div style="background: #3b82f6; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
+      iconSize: [16, 16],
+      iconAnchor: [8, 8]
+    })
 
-  }, [position]) // Only run when position changes
+    if (!markerRef.current) {
+      // First real GPS fix — create marker and fly to cart position
+      markerRef.current = L.marker([position.lat, position.lng], { icon: customIcon })
+        .addTo(mapRef.current)
+      mapRef.current.setView([position.lat, position.lng], 17, { animate: false })
+    } else {
+      markerRef.current.setLatLng([position.lat, position.lng])
+      mapRef.current.panTo([position.lat, position.lng], { animate: true, duration: 1 })
+    }
+  }, [position])
 
   return (
     <div className="w-full h-full bg-gray-900">

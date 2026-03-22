@@ -167,6 +167,22 @@ export const addReview = mutation({
   },
 });
 
+// Called by HMI — finds the active ride currently assigned to a specific cart
+export const getActiveRideForCart = query({
+  args: { cartId: v.id("carts") },
+  handler: async (ctx, args) => {
+    for (const status of ["assigned", "arriving", "in_progress"] as const) {
+      const ride = await ctx.db
+        .query("rides")
+        .withIndex("by_status", (q: any) => q.eq("status", status))
+        .filter((q: any) => q.eq(q.field("cartId"), args.cartId))
+        .first();
+      if (ride) return ride;
+    }
+    return null;
+  },
+});
+
 // Called only by HTTP actions (cart bridge polling for assignments)
 export const getNextPendingRide = internalQuery({
   args: {},
