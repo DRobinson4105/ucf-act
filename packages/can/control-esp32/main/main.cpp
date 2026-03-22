@@ -664,47 +664,6 @@ void log_startup_device_status(bool twai_ready, bool mux_ready, bool throttle_re
 }
 #endif // !CONFIG_THROTTLE_TEST_MODE
 
-/**
- * @brief Initialize and configure a stepper motor with hot-start protection.
- *
- * Performs the full init sequence: driver init, immediate safe-state
- * commands (MO=0, brake ON) for hot-start protection, query-based
- * configuration (microstep, accel/decel, emergency stop rate), and
- * optional hardware software-limit programming.
- *
- * @param motor        Motor instance to initialize
- * @param node_id      CAN node ID of this motor (UIM2852_NODE_STEERING or _BRAKING)
- * @param lower_limit  Lower position software limit in pulses (0 to skip)
- * @param upper_limit  Upper position software limit in pulses (0 to skip)
- * @return ESP_OK on success, or the first error encountered
- */
-[[maybe_unused]] esp_err_t init_stepper_checked(stepper_motor_uim2852_t *motor, uint8_t node_id,
-                                                int32_t lower_limit = 0, int32_t upper_limit = 0)
-{
-	stepper_motor_uim2852_config_t cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
-	cfg.node_id = node_id;
-
-	esp_err_t err = stepper_motor_uim2852_init(motor, &cfg);
-	if (err != ESP_OK)
-		return err;
-
-	// Hot-start safe-init: disable driver immediately in case motor is already powered.
-	(void)stepper_motor_uim2852_disable(motor); // MO=0
-
-	err = stepper_motor_uim2852_configure(motor);
-	if (err != ESP_OK)
-		return err;
-
-	// Program hardware software-limits as a secondary safety net
-	if (lower_limit != 0 || upper_limit != 0)
-	{
-		err = stepper_motor_uim2852_set_limits(motor, lower_limit, upper_limit);
-		if (err != ESP_OK)
-			return err;
-	}
-
-	return stepper_motor_uim2852_disable(motor);
-}
 
 /**
  * @brief Check whether all non-bypassed base components report ready.
@@ -1165,8 +1124,18 @@ void retry_failed_components(void)
 	if (!g_stepper_steering_ready)
 	{
 		[[maybe_unused]] static uint16_t s_retry_count = 0;
-		esp_err_t err = init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING, STEERING_POSITION_MIN,
-		                                     STEERING_POSITION_MAX);
+		stepper_motor_uim2852_config_t s_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
+		s_cfg.node_id = UIM2852_NODE_STEERING;
+		esp_err_t err = stepper_motor_uim2852_init(&g_steering_stepper, &s_cfg);
+		if (err == ESP_OK)
+		{
+			(void)stepper_motor_uim2852_disable(&g_steering_stepper); // MO=0 hot-start
+			err = stepper_motor_uim2852_configure(&g_steering_stepper);
+		}
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_set_limits(&g_steering_stepper, STEERING_POSITION_MIN, STEERING_POSITION_MAX);
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_disable(&g_steering_stepper);
 		bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_STEPPER_STEERING
 		if (!recovered)
@@ -1191,8 +1160,18 @@ void retry_failed_components(void)
 	if (!g_stepper_braking_ready)
 	{
 		[[maybe_unused]] static uint16_t s_retry_count = 0;
-		esp_err_t err =
-			init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING, BRAKING_POSITION_MIN, BRAKING_POSITION_MAX);
+		stepper_motor_uim2852_config_t b_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
+		b_cfg.node_id = UIM2852_NODE_BRAKING;
+		esp_err_t err = stepper_motor_uim2852_init(&g_braking_stepper, &b_cfg);
+		if (err == ESP_OK)
+		{
+			(void)stepper_motor_uim2852_disable(&g_braking_stepper); // MO=0 hot-start
+			err = stepper_motor_uim2852_configure(&g_braking_stepper);
+		}
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_set_limits(&g_braking_stepper, BRAKING_POSITION_MIN, BRAKING_POSITION_MAX);
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_disable(&g_braking_stepper);
 		bool recovered = (err == ESP_OK);
 #ifdef CONFIG_LOG_RETRY_STEPPER_BRAKING
 		if (!recovered)
@@ -3044,14 +3023,44 @@ void main_task(void *param)
 	// handler tries braking first, so braking must init before steering
 	// to avoid response misrouting.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-	g_stepper_braking_ready = (init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING, BRAKING_POSITION_MIN,
-	                                                BRAKING_POSITION_MAX) == ESP_OK);
+	{
+		stepper_motor_uim2852_config_t b_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
+		b_cfg.node_id = UIM2852_NODE_BRAKING;
+		esp_err_t err = stepper_motor_uim2852_init(&g_braking_stepper, &b_cfg);
+		if (err == ESP_OK)
+		{
+			(void)stepper_motor_uim2852_disable(&g_braking_stepper); // MO=0 hot-start
+			err = stepper_motor_uim2852_configure(&g_braking_stepper);
+		}
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_set_limits(&g_braking_stepper, BRAKING_POSITION_MIN, BRAKING_POSITION_MAX);
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_disable(&g_braking_stepper);
+		if (err == ESP_OK)
+			(void)stepper_motor_uim2852_query_position(&g_braking_stepper);
+		g_stepper_braking_ready = (err == ESP_OK);
+	}
 #else
 	g_stepper_braking_ready = true;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-	g_stepper_steering_ready = (init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING, STEERING_POSITION_MIN,
-	                                                 STEERING_POSITION_MAX) == ESP_OK);
+	{
+		stepper_motor_uim2852_config_t s_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
+		s_cfg.node_id = UIM2852_NODE_STEERING;
+		esp_err_t err = stepper_motor_uim2852_init(&g_steering_stepper, &s_cfg);
+		if (err == ESP_OK)
+		{
+			(void)stepper_motor_uim2852_disable(&g_steering_stepper); // MO=0 hot-start
+			err = stepper_motor_uim2852_configure(&g_steering_stepper);
+		}
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_set_limits(&g_steering_stepper, STEERING_POSITION_MIN, STEERING_POSITION_MAX);
+		if (err == ESP_OK)
+			err = stepper_motor_uim2852_disable(&g_steering_stepper);
+		if (err == ESP_OK)
+			(void)stepper_motor_uim2852_query_position(&g_steering_stepper);
+		g_stepper_steering_ready = (err == ESP_OK);
+	}
 #else
 	g_stepper_steering_ready = true;
 #endif
