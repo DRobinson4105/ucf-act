@@ -156,6 +156,8 @@ class CartSimulator:
             print(f"[SIM] Distance to pickup: {dist:.1f}m")
             if dist <= COMPLETION_DIST_M:
                 self._arrive_at_pickup()
+            else:
+                self._check_cancellation()
 
         elif self.phase == PHASE_TO_DEST:
             dest = self.active_ride["destination"]
@@ -163,6 +165,8 @@ class CartSimulator:
             print(f"[SIM] Distance to destination: {dist:.1f}m")
             if dist <= COMPLETION_DIST_M:
                 self._finish_ride()
+            else:
+                self._check_cancellation()
 
     def _poll(self, now: float) -> None:
         try:
@@ -201,12 +205,40 @@ class CartSimulator:
         except Exception as e:
             print(f"[SIM] arrived_at_pickup failed: {e}")
 
+    def _check_cancellation(self) -> None:
+        """Check if the active ride has been cancelled; abort if so."""
+        ride_id = self.active_ride["_id"]
+        try:
+            status = get_ride_status(ride_id)
+            if status in ("cancelled", "completed", None):
+                print(f"[SIM] Ride {ride_id} was {status} — aborting and returning to idle.")
+                self._abort_ride()
+        except Exception as e:
+            print(f"[SIM] Cancellation check failed: {e}")
+
+    def _abort_ride(self) -> None:
+        """Cancel the current ride mid-route: clear route and return to idle."""
+        try:
+            push_route([])
+        except Exception:
+            pass
+        self.active_ride = None
+        self.phase = PHASE_IDLE
+        self.drive_start = None
+        self.lat = IDLE_LAT
+        self.lon = IDLE_LON
+        print("[SIM] Ride aborted. Back to idle.")
+
     def _check_boarding(self, now: float) -> None:
         """Poll ride status until user boards (status -> in_progress)."""
         ride_id = self.active_ride["_id"]
         try:
             status = get_ride_status(ride_id)
             print(f"[SIM] Waiting for board... ride status={status}")
+            if status == "cancelled":
+                print(f"[SIM] Ride cancelled while waiting at pickup.")
+                self._abort_ride()
+                return
             if status == "in_progress":
                 print(f"[SIM] User boarded! Phase 2: driving to destination...")
                 self.phase = PHASE_TO_DEST
