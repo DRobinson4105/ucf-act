@@ -16,6 +16,18 @@ const char *TAG = "CAN_TWAI";
 // ============================================================================
 #ifdef CONFIG_LOG_CAN_FRAMES
 
+// Returns a short type label for an RX extended frame based on the command word.
+// CW_ER (0x0F) = error report, CW_NOTIFY (0x5A) = real-time notification,
+// ACK bit (0x80) set = motor ACK for a commanded CW, else status/query response.
+static inline const char *can_rx_ext_type(uint8_t cw)
+{
+	uint8_t cw_base = cw & 0x7F;
+	if (cw_base == 0x0F) return "ERR  ";
+	if (cw_base == 0x5A) return "NOTIF";
+	if (cw & 0x80)       return "ACK  ";
+	return "RSP  ";
+}
+
 // Returns true if a frame should be suppressed from the frame log.
 static inline bool can_log_suppressed(uint32_t id, bool extd)
 {
@@ -168,8 +180,8 @@ esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout)
 		{
 			uint8_t prod = 0, cw = 0;
 			if (can_parse_ext_id(msg->identifier, &prod, &cw))
-				ESP_LOGI(TAG, "RX ext  id=0x%08lX node=%u cw=0x%02X dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
-				         (unsigned long)msg->identifier, prod, cw, msg->data_length_code,
+				ESP_LOGI(TAG, "RX ext  id=0x%08lX node=%u cw=0x%02X %s dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+				         (unsigned long)msg->identifier, prod, cw, can_rx_ext_type(cw), msg->data_length_code,
 				         msg->data[0], msg->data[1], msg->data[2], msg->data[3],
 				         msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
 			else
