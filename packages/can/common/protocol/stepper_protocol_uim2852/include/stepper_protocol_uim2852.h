@@ -31,7 +31,7 @@ extern "C"
 
 // Common node IDs used by this project.
 #define UIM2852_MASTER_ID     4 // Producer ID for host controller
-#define UIM2852_NODE_STEERING 5 // Steering motor node ID
+#define UIM2852_NODE_STEERING 7 // Steering motor node ID
 #define UIM2852_NODE_BRAKING  6 // Braking motor node ID
 #define UIM2852_GLOBAL_ID     0 // Broadcast to all motors
 

@@ -149,18 +149,6 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor)
 	if (err != ESP_OK)
 		return err;
 
-	// Query micro-stepping resolution from MT[0] (motor driver parameters)
-	int32_t microstep = 0;
-	err = stepper_motor_uim2852_query_param(motor, STEPPER_UIM2852_CW_MT, STEPPER_UIM2852_MT_MICROSTEP, &microstep);
-
-	if (err != ESP_OK || microstep <= 0)
-	{
-		return (err == ESP_OK) ? ESP_ERR_INVALID_RESPONSE : err;
-	}
-
-	motor->microstep_resolution = (uint16_t)microstep;
-	motor->pulses_per_rev = microstep * 200;
-
 	// Set default motion parameters (accel/decel used as safety limits for PT mode)
 	err = stepper_motor_uim2852_set_accel(motor, motor->config.default_accel);
 	if (err != ESP_OK)
