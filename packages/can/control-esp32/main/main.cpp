@@ -3036,6 +3036,8 @@ void main_task(void *param)
 			err = stepper_motor_uim2852_set_limits(&g_braking_stepper, BRAKING_POSITION_MIN, BRAKING_POSITION_MAX);
 		if (err == ESP_OK)
 			err = stepper_motor_uim2852_disable(&g_braking_stepper);
+		if (err == ESP_OK)
+			(void)stepper_motor_uim2852_query_position(&g_braking_stepper);
 		g_stepper_braking_ready = (err == ESP_OK);
 	}
 #else
@@ -3055,6 +3057,8 @@ void main_task(void *param)
 			err = stepper_motor_uim2852_set_limits(&g_steering_stepper, STEERING_POSITION_MIN, STEERING_POSITION_MAX);
 		if (err == ESP_OK)
 			err = stepper_motor_uim2852_disable(&g_steering_stepper);
+		if (err == ESP_OK)
+			(void)stepper_motor_uim2852_query_position(&g_steering_stepper);
 		g_stepper_steering_ready = (err == ESP_OK);
 	}
 #else
