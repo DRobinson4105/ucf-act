@@ -1,0 +1,36 @@
+# ─── Dependencies (reinstalled on build server) ───────────────────────────────
+node_modules/
+
+# ─── Generated native build folders ──────────────────────────────────────────
+ios/
+android/
+
+# ─── Expo CLI cache & build output ────────────────────────────────────────────
+.expo/
+dist/
+web-build/
+
+# ─── Build artifacts ──────────────────────────────────────────────────────────
+.kotlin/
+*.orig.*
+*.tsbuildinfo
+.metro-health-check*
+
+# ─── Debug logs ───────────────────────────────────────────────────────────────
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# ─── Secrets (never upload) ───────────────────────────────────────────────────
+*.p8
+*.p12
+*.jks
+*.key
+*.mobileprovision
+*.pem
+.env
+.env.*
+.env*.local
+
+# ─── macOS ────────────────────────────────────────────────────────────────────
+.DS_Store
