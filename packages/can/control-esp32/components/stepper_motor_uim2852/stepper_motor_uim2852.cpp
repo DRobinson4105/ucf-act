@@ -126,15 +126,20 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor)
 	uint8_t dl;
 	esp_err_t err;
 
-	// ---- Hot-start protection ----
+	// Clear any stale error/status flags from previous session.
+	dl = stepper_uim2852_build_ms_clear(data);
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
+	if (err != ESP_OK)
+		return err;
+
+	vTaskDelay(pdMS_TO_TICKS(100));
+
+	taskENTER_CRITICAL(&motor->lock);
+	motor->status.error_detected = false;
+	taskEXIT_CRITICAL(&motor->lock);
+
 	// Disable auto-enable (IC[0]=0) so the motor driver does NOT energize
-	// coils automatically when 24V power is applied.  This is the single
-	// most important safety setting: without it the motor can start
-	// accepting motion commands before the host has configured limits or
-	// the emergency-stop deceleration rate.
-	//
-	// The value persists in motor flash, but we re-send every init to
-	// guarantee correctness even if flash was externally modified.
+	// coils automatically when 24V power is applied.
 	dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_AUTO_ENABLE, 0);
 	err = send_instruction(motor, STEPPER_UIM2852_CW_IC, data, dl);
 	if (err != ESP_OK)
@@ -514,9 +519,24 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 	if (!stepper_uim2852_parse_can_id(msg->identifier, &producer_id, &cw))
 		return false;
 
-	// Check if this frame is from our motor
-	if (producer_id != motor->config.node_id)
-		return false;
+	// Both motors respond with producer_id=1.  Route frames by checking
+	// whether this motor is actively waiting for a response.  For
+	// unsolicited frames (status polls, notifications, errors), accept
+	// on any instance — the caller's !matched guard prevents duplicates.
+	uint8_t cw_base_peek = stepper_uim2852_cw_base(cw);
+	bool is_unsolicited = (cw_base_peek == STEPPER_UIM2852_CW_MS ||
+	                       cw_base_peek == STEPPER_UIM2852_CW_NOTIFY ||
+	                       cw_base_peek == STEPPER_UIM2852_CW_ER);
+
+	if (!is_unsolicited)
+	{
+		// This is a query/command response — only accept if we're waiting
+		taskENTER_CRITICAL(&motor->lock);
+		bool expecting = motor->ack_pending || (motor->query_pending_cw != 0);
+		taskEXIT_CRITICAL(&motor->lock);
+		if (!expecting)
+			return false;
+	}
 
 	// Update response timestamp
 	taskENTER_CRITICAL(&motor->lock);
@@ -628,16 +648,21 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 		break;
 
 	case STEPPER_UIM2852_CW_ER:
-		// Error report
+		// Error report — suppress spurious 0x33/0x34 errors caused by
+		// motor misinterpreting Safety heartbeat frames as commands.
 		{
 			stepper_uim2852_error_t error = {};
 			if (stepper_uim2852_parse_error(data, dl, &error))
 			{
-				taskENTER_CRITICAL(&motor->lock);
-				motor->status.error_detected = true;
-				taskEXIT_CRITICAL(&motor->lock);
-				ESP_LOGE(TAG, "Node %u: Error 0x%02X on CW=0x%02X[%u]", motor->config.node_id, error.error_code,
-				         error.related_cw, error.subindex);
+				if (error.error_code != STEPPER_UIM2852_ERR_SUBINDEX &&
+				    error.error_code != STEPPER_UIM2852_ERR_DATA)
+				{
+					taskENTER_CRITICAL(&motor->lock);
+					motor->status.error_detected = true;
+					taskEXIT_CRITICAL(&motor->lock);
+					ESP_LOGE(TAG, "Node %u: Error 0x%02X on CW=0x%02X[%u]", motor->config.node_id, error.error_code,
+					         error.related_cw, error.subindex);
+				}
 			}
 		}
 		break;

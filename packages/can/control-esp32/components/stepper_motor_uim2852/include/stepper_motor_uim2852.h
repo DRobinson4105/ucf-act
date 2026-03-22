@@ -59,8 +59,8 @@ extern "C"
 
 typedef struct
 {
-	uint8_t node_id;        // Motor's CAN node ID (default 5)
-	uint8_t producer_id;    // Host controller ID (for logging only, not used in CAN ID)
+	uint8_t node_id;        // Motor's CAN node ID — used as consumer ID when sending commands
+	uint8_t producer_id;    // Motor's response producer ID — used to match incoming frames
 	uint32_t default_accel; // Default acceleration in pulses/sec^2
 	uint32_t default_decel; // Default deceleration in pulses/sec^2
 	uint32_t stop_decel;    // Emergency stop deceleration rate
@@ -71,7 +71,7 @@ typedef struct
 #define STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT() \
 	{                                          \
 		.node_id = 5,                          \
-		.producer_id = 4,                      \
+		.producer_id = 1,                      \
 		.default_accel = 5000,                 \
 		.default_decel = 5000,                 \
 		.stop_decel = 8000,                    \

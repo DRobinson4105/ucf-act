@@ -1761,28 +1761,14 @@ void can_rx_task(void *param)
 			continue;
 
 #if !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING) || !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING)
-		// Handle extended frames from UIM2852CA stepper motors
+		// Handle extended frames from UIM2852CA stepper motors.
+		// Try braking first — both motors share producer_id=1, so order
+		// matters during sequential init (braking inits first).
 		if (msg.extd)
 		{
 			bool matched = false;
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-			if (stepper_motor_uim2852_process_frame(&g_steering_stepper, &msg))
-			{
-				matched = true;
-				if (stepper_motor_uim2852_stall_detected(&g_steering_stepper) ||
-				    stepper_motor_uim2852_has_error(&g_steering_stepper))
-				{
-#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-					ESP_LOGI(TAG_RX, "Steering stepper motor fault detected");
-#endif
-					taskENTER_CRITICAL(&g_cmd_lock);
-					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
-					taskEXIT_CRITICAL(&g_cmd_lock);
-				}
-			}
-#endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-			if (!matched && stepper_motor_uim2852_process_frame(&g_braking_stepper, &msg))
+			if (stepper_motor_uim2852_process_frame(&g_braking_stepper, &msg))
 			{
 				matched = true;
 				if (stepper_motor_uim2852_stall_detected(&g_braking_stepper) ||
@@ -1790,6 +1776,22 @@ void can_rx_task(void *param)
 				{
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
 					ESP_LOGI(TAG_RX, "Braking stepper motor fault detected");
+#endif
+					taskENTER_CRITICAL(&g_cmd_lock);
+					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+					taskEXIT_CRITICAL(&g_cmd_lock);
+				}
+			}
+#endif
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+			if (!matched && stepper_motor_uim2852_process_frame(&g_steering_stepper, &msg))
+			{
+				matched = true;
+				if (stepper_motor_uim2852_stall_detected(&g_steering_stepper) ||
+				    stepper_motor_uim2852_has_error(&g_steering_stepper))
+				{
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+					ESP_LOGI(TAG_RX, "Steering stepper motor fault detected");
 #endif
 					taskENTER_CRITICAL(&g_cmd_lock);
 					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
@@ -1974,6 +1976,9 @@ void control_task(void *param)
 				mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "liveness timeout");
 			} */
 #endif
+		/*	Braking liveness also disabled — shared producer_id=1 makes
+			per-motor liveness unreliable.  Re-enable when motors have
+			unique producer IDs.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 			if (can_comm_ready && g_stepper_braking_ready &&
 			    stepper_motor_uim2852_check_liveness(&g_braking_stepper, now_tick, STEPPER_LIVENESS_TIMEOUT))
@@ -1981,7 +1986,7 @@ void control_task(void *param)
 				cmd_local.motor_fault_code = NODE_FAULT_MOTOR_COMM;
 				mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "liveness timeout");
 			}
-#endif
+#endif */
 		}
 #endif
 
@@ -3013,17 +3018,20 @@ void main_task(void *param)
 	g_fr_inputs_ready = true;
 #endif
 
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-	g_stepper_steering_ready = (init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING, STEERING_POSITION_MIN,
-	                                                 STEERING_POSITION_MAX) == ESP_OK);
-#else
-	g_stepper_steering_ready = true;
-#endif
+	// Init braking first — both motors share producer_id=1, and the RX
+	// handler tries braking first, so braking must init before steering
+	// to avoid response misrouting.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	g_stepper_braking_ready = (init_stepper_checked(&g_braking_stepper, UIM2852_NODE_BRAKING, BRAKING_POSITION_MIN,
 	                                                BRAKING_POSITION_MAX) == ESP_OK);
 #else
 	g_stepper_braking_ready = true;
+#endif
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+	g_stepper_steering_ready = (init_stepper_checked(&g_steering_stepper, UIM2852_NODE_STEERING, STEERING_POSITION_MIN,
+	                                                 STEERING_POSITION_MAX) == ESP_OK);
+#else
+	g_stepper_steering_ready = true;
 #endif
 
 	log_startup_device_status(g_twai_ready, g_mux_ready, g_throttle_relay_ready, g_relay_ready, g_pedal_input_ready,
