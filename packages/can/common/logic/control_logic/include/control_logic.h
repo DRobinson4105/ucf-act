@@ -116,7 +116,7 @@ typedef struct
 
 	// Planner commands (valid when ACTIVE)
 	int8_t throttle_cmd;
-	int16_t steering_cmd;
+	int32_t steering_cmd;
 	int16_t braking_cmd;
 	node_fault_t motor_fault_code; // one-shot from CAN RX (NODE_FAULT_*)
 
@@ -146,14 +146,14 @@ typedef struct
 	uint32_t throttle_slew_interval_ms;
 
 	// Stepper dedup
-	int16_t last_steering_sent;
+	int32_t last_steering_sent;
 	int16_t last_braking_sent;
 
 	// Command envelope limits.
 	// If min == max == 0, the envelope is treated as unconfigured and the
 	// command is forced to neutral (0) for fail-safe behavior.
-	int16_t steering_min; // minimum allowed steering position
-	int16_t steering_max; // maximum allowed steering position
+	int32_t steering_min; // minimum allowed steering position
+	int32_t steering_max; // maximum allowed steering position
 	int16_t braking_min;  // minimum allowed braking position
 	int16_t braking_max;  // maximum allowed braking position
 } control_inputs_t;
@@ -181,9 +181,9 @@ typedef struct
 	// Stepper outputs (valid when state is ACTIVE and no override triggered)
 	bool send_steering;        // true if steering position changed
 	bool send_braking;         // true if braking position changed
-	int16_t steering_position; // position to send
+	int32_t steering_position; // position to send
 	int16_t braking_position;  // position to send
-	int16_t new_last_steering; // updated dedup tracker
+	int32_t new_last_steering; // updated dedup tracker
 	int16_t new_last_braking;  // updated dedup tracker
 
 	// Recovery tracking
@@ -229,7 +229,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
  * @param max    Maximum allowed value (inclusive)
  * @return Clamped value
  */
-int16_t control_clamp_command(int16_t value, int16_t min, int16_t max);
+int32_t control_clamp_command(int32_t value, int32_t min, int32_t max);
 
 #ifdef __cplusplus
 }

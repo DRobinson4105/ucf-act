@@ -149,8 +149,8 @@ constexpr uint32_t STEPPER_QUERY_INTERVAL_MS = 200;
 // programmed into the motor's hardware software-limits (LM) during configure
 // as a secondary safety net.
 
-constexpr int16_t STEERING_POSITION_MIN = -3200; // negative limit (pulses)
-constexpr int16_t STEERING_POSITION_MAX = 3200;  // positive limit (pulses)
+constexpr int32_t STEERING_POSITION_MIN = -3200 * 50; // negative limit (pulses)
+constexpr int32_t STEERING_POSITION_MAX = 3200 * 50;  // positive limit (pulses)
 constexpr int16_t BRAKING_POSITION_MIN = -1600;  // negative limit (pulses)
 constexpr int16_t BRAKING_POSITION_MAX = 1600;   // positive limit (pulses)
 
@@ -229,7 +229,7 @@ struct command_snapshot_t
 	node_state_t target_state;     // from Safety heartbeat
 	node_fault_t estop_fault_code; // from Safety heartbeat (NODE_FAULT_ESTOP_*)
 	int8_t throttle_cmd;
-	int16_t steering_cmd;
+	int32_t steering_cmd;
 	int16_t braking_cmd;
 	node_fault_t motor_fault_code; // set by CAN RX on stepper error
 	TickType_t last_planner_cmd_tick;
@@ -1883,7 +1883,7 @@ void can_rx_task(void *param)
 			}
 
 			g_cmd.throttle_cmd = throttle_level;
-			g_cmd.steering_cmd = (int16_t)cmd.steering_position;
+			g_cmd.steering_cmd = (int32_t)cmd.steering_position;
 			g_cmd.braking_cmd = (int16_t)cmd.braking_position;
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
@@ -1952,7 +1952,7 @@ void control_task(void *param)
 	node_state_t prev_target_state = 0xFF;
 	node_fault_t prev_estop_fault = 0xFF;
 #endif
-	int16_t last_steering_sent = STEPPER_DEDUP_RESET;
+	int32_t last_steering_sent = STEPPER_DEDUP_RESET;
 	int16_t last_braking_sent = STEPPER_DEDUP_RESET;
 
 	g_throttle_current = 0;
