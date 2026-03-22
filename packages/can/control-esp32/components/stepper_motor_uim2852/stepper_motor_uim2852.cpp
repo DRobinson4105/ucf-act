@@ -562,10 +562,12 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 	if (!stepper_uim2852_parse_can_id(msg->identifier, &producer_id, &cw))
 		return false;
 
-	// Both motors respond with producer_id=1.  Route frames by checking
-	// whether this motor is actively waiting for a response.  For
-	// unsolicited frames (status polls, notifications, errors), accept
-	// on any instance — the caller's !matched guard prevents duplicates.
+	// UIM2852 responses publish the motor node ID as the producer ID in the
+	// extended CAN identifier, so reject frames from other stepper nodes
+	// before any status/notify/error state is updated.
+	if (producer_id != motor->config.node_id)
+		return false;
+
 	uint8_t cw_base_peek = stepper_uim2852_cw_base(cw);
 
 	bool is_unsolicited = (cw_base_peek == STEPPER_UIM2852_CW_MS ||

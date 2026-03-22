@@ -343,6 +343,43 @@ static void test_process_frame_wrong_node(void)
 	assert(stepper_motor_uim2852_process_frame(&motor, &msg) == false);
 }
 
+static void test_process_frame_wrong_node_notify(void)
+{
+	stepper_motor_uim2852_t motor;
+	init_default_motor(&motor);
+	motor.motion_in_progress = true;
+
+	uint8_t data[8] = {};
+	data[0] = STEPPER_UIM2852_STATUS_PTP_COMPLETE;
+	data[4] = 0x00;
+	data[5] = 0x19;
+	data[6] = 0x00;
+	data[7] = 0x00;
+
+	twai_message_t msg = make_motor_response(6, stepper_uim2852_cw_with_ack(STEPPER_UIM2852_CW_NOTIFY), data, 8);
+	assert(stepper_motor_uim2852_process_frame(&motor, &msg) == false);
+	assert(motor.motion_in_progress == true);
+	assert(motor.status.in_position == false);
+	assert(motor.absolute_position == 0);
+}
+
+static void test_process_frame_wrong_node_ack_while_waiting(void)
+{
+	stepper_motor_uim2852_t motor;
+	init_default_motor(&motor);
+	motor.ack_pending = true;
+	motor.last_response_tick = 123;
+
+	uint8_t data[8] = {};
+	data[0] = 1;
+
+	twai_message_t msg = make_motor_response(6, stepper_uim2852_cw_with_ack(STEPPER_UIM2852_CW_MO), data, 1);
+	assert(stepper_motor_uim2852_process_frame(&motor, &msg) == false);
+	assert(motor.ack_pending == true);
+	assert(motor.last_response_tick == 123);
+	assert(motor.driver_enabled == false);
+}
+
 // ============================================================================
 // process_frame — MS[0] tests
 // ============================================================================
@@ -1548,6 +1585,8 @@ int main(void)
 	printf("\n  --- process_frame filtering ---\n");
 	TEST(test_process_frame_standard_frame);
 	TEST(test_process_frame_wrong_node);
+	TEST(test_process_frame_wrong_node_notify);
+	TEST(test_process_frame_wrong_node_ack_while_waiting);
 
 	// process_frame — MS[0]
 	printf("\n  --- process_frame MS[0] ---\n");
