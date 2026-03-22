@@ -140,15 +140,6 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor)
 	if (err != ESP_OK)
 		return err;
 
-	// Enable brake safety interlock (IC[8]=1).  When active, the motor
-	// controller requires the brake to be explicitly released (MT[5]=0)
-	// before the driver can be enabled (MO=1).  This prevents motion if
-	// the host crashes between power-on and the ENABLE sequence.
-	dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_BRAKE_LOGIC, 1);
-	err = send_instruction(motor, STEPPER_UIM2852_CW_IC, data, dl);
-	if (err != ESP_OK)
-		return err;
-
 	// Set default motion parameters (accel/decel used as safety limits for PT mode)
 	err = stepper_motor_uim2852_set_accel(motor, motor->config.default_accel);
 	if (err != ESP_OK)
@@ -161,6 +152,24 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor)
 	// Set emergency stop deceleration
 	dl = stepper_uim2852_build_sd(data, motor->config.stop_decel);
 	err = send_instruction(motor, STEPPER_UIM2852_CW_SD, data, dl);
+	if (err != ESP_OK)
+		return err;
+
+	// CW 0x06: set control mode (closed-loop)
+	const uint8_t cw06_data[3] = {0x06, 0x01, 0x00};
+	err = send_instruction(motor, 0x06, cw06_data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	// CW 0x06: set positive motor direction to clockwise
+	const uint8_t cw06_dir_data[3] = {0x01, 0x00, 0x00};
+	err = send_instruction(motor, 0x06, cw06_dir_data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	// CW 0x10: set motor current to 0.8 A (ins DL=3, ack DL=3)
+	const uint8_t cw10_data[3] = {0x01, 0x08, 0x00};
+	err = send_instruction(motor, 0x10, cw10_data, 3);
 
 	return err;
 }
@@ -336,6 +345,30 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	uint8_t data[8];
 	uint8_t dl;
 	esp_err_t err;
+
+	// CW 0x22: queue resetter (MP[0]=0)
+	const uint8_t cw22_mp0_data[3] = {0x00, 0x00, 0x00};
+	err = send_instruction(motor, 0x22, cw22_mp0_data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	// CW 0x22: set frame execution time (MP[4]=0)
+	const uint8_t cw22_time_data[3] = {0x04, 0x00, 0x00};
+	err = send_instruction(motor, 0x22, cw22_time_data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	// CW 0x22: set PT mode to PVT FIFO mode (MP[3]=0)
+	const uint8_t cw22_data[3] = {0x03, 0x00, 0x00};
+	err = send_instruction(motor, 0x22, cw22_data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	// CW 0x22: MP[5]=1
+	const uint8_t cw22_mp5_data[3] = {0x05, 0x01, 0x00};
+	err = send_instruction(motor, 0x22, cw22_mp5_data, 3);
+	if (err != ESP_OK)
+		return err;
 
 	// Enable PVT FIFO empty notification (IE[10]=1)
 	dl = stepper_uim2852_build_ie_set(data, STEPPER_UIM2852_IE_PVT_FIFO_EMPTY, 1);

@@ -789,22 +789,6 @@ static void test_build_ic_auto_enable_off(void)
 	assert(val == 0);
 }
 
-static void test_build_ic_brake_interlock_on(void)
-{
-	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_BRAKE_LOGIC, 1);
-	assert(dl == 3);
-	assert(data[0] == STEPPER_UIM2852_IC_BRAKE_LOGIC); // index 8
-	assert(data[1] == 1);
-	assert(data[2] == 0);
-
-	uint8_t idx;
-	int32_t val;
-	assert(stepper_uim2852_parse_param_response(data, dl, &idx, &val));
-	assert(idx == STEPPER_UIM2852_IC_BRAKE_LOGIC);
-	assert(val == 1);
-}
-
 static void test_build_ic_software_limits_on(void)
 {
 	uint8_t data[8];
@@ -824,8 +808,6 @@ static void test_ic_parameter_indices(void)
 	assert(STEPPER_UIM2852_IC_ACDC_UNITS == 4);
 	assert(STEPPER_UIM2852_IC_CLOSED_LOOP == 6);
 	assert(STEPPER_UIM2852_IC_SOFTWARE_LIMITS == 7);
-	assert(STEPPER_UIM2852_IC_BRAKE_LOGIC == 8);
-	assert(STEPPER_UIM2852_IC_INTERNAL_BRAKE == 15);
 	assert(STEPPER_UIM2852_IC_STALL_REACTION == 16);
 }
 
@@ -1060,7 +1042,6 @@ int main(void)
 
 	// Safety configuration (IC)
 	TEST(test_build_ic_auto_enable_off);
-	TEST(test_build_ic_brake_interlock_on);
 	TEST(test_build_ic_software_limits_on);
 	TEST(test_ic_parameter_indices);
 

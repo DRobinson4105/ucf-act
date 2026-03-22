@@ -168,8 +168,6 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 #define STEPPER_UIM2852_IC_ACDC_UNITS      4  // AC/DC units (0:pulse/sec^2, 1:milliseconds)
 #define STEPPER_UIM2852_IC_CLOSED_LOOP     6  // Closed-loop control (0/1)
 #define STEPPER_UIM2852_IC_SOFTWARE_LIMITS 7  // Software limits (0/1)
-#define STEPPER_UIM2852_IC_BRAKE_LOGIC     8  // Brake safety interlock (0/1)
-#define STEPPER_UIM2852_IC_INTERNAL_BRAKE  15 // Use internally controlled brake (0/1)
 #define STEPPER_UIM2852_IC_STALL_REACTION  16 // Stall event reaction
 
 // IE[i] - Information enable / notifications (CW: 0x07)
