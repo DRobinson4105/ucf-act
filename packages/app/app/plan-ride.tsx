@@ -426,6 +426,11 @@ export default function PlanRideScreen() {
     ? { latitude: dropoffLocationObj.latitude, longitude: dropoffLocationObj.longitude }
     : undefined;
 
+  const assignedCart = currentRide?.cartId
+    ? allCarts?.find((c) => c._id === currentRide.cartId)
+    : undefined;
+  const convexRoute = (assignedCart as any)?.currentRoute as Array<{ latitude: number; longitude: number }> | undefined;
+
   return (
     <View style={styles.container}>
       <CampusMap
@@ -447,6 +452,7 @@ export default function PlanRideScreen() {
         onMapPress={viewMode === "planning" && !isExpanded ? handleMapTap : undefined}
         hideUserLocation={currentRide?.status === "in_progress"}
         allCarts={allCarts ?? []}
+        convexRoute={convexRoute}
       />
 
       <TouchableOpacity

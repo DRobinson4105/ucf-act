@@ -30,6 +30,7 @@ interface CampusMapProps {
   customDropoffCoord?: { latitude: number; longitude: number };
   onMapPress?: (coord: { latitude: number; longitude: number }) => void;
   hideUserLocation?: boolean; // hide blue user dot (e.g. during in_progress — use cart as reference instead)
+  convexRoute?: Array<{ latitude: number; longitude: number }>; // live route from Convex (cart bridge) — overrides local A* pathfinding
 }
 
 export default function CampusMap({
@@ -49,6 +50,7 @@ export default function CampusMap({
   customDropoffCoord,
   onMapPress,
   hideUserLocation = false,
+  convexRoute,
 }: CampusMapProps) {
   const assignedCart = cartId ? allCarts?.find((c) => c._id === cartId) : null;
   const vehiclePosition = assignedCart?.location ?? vehiclePositionProp;
@@ -184,8 +186,23 @@ export default function CampusMap({
   const routeGoal = vehicleTarget ?? (pickupLocation ? { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude } : null);
   const routeGoalKey = routeGoal ? `${routeGoal.latitude},${routeGoal.longitude}` : null;
 
+  // When a live Convex route is available, sync it directly into the vehicle path
+  useEffect(() => {
+    if (!showRoute) return;
+    if (convexRoute && convexRoute.length >= 2) {
+      fullVehiclePathRef.current = convexRoute;
+      setVehiclePath(convexRoute);
+    } else if (convexRoute && convexRoute.length === 0) {
+      fullVehiclePathRef.current = [];
+      setVehiclePath([]);
+    }
+  }, [showRoute, convexRoute]);
+
   useEffect(() => {
     let isCancelled = false;
+
+    // Skip local A* if the caller provides a live route from Convex
+    if (convexRoute !== undefined) return;
 
     if (!showRoute || !routeGoal || !vehiclePosition) {
       fullVehiclePathRef.current = [];
