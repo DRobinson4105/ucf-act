@@ -727,13 +727,16 @@ void log_startup_device_status(bool twai_ready, bool mux_ready, bool throttle_re
 }
 
 /**
- * @brief Check whether all non-bypassed components report ready.
+ * @brief Check whether all non-bypassed base components report ready.
  *
  * Evaluates the health flags for every component that is not
- * compile-time bypassed.  Used to gate READY state transitions
- * and trigger FAULT when a required component is lost.
+ * compile-time bypassed, excluding stepper comm availability.
  *
- * @return true if every required component is initialized and healthy
+ * Stepper comm is intentionally excluded from this baseline readiness check:
+ * steppers are powered by Safety's relay only in ENABLE/ACTIVE, so requiring
+ * them in NOT_READY/READY would create a power-dependency deadlock.
+ *
+ * @return true if every required non-stepper component is initialized and healthy
  */
 bool all_required_components_ready(void)
 {
@@ -756,23 +759,16 @@ bool all_required_components_ready(void)
 	if (!g_fr_inputs_ready)
 		ready = false;
 #endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-	if (!g_stepper_steering_ready)
-		ready = false;
-#endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-	if (!g_stepper_braking_ready)
-		ready = false;
-#endif
 	return ready;
 }
 
 /**
- * @brief Return the highest-priority fault code for the first unhealthy component.
+ * @brief Return the highest-priority fault code for the first unhealthy base component.
  *
- * Scans non-bypassed components in priority order (throttle, relay,
- * sensors, motors) and returns the fault code for the first one that
- * is not ready.  Returns NODE_FAULT_NONE if all are healthy.
+ * Scans non-bypassed base components in priority order (throttle, relay,
+ * sensors) and returns the fault code for the first one that is not ready.
+ * Stepper comm health is handled by runtime motor fault paths in ENABLE/ACTIVE.
+ * Returns NODE_FAULT_NONE if all baseline components are healthy.
  *
  * @return Fault code corresponding to the first failed component
  */
@@ -791,14 +787,6 @@ node_fault_t primary_fault_from_component_health(void)
 #if !defined(CONFIG_BYPASS_INPUT_PEDAL_ADC) || !defined(CONFIG_BYPASS_INPUT_FR_SENSOR)
 	if (!g_pedal_input_ready || !g_fr_inputs_ready)
 		return NODE_FAULT_SENSOR_INVALID;
-#endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-	if (!g_stepper_steering_ready)
-		return NODE_FAULT_MOTOR_COMM;
-#endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-	if (!g_stepper_braking_ready)
-		return NODE_FAULT_MOTOR_COMM;
 #endif
 	return NODE_FAULT_NONE;
 }
@@ -2210,16 +2198,39 @@ void control_task(void *param)
 		}
 		if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
 		{
-			execute_complete_enable();
-#if (!defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING) || !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING)) && \
-	!defined(CONFIG_BYPASS_ACTUATOR_MULTIPLEXER)
-			// If stepper enable failed, execute_complete_enable leaves mux disabled
-			if (!multiplexer_dg408djz_is_autonomous())
-			{
-				step.new_state = NODE_STATE_FAULT;
-				step.new_fault_code = NODE_FAULT_MOTOR_COMM;
-			}
+			bool steppers_ready_for_enable = true;
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+			steppers_ready_for_enable = steppers_ready_for_enable && g_stepper_steering_ready;
 #endif
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
+			steppers_ready_for_enable = steppers_ready_for_enable && g_stepper_braking_ready;
+#endif
+
+			if (!steppers_ready_for_enable)
+			{
+				// Hold ENABLE and keep relay power on so stepper retries can recover.
+				// Do not emit FAULT here; otherwise Safety would drop relay power and
+				// stepper init would deadlock waiting for power.
+				step.new_state = NODE_STATE_ENABLE;
+				step.new_fault_code = NODE_FAULT_NONE;
+				step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
+				step.heartbeat_flags = (heartbeat_flags_t)(step.heartbeat_flags & ~HEARTBEAT_FLAG_ENABLE_COMPLETE);
+			}
+			else
+			{
+				execute_complete_enable();
+#if !defined(CONFIG_BYPASS_ACTUATOR_MULTIPLEXER)
+				// If complete_enable failed, mux remains non-autonomous.
+				if (!multiplexer_dg408djz_is_autonomous())
+				{
+					step.new_state = NODE_STATE_ENABLE;
+					step.new_fault_code = NODE_FAULT_NONE;
+					step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
+					step.heartbeat_flags =
+						(heartbeat_flags_t)(step.heartbeat_flags & ~HEARTBEAT_FLAG_ENABLE_COMPLETE);
+				}
+#endif
+			}
 		}
 		if (step.actions & CONTROL_ACTION_ABORT_ENABLE)
 		{
