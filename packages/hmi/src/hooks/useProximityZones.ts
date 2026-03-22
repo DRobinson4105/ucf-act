@@ -36,7 +36,7 @@ export const useProximityZones = () => {
     setActiveDetections(prev => new Set([...prev, zoneId]))
 
     // Clear detection after 3-5 seconds
-    const clearTimeout = setTimeout(() => {
+    setTimeout(() => {
       setZones(prev => prev.map(zone =>
         zone.id === zoneId
           ? { ...zone, status: 'clear', objectType: undefined }
@@ -48,8 +48,6 @@ export const useProximityZones = () => {
         return newSet
       })
     }, 3000 + Math.random() * 2000)
-
-    return () => clearTimeout(clearTimeout)
   }, [])
 
   useEffect(() => {

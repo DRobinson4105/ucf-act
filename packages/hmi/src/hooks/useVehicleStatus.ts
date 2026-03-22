@@ -1,88 +1,56 @@
 import { useState, useEffect } from 'react'
+import { useQuery } from 'convex/react'
+import { api } from '@convex-api'
+import { Id } from '@convex-types'
 import { VehicleStatus, GPSPosition } from '../types'
-import { findPath } from '../utils/pathfinding'
 import { UCF_CENTER } from '../constants/campus-locations'
 
-export const useVehicleStatus = () => {
-  const [status, setStatus] = useState<VehicleStatus>({
-    battery: 85,
-    speed: 12,
-    connectivity: 'excellent',
-    isConnected: true
-  })
+const CART_ID = import.meta.env.VITE_CART_ID as string | undefined
+
+export interface Waypoint {
+  latitude: number
+  longitude: number
+}
+
+export const useCartData = () => {
+  const cart = useQuery(
+    api.carts.getById,
+    CART_ID ? { cartId: CART_ID as Id<'carts'> } : 'skip',
+  )
 
   const [currentTime, setCurrentTime] = useState(new Date())
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(new Date())
-
-      setStatus(prev => ({
-        ...prev,
-        battery: Math.max(0, prev.battery - 0.01),
-        speed: Math.max(0, Math.min(25, prev.speed + (Math.random() - 0.5) * 2)),
-        connectivity: Math.random() > 0.95 ?
-          (['excellent', 'good', 'poor'] as const)[Math.floor(Math.random() * 3)] :
-          prev.connectivity,
-        isConnected: Math.random() > 0.05
-      }))
-    }, 1000)
-
+    const interval = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(interval)
   }, [])
 
+  const status: VehicleStatus = {
+    battery: cart?.batteryLevel ?? 0,
+    speed: cart?.speed ?? 0,
+    connectivity: cart ? 'excellent' : 'none',
+    isConnected: !!cart,
+  }
+
+  const position: GPSPosition = {
+    lat: cart?.location.latitude ?? UCF_CENTER.latitude,
+    lng: cart?.location.longitude ?? UCF_CENTER.longitude,
+    timestamp: cart?.lastUpdated ?? Date.now(),
+  }
+
+  const waypoints: Waypoint[] = cart?.currentRoute ?? []
+  const path: [number, number][] = waypoints.map(w => [w.latitude, w.longitude])
+
+  return { status, position, path, waypoints, currentTime }
+}
+
+// Keep legacy exports so nothing else breaks if still imported
+export const useVehicleStatus = () => {
+  const { status, currentTime } = useCartData()
   return { status, currentTime }
 }
 
 export const useGPSPosition = () => {
-  const [position, setPosition] = useState<GPSPosition>({
-    lat: UCF_CENTER.latitude,
-    lng: UCF_CENTER.longitude,
-    timestamp: Date.now()
-  })
-
-  const [path, setPath] = useState<[number, number][]>([])
-  const [pathIndex, setPathIndex] = useState(0)
-
-  useEffect(() => {
-    const generatePath = async () => {
-        // Path from Student Union (Center) to Engineering II area
-        const start = { latitude: UCF_CENTER.latitude, longitude: UCF_CENTER.longitude }
-        const goal = { latitude: 28.6016, longitude: -81.1987 }
-
-        try {
-          const pathNodes = await findPath(start, goal)
-          if (pathNodes.length > 0) {
-              const coords = pathNodes.map(n => [n.latitude, n.longitude] as [number, number])
-              setPath(coords)
-          }
-        } catch (e) {
-          console.error("Failed to generate path", e)
-        }
-    }
-
-    generatePath()
-  }, [])
-
-  useEffect(() => {
-    if (path.length === 0) return
-
-    const interval = setInterval(() => {
-      setPathIndex(prev => {
-         // Loop the path back and forth or just restart?
-         // Restarting from 0 for continuous demo loop
-         const next = (prev + 1) % path.length
-         setPosition({
-            lat: path[next][0],
-            lng: path[next][1],
-            timestamp: Date.now()
-         })
-         return next
-      })
-    }, 500) // Update every 500ms for smoother movement
-
-    return () => clearInterval(interval)
-  }, [path])
-
+  const { position, path } = useCartData()
   return { position, path }
 }

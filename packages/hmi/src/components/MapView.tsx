@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { GPSPosition, MapRoute } from '../types'
+import { GPSPosition } from '../types'
 
 interface MapViewProps {
   position: GPSPosition

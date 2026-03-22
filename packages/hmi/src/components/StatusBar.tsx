@@ -1,7 +1,6 @@
 import React from 'react'
 import {
   Battery,
-  Wifi,
   WifiOff,
   Clock,
   Gauge,

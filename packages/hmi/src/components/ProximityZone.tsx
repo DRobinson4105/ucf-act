@@ -1,7 +1,6 @@
 import React from 'react'
 import { Box } from '@react-three/drei'
 import { Zone } from '../types'
-import * as THREE from 'three'
 
 interface ProximityZoneProps {
   zone: Zone

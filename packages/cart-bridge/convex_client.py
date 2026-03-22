@@ -21,8 +21,9 @@ def push_telemetry(
     heading: Optional[float] = None,
     battery_level: Optional[float] = None,
     status: Optional[str] = None,
+    speed: Optional[float] = None,
 ) -> None:
-    """Push current cart location and status to Convex."""
+    """Push current cart location, speed, and status to Convex."""
     payload: dict = {
         "cartId": CART_ID,
         "latitude": lat,
@@ -34,10 +35,23 @@ def push_telemetry(
         payload["batteryLevel"] = battery_level
     if status is not None:
         payload["status"] = status
+    if speed is not None:
+        payload["speed"] = speed
 
     resp = httpx.post(
         f"{CONVEX_SITE_URL}/api/cart/telemetry",
         json=payload,
+        headers=_HEADERS,
+        timeout=5,
+    )
+    resp.raise_for_status()
+
+
+def push_route(waypoints: list) -> None:
+    """Push the current route waypoints to Convex for HMI display."""
+    resp = httpx.post(
+        f"{CONVEX_SITE_URL}/api/cart/route",
+        json={"cartId": CART_ID, "waypoints": waypoints},
         headers=_HEADERS,
         timeout=5,
     )

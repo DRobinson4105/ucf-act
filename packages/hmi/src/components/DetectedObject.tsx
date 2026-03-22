@@ -1,6 +1,5 @@
-import React, { useMemo, useEffect } from 'react'
-import { useGLTF, useAnimations } from '@react-three/drei'
-import { Zone } from '../types'
+import React, { useMemo } from 'react'
+import { useGLTF } from '@react-three/drei'
 import personModel from '../models/person_walking.glb'
 import bikeModel from '../models/bike.glb'
 import carModel from '../models/car_low_poly.glb'

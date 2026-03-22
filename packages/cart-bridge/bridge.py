@@ -26,7 +26,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
 
-from convex_client import push_telemetry, poll_assignment, arrived_at_pickup, complete_ride, get_ride_status
+from convex_client import push_telemetry, push_route, poll_assignment, arrived_at_pickup, complete_ride, get_ride_status
 from pathfinding import find_path
 
 TELEMETRY_INTERVAL_S = 2.0
@@ -62,6 +62,7 @@ class CartBridgeNode(Node):
         self._lat: Optional[float] = None
         self._lon: Optional[float] = None
         self._heading: Optional[float] = None
+        self._speed_mps: float = 0.0
 
         # Current ride
         self._active_ride: Optional[dict] = None
@@ -107,6 +108,7 @@ class CartBridgeNode(Node):
     def _odom_callback(self, msg: Odometry) -> None:
         q = msg.pose.pose.orientation
         self._heading = quaternion_to_yaw_deg(q.x, q.y, q.z, q.w)
+        self._speed_mps = msg.twist.twist.linear.x
 
     # ---- Timers ---------------------------------------------------------- #
 
@@ -118,6 +120,7 @@ class CartBridgeNode(Node):
                 lat=self._lat,
                 lon=self._lon,
                 heading=self._heading,
+                speed=self._speed_mps * 2.237,
                 status="busy" if self._active_ride else "idle",
             )
         except Exception as e:
@@ -203,6 +206,10 @@ class CartBridgeNode(Node):
         msg = String()
         msg.data = json.dumps({"route_id": route_id, "waypoints": waypoints})
         self._route_pub.publish(msg)
+        try:
+            push_route(waypoints)
+        except Exception as e:
+            self.get_logger().error(f"Route push to Convex failed: {e}")
 
     def _notify_arrived_pickup(self) -> None:
         if not self._active_ride:
@@ -221,6 +228,10 @@ class CartBridgeNode(Node):
             "waypoints": [],
         })
         self._route_pub.publish(msg)
+        try:
+            push_route([])
+        except Exception as e:
+            self.get_logger().error(f"Route clear to Convex failed: {e}")
 
     def _finish_ride(self) -> None:
         if not self._active_ride:

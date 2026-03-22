@@ -23,6 +23,7 @@ load_dotenv()
 
 from convex_client import (
     push_telemetry,
+    push_route,
     poll_assignment,
     arrived_at_pickup,
     get_ride_status,
@@ -52,6 +53,13 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
+
+
+def make_waypoints(lat1: float, lon1: float, lat2: float, lon2: float, n: int = 20) -> list:
+    return [
+        {"latitude": lerp(lat1, lat2, i / (n - 1)), "longitude": lerp(lon1, lon2, i / (n - 1))}
+        for i in range(n)
+    ]
 
 
 # Phase constants
@@ -167,6 +175,12 @@ class CartSimulator:
                 print(f"[SIM]   Pickup:      ({ride['origin']['latitude']:.5f}, {ride['origin']['longitude']:.5f})")
                 print(f"[SIM]   Destination: ({ride['destination']['latitude']:.5f}, {ride['destination']['longitude']:.5f})")
                 print(f"[SIM] Phase 1: driving to pickup...")
+                try:
+                    wps = make_waypoints(self.lat, self.lon, ride["origin"]["latitude"], ride["origin"]["longitude"])
+                    push_route(wps)
+                    print(f"[SIM] Route pushed: cart → pickup ({len(wps)} waypoints)")
+                except Exception as e:
+                    print(f"[SIM] Route push failed: {e}")
             else:
                 print("[SIM] No pending rides.")
         except Exception as e:
@@ -199,6 +213,13 @@ class CartSimulator:
                 self.phase2_start_lat = self.lat
                 self.phase2_start_lon = self.lon
                 self.drive_start = now
+                try:
+                    dest = self.active_ride["destination"]
+                    wps = make_waypoints(self.lat, self.lon, dest["latitude"], dest["longitude"])
+                    push_route(wps)
+                    print(f"[SIM] Route pushed: pickup → dropoff ({len(wps)} waypoints)")
+                except Exception as e:
+                    print(f"[SIM] Route push failed: {e}")
         except Exception as e:
             print(f"[SIM] Board check failed: {e}")
 
@@ -213,6 +234,10 @@ class CartSimulator:
             print(f"[SIM] Ride {ride_id} completed!")
         except Exception as e:
             print(f"[SIM] Complete ride failed: {e}")
+        try:
+            push_route([])
+        except Exception:
+            pass
         finally:
             self.active_ride = None
             self.phase = PHASE_IDLE

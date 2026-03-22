@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -22,7 +23,7 @@ http.route({
     }
 
     const body = await request.json();
-    const { cartId, latitude, longitude, heading, batteryLevel, status } = body;
+    const { cartId, latitude, longitude, heading, batteryLevel, status, speed } = body;
 
     if (!cartId || latitude === undefined || longitude === undefined) {
       return new Response("Missing required fields", { status: 400 });
@@ -35,6 +36,7 @@ http.route({
       heading,
       batteryLevel,
       status,
+      speed,
     });
 
     return new Response(JSON.stringify({ ok: true }), {
@@ -136,6 +138,34 @@ http.route({
     }
 
     return new Response(JSON.stringify({ status: ride.status }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+// POST /api/cart/route
+// Body: { cartId, waypoints: [{latitude, longitude}[]] }
+// Cart bridge calls this whenever a new route is computed (phase 1 or 2)
+http.route({
+  path: "/api/cart/route",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    if (!isAuthorized(request)) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const { cartId, waypoints } = await request.json();
+    if (!cartId || !Array.isArray(waypoints)) {
+      return new Response("Missing cartId or waypoints", { status: 400 });
+    }
+
+    await ctx.runMutation(internal.carts.updateRoute, {
+      cartId: cartId as Id<"carts">,
+      waypoints,
+    });
+
+    return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

@@ -59,5 +59,9 @@ export default defineSchema({
     ),
     batteryLevel: v.number(),
     lastUpdated: v.number(),
+    speed: v.optional(v.number()),
+    currentRoute: v.optional(
+      v.array(v.object({ latitude: v.number(), longitude: v.number() }))
+    ),
   }),
 });

@@ -31,9 +31,10 @@ export const updateLocation = internalMutation({
         v.literal("offline")
       )
     ),
+    speed: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { cartId, latitude, longitude, heading, batteryLevel, status } = args;
+    const { cartId, latitude, longitude, heading, batteryLevel, status, speed } = args;
 
     const patch: Record<string, unknown> = {
       location: { latitude, longitude, heading },
@@ -41,8 +42,20 @@ export const updateLocation = internalMutation({
     };
     if (batteryLevel !== undefined) patch.batteryLevel = batteryLevel;
     if (status !== undefined) patch.status = status;
+    if (speed !== undefined) patch.speed = speed;
 
     await ctx.db.patch(cartId, patch);
+  },
+});
+
+// Called only by the cart bridge via HTTP action — replaces route on each phase transition
+export const updateRoute = internalMutation({
+  args: {
+    cartId: v.id("carts"),
+    waypoints: v.array(v.object({ latitude: v.number(), longitude: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.cartId, { currentRoute: args.waypoints });
   },
 });
 

@@ -7,9 +7,7 @@ import {
   Sun,
   Snowflake,
   Wind,
-  Sliders,
   Play,
-  Pause,
   SkipBack,
   SkipForward
 } from 'lucide-react'
