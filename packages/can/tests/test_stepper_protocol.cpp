@@ -363,21 +363,6 @@ static void test_build_lm_set(void)
 	assert(val == 100000);
 }
 
-// Brake: MT[5], DL=3 (u16 LE value)
-static void test_build_brake(void)
-{
-	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_brake(data, true);
-	assert(dl == 3);
-	assert(data[0] == STEPPER_UIM2852_MT_BRAKE);
-	assert(data[1] == 1);
-	assert(data[2] == 0);
-
-	dl = stepper_uim2852_build_brake(data, false);
-	assert(dl == 3);
-	assert(data[1] == 0);
-	assert(data[2] == 0);
-}
 
 // ML: DL=0
 static void test_build_ml(void)
@@ -999,7 +984,6 @@ int main(void)
 	TEST(test_build_mt_set);
 	TEST(test_build_qe_set);
 	TEST(test_build_lm_set);
-	TEST(test_build_brake);
 	TEST(test_build_ml);
 	TEST(test_build_sn);
 	TEST(test_build_bl);

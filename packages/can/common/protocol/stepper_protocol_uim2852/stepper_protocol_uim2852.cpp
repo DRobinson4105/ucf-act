@@ -324,10 +324,6 @@ uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t valu
 	return build_idx_u16(data, index, value);
 }
 
-uint8_t stepper_uim2852_build_brake(uint8_t *data, bool engage)
-{
-	return build_idx_u16(data, STEPPER_UIM2852_MT_BRAKE, engage ? 1 : 0);
-}
 
 uint8_t stepper_uim2852_build_ml(uint8_t *data)
 {

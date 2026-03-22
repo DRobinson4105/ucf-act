@@ -186,7 +186,6 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 #define STEPPER_UIM2852_MT_WORKING_CURRENT   1 // Working current (5-80 = 0.5-8.0A in 0.1A steps)
 #define STEPPER_UIM2852_MT_IDLE_CURRENT      2 // Idle current (0-100% of working current)
 #define STEPPER_UIM2852_MT_AUTO_ENABLE_DELAY 3 // Auto-enable delay (0-60000 ms)
-#define STEPPER_UIM2852_MT_BRAKE             5 // Internal brake (0=release, 1=engage/lock)
 
 // MS[i] - Motion status query (CW: 0x11)
 #define STEPPER_UIM2852_MS_FLAGS_RELPOS 0 // Status flags + relative position
@@ -627,17 +626,6 @@ uint8_t stepper_uim2852_build_qe_query(uint8_t *data, uint8_t index);
  */
 uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t value);
 
-/**
- * @brief Build a Brake Control frame (MT[5] instruction, CW 0x10).
- *
- * Engages or releases the internal brake by setting motor driver
- * parameter MT[5].
- *
- * @param data    [out] Frame data buffer (at least 8 bytes)
- * @param engage  true to engage (lock) the brake, false to release it
- * @return Data length (DL) for the CAN frame (3)
- */
-uint8_t stepper_uim2852_build_brake(uint8_t *data, bool engage);
 
 // ============================================================================
 // PT/PVT Interpolated Motion Frame Builders

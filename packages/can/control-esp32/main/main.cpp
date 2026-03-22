@@ -137,9 +137,6 @@ constexpr int32_t STEPPER_POSITION_ERROR_THRESHOLD = 200;
 // Must be longer than the query interval to allow at least one round-trip.
 constexpr TickType_t STEPPER_LIVENESS_TIMEOUT = pdMS_TO_TICKS(500);
 
-// Interval between periodic MS[0] status queries sent to each stepper as a
-// liveness probe. Must be shorter than STEPPER_LIVENESS_TIMEOUT.
-constexpr uint32_t STEPPER_QUERY_INTERVAL_MS = 200;
 
 // ============================================================================
 // Stepper Command Envelope Limits (pulses)
@@ -151,8 +148,8 @@ constexpr uint32_t STEPPER_QUERY_INTERVAL_MS = 200;
 
 constexpr int32_t STEERING_POSITION_MIN = -3200 * 50; // negative limit (pulses)
 constexpr int32_t STEERING_POSITION_MAX = 3200 * 50;  // positive limit (pulses)
-constexpr int16_t BRAKING_POSITION_MIN = -28000; // lower limit (pulses)
-constexpr int16_t BRAKING_POSITION_MAX = 0;      // upper limit (pulses)
+constexpr int16_t BRAKING_POSITION_MIN = 0;      // lower limit (pulses, full brake)
+constexpr int16_t BRAKING_POSITION_MAX = 28000;  // upper limit (pulses, no brake)
 
 // ============================================================================
 // Retry & Fault Constants
@@ -265,8 +262,6 @@ uint32_t g_last_throttle_change_ms = 0;
 bool g_enable_work_done = false;
 uint32_t g_boot_start_ms = 0;
 
-// Stepper liveness probe timing (control task only)
-[[maybe_unused]] uint32_t g_last_stepper_query_ms = 0;
 
 // Heartbeat
 volatile heartbeat_seq_t g_heartbeat_seq = 0;
@@ -1774,9 +1769,15 @@ void can_rx_task(void *param)
 				if (stepper_motor_uim2852_stall_detected(&g_braking_stepper) ||
 				    stepper_motor_uim2852_has_error(&g_braking_stepper))
 				{
-#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-					ESP_LOGI(TAG_RX, "Braking stepper motor fault detected");
-#endif
+					ESP_LOGE(TAG_RX, "STEPPER_BRAKING: fault: stall=%d err=%d locked=%d",
+					         g_braking_stepper.status.stall_detected,
+					         g_braking_stepper.status.error_detected,
+					         g_braking_stepper.status.system_locked);
+					if (g_braking_stepper.status.error_detected)
+						ESP_LOGE(TAG_RX, "STEPPER_BRAKING: last_error: code=0x%02X cw=0x%02X sub=%u",
+						         g_braking_stepper.last_error.error_code,
+						         g_braking_stepper.last_error.related_cw,
+						         g_braking_stepper.last_error.subindex);
 					taskENTER_CRITICAL(&g_cmd_lock);
 					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
 					taskEXIT_CRITICAL(&g_cmd_lock);
@@ -1790,9 +1791,15 @@ void can_rx_task(void *param)
 				if (stepper_motor_uim2852_stall_detected(&g_steering_stepper) ||
 				    stepper_motor_uim2852_has_error(&g_steering_stepper))
 				{
-#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-					ESP_LOGI(TAG_RX, "Steering stepper motor fault detected");
-#endif
+					ESP_LOGE(TAG_RX, "STEPPER_STEERING: fault: stall=%d err=%d locked=%d",
+					         g_steering_stepper.status.stall_detected,
+					         g_steering_stepper.status.error_detected,
+					         g_steering_stepper.status.system_locked);
+					if (g_steering_stepper.status.error_detected)
+						ESP_LOGE(TAG_RX, "STEPPER_STEERING: last_error: code=0x%02X cw=0x%02X sub=%u",
+						         g_steering_stepper.last_error.error_code,
+						         g_steering_stepper.last_error.related_cw,
+						         g_steering_stepper.last_error.subindex);
 					taskENTER_CRITICAL(&g_cmd_lock);
 					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
 					taskEXIT_CRITICAL(&g_cmd_lock);
@@ -1835,7 +1842,7 @@ void can_rx_task(void *param)
 
 			g_cmd.throttle_cmd = throttle_level;
 			g_cmd.steering_cmd = ((int32_t)cmd.steering_position - 360) * (3200 * 50) / 360;
-			g_cmd.braking_cmd = (int16_t)cmd.braking_position;
+			g_cmd.braking_cmd = (int16_t)((3 - (int32_t)cmd.braking_position) * 28000 / 3);
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
 #ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
@@ -1941,54 +1948,6 @@ void control_task(void *param)
 			mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "runtime communication fault");
 		}
 
-		// Periodic stepper liveness probe: send MS[0] query at STEPPER_QUERY_INTERVAL_MS.
-		// The response updates last_response_tick inside process_frame (CAN RX task).
-#if !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING) || !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING)
-		// Avoid issuing liveness probes while TWAI is down/recovering.
-		// Otherwise we can false-positive motor comm faults during bus outages.
-		bool can_comm_ready = false;
-		taskENTER_CRITICAL(&g_can_tx_lock);
-		can_comm_ready = (g_twai_ready && !g_can_recovery_in_progress);
-		taskEXIT_CRITICAL(&g_can_tx_lock);
-
-		if (can_comm_ready && (now_ms - g_last_stepper_query_ms) >= STEPPER_QUERY_INTERVAL_MS)
-		{
-			g_last_stepper_query_ms = now_ms;
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-			if (g_stepper_steering_ready)
-				stepper_motor_uim2852_query_status(&g_steering_stepper);
-#endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-			if (g_stepper_braking_ready)
-				stepper_motor_uim2852_query_status(&g_braking_stepper);
-#endif
-		}
-
-		// Stepper liveness watchdog: if a motor hasn't responded within
-		// STEPPER_LIVENESS_TIMEOUT, treat it as a communication fault.
-		{
-			TickType_t now_tick = xTaskGetTickCount();
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-		/*	if (can_comm_ready && g_stepper_steering_ready &&
-			    stepper_motor_uim2852_check_liveness(&g_steering_stepper, now_tick, STEPPER_LIVENESS_TIMEOUT))
-			{
-				cmd_local.motor_fault_code = NODE_FAULT_MOTOR_COMM;
-				mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "liveness timeout");
-			} */
-#endif
-		/*	Braking liveness also disabled — shared producer_id=1 makes
-			per-motor liveness unreliable.  Re-enable when motors have
-			unique producer IDs.
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-			if (can_comm_ready && g_stepper_braking_ready &&
-			    stepper_motor_uim2852_check_liveness(&g_braking_stepper, now_tick, STEPPER_LIVENESS_TIMEOUT))
-			{
-				cmd_local.motor_fault_code = NODE_FAULT_MOTOR_COMM;
-				mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "liveness timeout");
-			}
-#endif */
-		}
-#endif
 
 		update_driver_inputs(now_ms);
 		fr_state_t fr_state = fr_state_debounced();
@@ -2152,6 +2111,7 @@ void control_task(void *param)
 		}
 		if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
 		{
+			static uint8_t s_pt_start_fail_count = 0;
 			bool steppers_ready_for_enable = true;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
 			steppers_ready_for_enable = steppers_ready_for_enable && g_stepper_steering_ready;
@@ -2177,11 +2137,24 @@ void control_task(void *param)
 				// If complete_enable failed, mux remains non-autonomous.
 				if (!multiplexer_dg408djz_is_autonomous())
 				{
-					step.new_state = NODE_STATE_ENABLE;
-					step.new_fault_code = NODE_FAULT_NONE;
-					step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
-					step.heartbeat_flags =
-						(heartbeat_flags_t)(step.heartbeat_flags & ~HEARTBEAT_FLAG_ENABLE_COMPLETE);
+					++s_pt_start_fail_count;
+					if (s_pt_start_fail_count < 5)
+					{
+						step.new_state = NODE_STATE_ENABLE;
+						step.new_fault_code = NODE_FAULT_NONE;
+						step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
+						step.heartbeat_flags =
+							(heartbeat_flags_t)(step.heartbeat_flags & ~HEARTBEAT_FLAG_ENABLE_COMPLETE);
+					}
+					else
+					{
+						ESP_LOGE(TAG, "Begin motion failed %u times — giving up", s_pt_start_fail_count);
+						s_pt_start_fail_count = 0;
+					}
+				}
+				else
+				{
+					s_pt_start_fail_count = 0;
 				}
 #endif
 			}

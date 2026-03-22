@@ -13,27 +13,22 @@
  *
  *   1. CAN bus must be initialized and running (TWAI driver started).
  *   2. **MO=0** (driver off) — immediately de-energize coils.
- *   3. **MT[5]=1** (brake engage) — mechanically lock the shaft.
- *   4. **IC[0]=0** (disable auto-enable) — prevent driver from enabling
+ *   3. **IC[0]=0** (disable auto-enable) — prevent driver from enabling
  *      on future power cycles before host configures the motor.
- *   5. **IC[8]=1** (brake safety interlock) — motor controller refuses
- *      MO=1 unless brake is explicitly released first.
- *   6. Configure motion parameters: SP, AC, DC, SD.
- *   7. Configure software limits: LM[1], LM[2], IC[7]=1.
- *   8. **MO=0** (redundant disable) — ensure driver stays off.
+ *   4. Configure motion parameters: SP, AC, DC, SD.
+ *   5. Configure software limits: LM[1], LM[2], IC[7]=1.
+ *   6. **MO=0** (redundant disable) — ensure driver stays off.
  *
- * Steps 2-8 are performed by init_stepper_checked() in main.cpp.
+ * Steps 2-6 are performed by init_stepper_checked() in main.cpp.
  * The ENABLE transition later performs:
  *
- *   9. **MT[5]=0** (brake release)
- *  10. **MO=1** (driver enable)
- *  11. Begin accepting position commands.
+ *   7. **MO=1** (driver enable)
+ *   8. Begin accepting position commands.
  *
  * The DISABLE / E-STOP sequence reverses this:
  *
- *  12. **ST** (deceleration stop)
- *  13. **MT[5]=1** (brake engage)
- *  14. **MO=0** (driver off)
+ *   9. **ST** (deceleration stop)
+ *  10. **MO=0** (driver off)
  */
 
 #pragma once
@@ -88,6 +83,9 @@ typedef struct stepper_motor_uim2852
 
 	// Status from last MS[0] query
 	stepper_uim2852_status_t status;
+
+	// Last error reported by motor (valid when status.error_detected is true)
+	stepper_uim2852_error_t last_error;
 
 	// Speed and position from last MS[1] query
 	int32_t current_speed;     // pulses/sec

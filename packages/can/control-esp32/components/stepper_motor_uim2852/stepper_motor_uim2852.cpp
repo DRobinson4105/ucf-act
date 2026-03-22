@@ -138,13 +138,6 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor)
 	motor->status.error_detected = false;
 	taskEXIT_CRITICAL(&motor->lock);
 
-	// Disable auto-enable (IC[0]=0) so the motor driver does NOT energize
-	// coils automatically when 24V power is applied.
-	dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_AUTO_ENABLE, 0);
-	err = send_instruction(motor, STEPPER_UIM2852_CW_IC, data, dl);
-	if (err != ESP_OK)
-		return err;
-
 	// Set default motion parameters (accel/decel used as safety limits for PT mode)
 	err = stepper_motor_uim2852_set_accel(motor, motor->config.default_accel);
 	if (err != ESP_OK)
@@ -357,8 +350,8 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	if (err != ESP_OK)
 		return err;
 
-	// CW 0x22: set frame execution time (MP[4]=0)
-	const uint8_t cw22_time_data[3] = {0x04, 0x00, 0x00};
+	// CW 0x22: set frame execution time (MP[4]=100)
+	const uint8_t cw22_time_data[3] = {0x04, 0x64, 0x00};
 	err = send_instruction(motor, 0x22, cw22_time_data, 3);
 	if (err != ESP_OK)
 		return err;
@@ -524,6 +517,7 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 	// unsolicited frames (status polls, notifications, errors), accept
 	// on any instance — the caller's !matched guard prevents duplicates.
 	uint8_t cw_base_peek = stepper_uim2852_cw_base(cw);
+
 	bool is_unsolicited = (cw_base_peek == STEPPER_UIM2852_CW_MS ||
 	                       cw_base_peek == STEPPER_UIM2852_CW_NOTIFY ||
 	                       cw_base_peek == STEPPER_UIM2852_CW_ER);
@@ -659,6 +653,7 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 				{
 					taskENTER_CRITICAL(&motor->lock);
 					motor->status.error_detected = true;
+					motor->last_error = error;
 					taskEXIT_CRITICAL(&motor->lock);
 					ESP_LOGE(TAG, "Node %u: Error 0x%02X on CW=0x%02X[%u]", motor->config.node_id, error.error_code,
 					         error.related_cw, error.subindex);
