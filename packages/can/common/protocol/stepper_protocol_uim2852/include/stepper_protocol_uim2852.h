@@ -25,7 +25,7 @@ extern "C"
 //   CAN_ID = (SID << 18) | EID
 //
 // For responses (Motor -> Host):
-//   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 1) & 0x001F)
+//   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 6) & 0x001F)
 //   CW = EID & 0x00FF
 // ============================================================================
 
@@ -74,7 +74,7 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 		return false;
 
 	if (producer_id)
-		*producer_id = ((eid >> 11) & 0x0060) | ((sid >> 1) & 0x001F);
+		*producer_id = ((eid >> 11) & 0x0060) | ((sid >> 6) & 0x001F);
 	if (cw)
 		*cw = eid & 0x00FF;
 	return true;

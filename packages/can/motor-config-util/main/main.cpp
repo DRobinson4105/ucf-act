@@ -679,5 +679,18 @@ extern "C" void app_main(void)
 	}
 	ESP_LOGI(TAG, "========================================");
 
+	// Send SY frame (0x7E) with D0=1 to reboot and save all parameter values.
+	// Addressed to the motor node we just configured (consumer_id from MOTORS[0]).
+	{
+		uint8_t motor_id = MOTORS[0];
+		uint8_t sy_data[1] = {0x01};
+		ESP_LOGI(TAG, "Sending reboot+save command (SY frame, D0=1) to node %d...", motor_id);
+		esp_err_t sy_err = send_frame(motor_id, STEPPER_UIM2852_CW_SY, sy_data, 1);
+		if (sy_err == ESP_OK)
+			ESP_LOGI(TAG, "Reboot+save command sent");
+		else
+			ESP_LOGE(TAG, "Failed to send reboot+save command: %s", esp_err_to_name(sy_err));
+	}
+
 	twai_deinit();
 }

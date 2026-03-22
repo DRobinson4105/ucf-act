@@ -1353,26 +1353,6 @@ void send_control_heartbeat(void)
 		g_can_tx_in_flight--;
 	taskEXIT_CRITICAL(&g_can_tx_lock);
 
-#ifdef CONFIG_LOG_CAN_HEARTBEAT_TX
-	if (err != ESP_OK)
-	{
-		if (!g_hb_tx_failing)
-		{
-			ESP_LOGE(TAG_TX, "Heartbeat TX failing: %s", esp_err_to_name(err));
-			g_hb_tx_failing = true;
-		}
-	}
-	else
-	{
-		if (g_hb_tx_failing)
-		{
-			ESP_LOGI(TAG_TX, "Heartbeat TX recovered");
-			g_hb_tx_failing = false;
-		}
-		ESP_LOGI(TAG_TX, "HB TX: seq=%u state=%s fault=%s flags=0x%02X", seq, node_state_to_string(state),
-		         node_fault_to_string(fault_code), heartbeat_flags);
-	}
-#endif
 	track_can_tx(err);
 }
 
@@ -1845,10 +1825,6 @@ void can_rx_task(void *param)
 			g_cmd.braking_cmd = (int16_t)((3 - (int32_t)cmd.braking_position) * 28000 / 3);
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
-#ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
-			ESP_LOGI(TAG_RX, "CMD: thr=%d steer=%d brake=%d seq=%u", throttle_level, cmd.steering_position,
-			         cmd.braking_position, cmd.sequence);
-#endif
 		}
 
 		// Process Safety heartbeat (0x100)
@@ -1870,10 +1846,6 @@ void can_rx_task(void *param)
 
 			heartbeat_monitor_update(&g_hb_monitor, g_node_safety, hb.sequence, new_target);
 
-#ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
-			ESP_LOGI(TAG_RX, "Safety HB RX: seq=%u target=%s fault=%s", hb.sequence, node_state_to_string(new_target),
-			         node_fault_to_string(fault_code));
-#endif
 		}
 	}
 }
@@ -1990,19 +1962,11 @@ void control_task(void *param)
 			if (planner_age > PLANNER_CMD_TIMEOUT)
 			{
 				planner_cmd_stale = true;
-#ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
-				ESP_LOGI(TAG, "Planner command timeout (%lu ms), zeroing throttle",
-				         (unsigned long)(planner_age * portTICK_PERIOD_MS));
-#endif
 			}
 			// Stale sequence: same sequence seen PLANNER_CMD_STALE_COUNT times
 			else if (cmd_local.planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT)
 			{
 				planner_cmd_stale = true;
-#ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
-				ESP_LOGI(TAG, "Planner command stale (seq=%u repeated %u times), zeroing throttle",
-				         cmd_local.planner_cmd_last_seq, cmd_local.planner_cmd_stale_count);
-#endif
 			}
 		}
 
@@ -2111,7 +2075,6 @@ void control_task(void *param)
 		}
 		if (step.actions & CONTROL_ACTION_COMPLETE_ENABLE)
 		{
-			static uint8_t s_pt_start_fail_count = 0;
 			bool steppers_ready_for_enable = true;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
 			steppers_ready_for_enable = steppers_ready_for_enable && g_stepper_steering_ready;
@@ -2134,27 +2097,14 @@ void control_task(void *param)
 			{
 				execute_complete_enable();
 #if !defined(CONFIG_BYPASS_ACTUATOR_MULTIPLEXER)
-				// If complete_enable failed, mux remains non-autonomous.
+				// If complete_enable failed, mux remains non-autonomous — keep retrying.
 				if (!multiplexer_dg408djz_is_autonomous())
 				{
-					++s_pt_start_fail_count;
-					if (s_pt_start_fail_count < 5)
-					{
-						step.new_state = NODE_STATE_ENABLE;
-						step.new_fault_code = NODE_FAULT_NONE;
-						step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
-						step.heartbeat_flags =
-							(heartbeat_flags_t)(step.heartbeat_flags & ~HEARTBEAT_FLAG_ENABLE_COMPLETE);
-					}
-					else
-					{
-						ESP_LOGE(TAG, "Begin motion failed %u times — giving up", s_pt_start_fail_count);
-						s_pt_start_fail_count = 0;
-					}
-				}
-				else
-				{
-					s_pt_start_fail_count = 0;
+					step.new_state = NODE_STATE_ENABLE;
+					step.new_fault_code = NODE_FAULT_NONE;
+					step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
+					step.heartbeat_flags =
+						(heartbeat_flags_t)(step.heartbeat_flags & ~HEARTBEAT_FLAG_ENABLE_COMPLETE);
 				}
 #endif
 			}
@@ -2200,16 +2150,6 @@ void control_task(void *param)
 			{
 				step.new_last_steering = last_steering_sent; // keep old value on failure
 			}
-#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-			if (err != ESP_OK)
-			{
-				ESP_LOGI(TAG_TX, "Steering cmd failed: %s", esp_err_to_name(err));
-			}
-			else
-			{
-				ESP_LOGI(TAG_TX, "Steering -> %d", step.steering_position);
-			}
-#endif
 			track_can_tx(err);
 		}
 #endif
@@ -2221,16 +2161,6 @@ void control_task(void *param)
 			{
 				step.new_last_braking = last_braking_sent; // keep old value on failure
 			}
-#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-			if (err != ESP_OK)
-			{
-				ESP_LOGI(TAG_TX, "Braking cmd failed: %s", esp_err_to_name(err));
-			}
-			else
-			{
-				ESP_LOGI(TAG_TX, "Braking -> %d", step.braking_position);
-			}
-#endif
 			track_can_tx(err);
 		}
 #endif

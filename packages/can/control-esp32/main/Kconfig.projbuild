@@ -134,30 +134,53 @@ menu "Debug Logging"
 
     menu "CAN Traffic"
 
-        config LOG_CAN_HEARTBEAT_TX
-            bool "Log CAN heartbeat TX: every frame"
+        config LOG_CAN_FRAMES
+            bool "Log raw CAN frames (TX and RX)"
             default n
             help
-                Log every successful heartbeat TX frame and every per-tick
-                TX failure. Without this option, only the first failure and
-                first recovery are logged (edge-triggered).
+                Log every CAN frame at the TWAI driver layer — the lowest
+                possible level. For each TX: identifier, DLC, all data bytes,
+                and the transmit result. For each RX: frame type (std/ext),
+                identifier, DLC, and all data bytes. Very verbose — expect
+                one line per frame sent or received. Use for low-level CAN
+                bus debugging.
 
-        config LOG_CAN_HEARTBEAT_RX
-            bool "Log CAN heartbeat RX: every frame"
+        config LOG_CAN_FRAMES_MOTORS_ONLY
+            bool "Log stepper motor frames only (suppress all standard frames)"
             default n
+            depends on LOG_CAN_FRAMES
             help
-                Log every received Safety heartbeat with sequence, target state,
-                and fault code. Very verbose (10 msgs/sec). For edge-triggered
-                Safety target/fault change logs, use the separate option under
-                Control Logic instead.
+                Only log extended CAN frames. In this system all extended
+                frames are stepper motor traffic (steering node 7, braking
+                node 6); all standard frames (heartbeats, planner commands)
+                are suppressed. Overrides the individual heartbeat suppress
+                options below.
 
-        config LOG_CAN_PLANNER_COMMAND_RX
-            bool "Log Planner command RX: every frame"
+        config LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB
+            bool "Suppress Safety heartbeat frames (0x100) from frame log"
             default n
+            depends on LOG_CAN_FRAMES
             help
-                Log every received Planner command with throttle, steering,
-                braking, and sequence number. Very verbose when Planner is
-                actively sending commands.
+                Exclude Safety ESP32 heartbeat frames (CAN ID 0x100) from
+                the raw frame log. Useful when Safety is healthy and its
+                10 Hz heartbeat is flooding the output.
+
+        config LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB
+            bool "Suppress Planner heartbeat frames (0x110) from frame log"
+            default n
+            depends on LOG_CAN_FRAMES
+            help
+                Exclude Planner heartbeat frames (CAN ID 0x110) from the
+                raw frame log.
+
+        config LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB
+            bool "Suppress Control heartbeat frames (0x120) from frame log"
+            default n
+            depends on LOG_CAN_FRAMES
+            help
+                Exclude Control ESP32 heartbeat frames (CAN ID 0x120) from
+                the raw frame log. Useful to mute self-generated heartbeats
+                when debugging inbound traffic.
 
     endmenu
 
@@ -347,25 +370,6 @@ menu "Debug Logging"
             default n
             help
                 Log pedal bypass relay energize/de-energize transitions.
-
-        config LOG_ACTUATOR_STEPPER_COMMAND_TX
-            bool "Log stepper position command TX"
-            default n
-            help
-                Log each steering/braking stepper absolute position command
-                sent over CAN, including failures.
-
-        config LOG_ACTUATOR_STEPPER_MOTION_TX
-            bool "Log stepper motion command TX"
-            default n
-            help
-                Log stepper motion commands (speed, acceleration).
-
-        config LOG_ACTUATOR_STEPPER_RX
-            bool "Log parsed stepper RX frames"
-            default n
-            help
-                Log parsed stepper motor response frames received over CAN.
 
     endmenu
 

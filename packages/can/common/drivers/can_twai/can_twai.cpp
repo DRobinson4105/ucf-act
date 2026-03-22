@@ -11,6 +11,46 @@ namespace
 const char *TAG = "CAN_TWAI";
 
 // Recovery timing constants
+// ============================================================================
+// Frame Log Helpers
+// ============================================================================
+#ifdef CONFIG_LOG_CAN_FRAMES
+
+// Returns true if a frame should be suppressed from the frame log.
+static inline bool can_log_suppressed(uint32_t id, bool extd)
+{
+	if (extd)
+		return false;
+#ifdef CONFIG_LOG_CAN_FRAMES_MOTORS_ONLY
+	return true; // suppress all standard frames
+#endif
+#ifdef CONFIG_LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB
+	if (id == 0x100) return true;
+#endif
+#ifdef CONFIG_LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB
+	if (id == 0x110) return true;
+#endif
+#ifdef CONFIG_LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB
+	if (id == 0x120) return true;
+#endif
+	return false;
+}
+
+// Decode a SimpleCAN 29-bit extended ID into producer_id and command word.
+// Mirrors stepper_uim2852_parse_can_id() without pulling in that header.
+// Returns true if the SID format is valid (bit 8 of SID must be set).
+static inline bool can_parse_ext_id(uint32_t can_id, uint8_t *producer_id, uint8_t *cw)
+{
+	uint16_t sid = (can_id >> 18) & 0x07FF;
+	uint32_t eid = can_id & 0x3FFFF;
+	if ((sid & 0x0100) == 0)
+		return false;
+	*producer_id = (uint8_t)(((eid >> 11) & 0x0060) | ((sid >> 6) & 0x001F));
+	*cw          = (uint8_t)(eid & 0x00FF);
+	return true;
+}
+
+#endif // CONFIG_LOG_CAN_FRAMES
 constexpr int RECOVERY_POLL_ITERATIONS = 25; // 25 iterations x 10ms = 250ms max
 constexpr int RECOVERY_POLL_INTERVAL_MS = 10;
 constexpr int RECOVERY_STOP_SETTLE_MS = 100;      // settle after twai_stop()
@@ -66,7 +106,15 @@ esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t t
 	for (int i = 0; i < 8; ++i)
 		msg.data[i] = data[i];
 
-	return twai_transmit(&msg, timeout);
+	esp_err_t err = twai_transmit(&msg, timeout);
+#ifdef CONFIG_LOG_CAN_FRAMES
+	if (!can_log_suppressed(identifier, false))
+		ESP_LOGI(TAG, "TX std  id=0x%03lX dlc=8 [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
+		         (unsigned long)identifier,
+		         data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+		         err == ESP_OK ? "ok" : esp_err_to_name(err));
+#endif
+	return err;
 }
 
 esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8_t dlc, TickType_t timeout)
@@ -85,7 +133,25 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
 	for (int i = 0; i < msg.data_length_code; ++i)
 		msg.data[i] = data[i];
 
-	return twai_transmit(&msg, timeout);
+	esp_err_t err = twai_transmit(&msg, timeout);
+#ifdef CONFIG_LOG_CAN_FRAMES
+	{
+		uint8_t prod = 0, cw = 0;
+		if (can_parse_ext_id(identifier, &prod, &cw))
+			ESP_LOGI(TAG, "TX ext  id=0x%08lX node=%u cw=0x%02X dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
+			         (unsigned long)identifier, prod, cw, msg.data_length_code,
+			         msg.data[0], msg.data[1], msg.data[2], msg.data[3],
+			         msg.data[4], msg.data[5], msg.data[6], msg.data[7],
+			         err == ESP_OK ? "ok" : esp_err_to_name(err));
+		else
+			ESP_LOGI(TAG, "TX ext  id=0x%08lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
+			         (unsigned long)identifier, msg.data_length_code,
+			         msg.data[0], msg.data[1], msg.data[2], msg.data[3],
+			         msg.data[4], msg.data[5], msg.data[6], msg.data[7],
+			         err == ESP_OK ? "ok" : esp_err_to_name(err));
+	}
+#endif
+	return err;
 }
 
 // ============================================================================
@@ -94,7 +160,34 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
 
 esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout)
 {
-	return twai_receive(msg, timeout);
+	esp_err_t err = twai_receive(msg, timeout);
+#ifdef CONFIG_LOG_CAN_FRAMES
+	if (err == ESP_OK && !can_log_suppressed(msg->identifier, msg->extd))
+	{
+		if (msg->extd)
+		{
+			uint8_t prod = 0, cw = 0;
+			if (can_parse_ext_id(msg->identifier, &prod, &cw))
+				ESP_LOGI(TAG, "RX ext  id=0x%08lX node=%u cw=0x%02X dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+				         (unsigned long)msg->identifier, prod, cw, msg->data_length_code,
+				         msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+				         msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
+			else
+				ESP_LOGI(TAG, "RX ext  id=0x%08lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+				         (unsigned long)msg->identifier, msg->data_length_code,
+				         msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+				         msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
+		}
+		else
+		{
+			ESP_LOGI(TAG, "RX std  id=0x%03lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+			         (unsigned long)msg->identifier, msg->data_length_code,
+			         msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+			         msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
+		}
+	}
+#endif
+	return err;
 }
 
 // ============================================================================
