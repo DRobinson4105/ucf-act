@@ -2,7 +2,7 @@
 
 CAN bus communication system for the autonomous golf cart, consisting of a Jetson AGX Orin (Planner), two ESP32-C6 microcontrollers (Control/Safety), and two UIM2852CA stepper motors (Steering/Braking).
 
-The Planner, Control, and Safety nodes share a unified heartbeat format, state enum, and fault code namespace over 1 Mbps CAN. Safety commands target states with NOT_READY/READY/ENABLE/ACTIVE, while Planner/Control report live local states (including OVERRIDE/FAULT):
+The Planner, Control, and Safety nodes share a unified heartbeat format, state enum, and cause channels over 1 Mbps CAN. Safety commands target states with NOT_READY/READY/ENABLE/ACTIVE. Non-fault stop inputs are carried in `stop_flags`; issues/timeouts are carried in `fault_code`.
 
 | Node                           | Role                                                         | Heartbeat ID |
 |--------------------------------|--------------------------------------------------------------|--------------|
@@ -16,7 +16,7 @@ Two UIM2852CA stepper motors (steering node 5, braking node 6) also share the bu
 
 | Topic                                                     | Location                                               |
 |-----------------------------------------------------------|--------------------------------------------------------|
-| Frame layouts, state codes, fault codes, flags            | [common/protocol/README.md](common/protocol/README.md) |
+| Frame layouts, state codes, fault codes, stop/status flags | [common/protocol/README.md](common/protocol/README.md) |
 | Control messages, pins, wiring, components                | [control-esp32/README.md](control-esp32/README.md)     |
 | Safety system state authority, e-stop logic, pins, wiring | [safety-esp32/README.md](safety-esp32/README.md)       |
 | Host-native unit tests                                    | [tests/README.md](tests/README.md)                     |

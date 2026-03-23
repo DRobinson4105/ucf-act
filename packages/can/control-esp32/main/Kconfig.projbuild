@@ -18,19 +18,17 @@ config THROTTLE_TEST_MODE
         Safety/Planner dependencies entirely.
 
         Useful for validating throttle hardware wiring on the cart
-        (DG408DJZ mux, SRD-05VDC throttle relay, JD-2912 pedal
-        bypass relay, F/R optocouplers, pedal ADC) without the full
-        system operational.
+        (MCP41HVX1 digipot, MY5NJ DPDT relay, F/R optocouplers,
+        pedal ADC) without the full system operational.
 
         Controls (via idf.py monitor or serial terminal):
-          0-7  Set throttle level
-          b    Toggle bypass relay (JD-2912)
-          t    Toggle throttle relay (SRD-05VDC)
+          0-7  Set throttle wiper (mapped to 0-255 range)
+          r    Toggle DPDT relay (MY5NJ)
           q    Quit (shutdown all actuators)
 
         Safety behavior: requires F/R not in Reverse to arm.
-        Disables throttle relay if F/R moves to Reverse or pedal
-        is pressed. Zeros throttle level if F/R is in Neutral.
+        Disables DPDT relay if F/R moves to Reverse or pedal
+        is pressed. Zeros throttle wiper if F/R is in Neutral.
         Auto-recovers when pedal is rearmed and F/R is not in
         Reverse.
 
@@ -50,7 +48,8 @@ menu "Test Bypasses"
             bool "Bypass Safety e-stop mirror: force clear"
             default n
             help
-                Ignore Safety e-stop fault code and force estop_fault_code=NONE
+                Ignore Safety stop/fault channels and force
+                safety_fault_code=NONE, safety_stop_flags=NONE
                 in Control task inputs and logs.
 
         config BYPASS_SAFETY_LIVENESS_CHECKS
@@ -100,17 +99,11 @@ menu "Test Bypasses"
 
     menu "Actuators"
 
-        config BYPASS_ACTUATOR_MULTIPLEXER
-            bool "Bypass multiplexer actuator"
+        config BYPASS_ACTUATOR_THROTTLE
+            bool "Bypass throttle actuator (digipot + DPDT relay)"
             default n
             help
-                Skip analog multiplexer and throttle relay control.
-
-        config BYPASS_ACTUATOR_PEDAL_RELAY
-            bool "Bypass pedal relay actuator"
-            default n
-            help
-                Skip pedal bypass relay control.
+                Skip MCP41HVX1 digital potentiometer and MY5NJ DPDT relay control.
 
         config BYPASS_ACTUATOR_STEPPER_STEERING
             bool "Bypass steering stepper actuator"
@@ -214,18 +207,18 @@ menu "Debug Logging"
                 Log each failed TWAI retry while TWAI is unavailable.
                 Rate-limited: first attempt + every 20th.
 
-        config LOG_RETRY_MULTIPLEXER
-            bool "Log multiplexer retry attempts"
+        config LOG_RETRY_DIGIPOT
+            bool "Log digipot retry attempts"
             default n
             help
-                Log each failed multiplexer re-initialization attempt.
+                Log each failed MCP41HVX1 digipot re-initialization attempt.
                 Rate-limited: first attempt + every 20th.
 
-        config LOG_RETRY_PEDAL_RELAY
-            bool "Log pedal relay retry attempts"
+        config LOG_RETRY_DPDT_RELAY
+            bool "Log DPDT relay retry attempts"
             default n
             help
-                Log each failed pedal-relay re-initialization attempt.
+                Log each failed MY5NJ DPDT relay re-initialization attempt.
                 Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_PEDAL_INPUT
@@ -359,17 +352,17 @@ menu "Debug Logging"
 
     menu "Actuators"
 
-        config LOG_ACTUATOR_MUX_LEVEL
-            bool "Log multiplexer level changes"
+        config LOG_ACTUATOR_DIGIPOT_WIPER
+            bool "Log digipot wiper changes"
             default n
             help
-                Log each DG408DJZ multiplexer level change.
+                Log each MCP41HVX1 digipot wiper position change.
 
-        config LOG_ACTUATOR_PEDAL_RELAY
-            bool "Log pedal relay state changes"
+        config LOG_ACTUATOR_DPDT_RELAY
+            bool "Log DPDT relay state changes"
             default n
             help
-                Log pedal bypass relay energize/de-energize transitions.
+                Log MY5NJ DPDT relay energize/de-energize transitions.
 
     endmenu
 
