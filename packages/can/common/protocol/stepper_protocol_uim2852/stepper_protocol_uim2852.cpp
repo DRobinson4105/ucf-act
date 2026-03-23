@@ -187,24 +187,6 @@ static uint8_t build_idx_s32(uint8_t *data, uint8_t index, int32_t value)
 	return 5;
 }
 
-/**
- * @brief Build a frame with two packed 32-bit values (DL=8, d0-d3 + d4-d7).
- *
- * Used for PT/QF commands that carry a position-time pair.
- *
- * @param data  [out] Frame data buffer (at least 8 bytes)
- * @param a     First 32-bit value (packed at d0-d3)
- * @param b     Second 32-bit value (packed at d4-d7)
- * @return Data length (8)
- */
-static uint8_t build_val32_pair(uint8_t *data, int32_t a, int32_t b)
-{
-	memset(data, 0, 8);
-	pack_le32(&data[0], a);
-	pack_le32(&data[4], b);
-	return 8;
-}
-
 // ============================================================================
 // Frame Building Functions
 // ============================================================================
@@ -340,7 +322,6 @@ uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t valu
 {
 	return build_idx_u16(data, index, value);
 }
-
 
 uint8_t stepper_uim2852_build_ml(uint8_t *data)
 {

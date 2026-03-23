@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "multiplexer_dg408djz.cpp"
+    SRCS "relay_dpdt_my5nj.cpp"
     INCLUDE_DIRS "include"
     REQUIRES driver
 )

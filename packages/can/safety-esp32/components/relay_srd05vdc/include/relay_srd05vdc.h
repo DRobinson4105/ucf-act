@@ -29,7 +29,6 @@ extern "C"
 //
 // Usage:
 //   - Safety ESP32: power relay (24V autonomous rail to stepper motors)
-//   - Control ESP32: throttle relay (switches Curtis throttle source)
 //
 // Safety:
 //   - Default state is OFF (de-energized)

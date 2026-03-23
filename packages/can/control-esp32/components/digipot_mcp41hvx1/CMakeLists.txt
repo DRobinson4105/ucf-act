@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "gpio_input.cpp"
+    SRCS "digipot_mcp41hvx1.cpp"
     INCLUDE_DIRS "include"
     REQUIRES driver
 )

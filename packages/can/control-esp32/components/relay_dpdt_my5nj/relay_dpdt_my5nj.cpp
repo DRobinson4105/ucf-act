@@ -1,21 +1,21 @@
 /**
- * @file relay_jd2912.cpp
- * @brief JD-2912 automotive relay driver implementation (via S8050 NPN transistor).
+ * @file relay_dpdt_my5nj.cpp
+ * @brief MY5NJ DPDT relay driver implementation (24V coil via 2N5551 NPN transistor).
  */
-#include "relay_jd2912.h"
+#include "relay_dpdt_my5nj.h"
 
 #include "esp_log.h"
 
 namespace
 {
 
-const char *TAG = "RELAY";
+const char *TAG = "DPDT_RELAY";
 
 // ============================================================================
 // Module State
 // ============================================================================
 
-relay_jd2912_config_t s_config = {};
+relay_dpdt_my5nj_config_t s_config = {};
 bool s_initialized = false;
 
 /**
@@ -45,7 +45,7 @@ esp_err_t set_and_verify_level(int level)
 // Initialization
 // ============================================================================
 
-esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config)
+esp_err_t relay_dpdt_my5nj_init(const relay_dpdt_my5nj_config_t *config)
 {
 	if (!config)
 		return ESP_ERR_INVALID_ARG;
@@ -70,7 +70,7 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config)
 	if (err != ESP_OK)
 		return err;
 
-	// Start de-energized - pedal microswitch operates normally
+	// Start de-energized - manual pedal control, no microswitch bypass
 	err = set_and_verify_level(0);
 	if (err != ESP_OK)
 		return err;
@@ -84,7 +84,7 @@ esp_err_t relay_jd2912_init(const relay_jd2912_config_t *config)
 // Relay Control
 // ============================================================================
 
-esp_err_t relay_jd2912_energize(void)
+esp_err_t relay_dpdt_my5nj_energize(void)
 {
 	if (!s_initialized)
 	{
@@ -96,13 +96,13 @@ esp_err_t relay_jd2912_energize(void)
 	if (err != ESP_OK)
 		return err;
 
-#ifdef CONFIG_LOG_ACTUATOR_PEDAL_RELAY
-	ESP_LOGI(TAG, "ENERGIZED (pedal bypass active)");
+#ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY
+	ESP_LOGI(TAG, "ENERGIZED (throttle source: digipot, pedal bypass: active)");
 #endif
 	return ESP_OK;
 }
 
-esp_err_t relay_jd2912_deenergize(void)
+esp_err_t relay_dpdt_my5nj_deenergize(void)
 {
 	if (!s_initialized)
 		return ESP_ERR_INVALID_STATE;
@@ -111,13 +111,13 @@ esp_err_t relay_jd2912_deenergize(void)
 	if (err != ESP_OK)
 		return err;
 
-#ifdef CONFIG_LOG_ACTUATOR_PEDAL_RELAY
-	ESP_LOGI(TAG, "DE-ENERGIZED (normal pedal operation)");
+#ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY
+	ESP_LOGI(TAG, "DE-ENERGIZED (throttle source: pedal, pedal bypass: normal)");
 #endif
 	return ESP_OK;
 }
 
-bool relay_jd2912_is_energized(void)
+bool relay_dpdt_my5nj_is_energized(void)
 {
 	if (!s_initialized)
 		return false;
