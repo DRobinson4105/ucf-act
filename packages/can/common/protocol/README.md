@@ -4,7 +4,11 @@ CAN bus protocol definitions shared between all nodes. Standard frames use 11-bi
 
 ## Architecture
 
-Three nodes share a unified state/fault enum and an identical heartbeat format (`node_heartbeat_t`). Safety ESP32 is the system state authority and commands target state using NOT_READY/READY/ENABLE/ACTIVE. Planner and Control own live-state transitions and can enter OVERRIDE or FAULT locally for immediate safety.
+Three nodes share a unified state enum and an identical heartbeat format (`node_heartbeat_t`). Safety ESP32 is the system state authority and commands target state using NOT_READY/READY/ENABLE/ACTIVE.
+
+Cause reporting is split into two heartbeat channels:
+- `stop_flags` (`NODE_STOP_*`): non-fault stop inputs (button, remote, obstacle, app request, operator intervention)
+- `fault_code` (`NODE_FAULT_*`): issues/timeouts (Safety bitmask, Planner/Control scalar issue)
 
 | Node                      | Role                                                                   |
 |---------------------------|------------------------------------------------------------------------|
@@ -16,7 +20,7 @@ Three nodes share a unified state/fault enum and an identical heartbeat format (
 
 | Range           | Node             | Description                                     |
 |-----------------|------------------|-------------------------------------------------|
-| 0x100-0x10F     | Safety ESP32     | Heartbeat (system target state + e-stop reason) |
+| 0x100-0x10F     | Safety ESP32     | Heartbeat (system target state + stop/fault channels) |
 | 0x110-0x11F     | Planner          | Heartbeat and commands                          |
 | 0x120-0x12F     | Control ESP32    | Heartbeat                                       |
 | Extended 29-bit | UIM2852CA Motors | SimpleCAN protocol (steering=5, braking=6)      |
@@ -27,10 +31,10 @@ Three nodes share a unified state/fault enum and an identical heartbeat format (
 
 | ID    | Name              | Sender  | Receiver         | Rate              | Description                                   |
 |-------|-------------------|---------|------------------|-------------------|-----------------------------------------------|
-| 0x100 | SAFETY_HEARTBEAT  | Safety  | Control, Planner | 100ms + on change | System target state, e-stop fault code        |
-| 0x110 | PLANNER_HEARTBEAT | Planner | Safety           | 100ms             | Planner alive signal (seq, state, fault_code, flags) |
+| 0x100 | SAFETY_HEARTBEAT  | Safety  | Control, Planner | 100ms + on change | System target state, `fault_code`, `stop_flags` |
+| 0x110 | PLANNER_HEARTBEAT | Planner | Safety           | 100ms             | Planner alive signal (seq, state, fault_code, status_flags) |
 | 0x111 | PLANNER_COMMAND   | Planner | Control          | Continuous        | Throttle, steering, braking commands          |
-| 0x120 | CONTROL_HEARTBEAT | Control | Safety           | 100ms + on change | Control alive signal (seq, state, fault_code, flags) |
+| 0x120 | CONTROL_HEARTBEAT | Control | Safety           | 100ms + on change | Control alive signal (seq, state, fault_code, stop_flags, status_flags) |
 
 All three heartbeats use the same `node_heartbeat_t` struct and `can_encode_heartbeat()`/`can_decode_heartbeat()` functions.
 
@@ -53,9 +57,9 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 |------|------------|-------|--------------------------------------------------------------------------------------|
 | 0    | sequence   | uint8 | Rolling counter 0-255                                                                |
 | 1    | state      | uint8 | NODE_STATE_* (Safety heartbeat commands NOT_READY/READY/ENABLE/ACTIVE target states) |
-| 2    | fault_code | uint8 | NODE_FAULT_* (Safety: e-stop reason, 0 when safe)                                    |
-| 3    | flags      | uint8 | HEARTBEAT_FLAG_* bitmask                                                             |
-| 4    | fr_state   | uint8 | FR_STATE_* (Control only; Safety/Planner set to 0)                                   |
+| 2    | fault_code | uint8 | NODE_FAULT_* (Safety fault bitmask, Planner/Control scalar issue)                   |
+| 3    | status_flags | uint8 | NODE_STATUS_FLAG_* bitmask                                                    |
+| 4    | stop_flags | uint8 | NODE_STOP_* bitmask (non-fault stop causes)                                          |
 | 5-7  | reserved   | -     | Zero-filled                                                                          |
 
 ### Planner Command (0x111)
@@ -63,15 +67,15 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 | Byte | Field    | Type     | Description                        |
 |------|----------|----------|------------------------------------|
 | 0    | sequence | uint8    | Rolling counter 0-255              |
-| 1    | throttle | uint8    | Throttle level 0-7                 |
-| 2    | steering_msb | uint8 | Steering high byte (MSB) for steering command 0-720 |
-| 3    | steering_lsb | uint8 | Steering low byte (LSB) for steering command 0-720  |
-| 4    | braking  | uint8    | Braking command                    |
-| 5-7  | reserved | -        | Unused (Planner currently sends DLC=5) |
+| 1    | throttle | uint8    | Throttle level 0-255               |
+| 2    | steer_hi | uint8    | Steering MSB (0-720)               |
+| 3    | steer_lo | uint8    | Steering LSB (0-720)               |
+| 4    | braking  | uint8    | Braking value                      |
+| 5-7  | reserved | -        | Zero-filled                        |
 
 ## Unified Node States (NODE_STATE_*)
 
-All nodes share the same state enum. Safety heartbeat commands NOT_READY/READY/ENABLE/ACTIVE target states; nodes report live states and may enter OVERRIDE/FAULT locally.
+All nodes share the same state enum. Safety heartbeat commands NOT_READY/READY/ENABLE/ACTIVE target states; nodes report live state using the same byte.
 
 | Code | State     | Description                                                   |
 |------|-----------|---------------------------------------------------------------|
@@ -80,31 +84,28 @@ All nodes share the same state enum. Safety heartbeat commands NOT_READY/READY/E
 | 2    | READY     | Running/manual-safe and autonomy preconditions satisfied      |
 | 3    | ENABLE    | Preparing for autonomous (hardware settle / planning init)    |
 | 4    | ACTIVE    | Autonomous mode — processing/sending commands                 |
-| 5    | OVERRIDE  | Driver took over (local, immediate)                           |
-| 6    | FAULT     | Fault condition (local, immediate)                            |
 
-## Unified Fault Codes (NODE_FAULT_*)
+## Unified Cause Codes (NODE_FAULT_*)
 
 Two encoding modes in the same byte:
-- **E-stop bitmask (0x01-0x7F)**: Used only by Safety's heartbeat. Multiple bits can be set simultaneously.
-- **Scalar faults (0x80+)**: Used by Planner and Control heartbeats. One value at a time.
+- **Safety fault bitmask (0x01-0x3F)**: Used only by Safety heartbeat. Multiple bits can be set.
+- **Scalar issue causes (0x80+)**: Used by Planner/Control heartbeats (one value at a time).
 
-### E-stop bitmask (Safety heartbeat only)
+### Safety fault bitmask (Safety heartbeat only)
 
-Multiple conditions can be active at once. The fault_code byte is OR'd together. For example, button + remote = 0x01 | 0x02 = 0x03.
+Multiple fault conditions can be active at once; `fault_code` is OR'd together.
 
-| Bit | Code | Constant              | Trigger                              |
-|-----|------|-----------------------|--------------------------------------|
-| -   | 0x00 | NONE                  | No fault                             |
-| 0   | 0x01 | ESTOP_BUTTON          | Push button HB2-ES544 pressed        |
-| 1   | 0x02 | ESTOP_REMOTE          | RF remote EV1527 kill active         |
-| 2   | 0x04 | ESTOP_ULTRASONIC      | Ultrasonic A02YYUW obstacle or fault |
-| 3   | 0x08 | ESTOP_PLANNER         | Planner reported FAULT state         |
-| 4   | 0x10 | ESTOP_PLANNER_TIMEOUT | Planner heartbeat timeout (500ms)    |
-| 5   | 0x20 | ESTOP_CONTROL         | Control reported FAULT state         |
-| 6   | 0x40 | ESTOP_CONTROL_TIMEOUT | Control heartbeat timeout (500ms)    |
+| Bit | Code | Constant                           | Trigger                                |
+|-----|------|------------------------------------|----------------------------------------|
+| -   | 0x00 | NONE                               | No fault                               |
+| 0   | 0x01 | SAFETY_ULTRASONIC_UNHEALTHY        | Ultrasonic sensor unhealthy/timeout    |
+| 1   | 0x02 | SAFETY_PLANNER_ISSUE               | Planner reported scalar issue          |
+| 2   | 0x04 | SAFETY_PLANNER_TIMEOUT             | Planner heartbeat timeout (500ms)      |
+| 3   | 0x08 | SAFETY_CONTROL_ISSUE               | Control reported scalar issue          |
+| 4   | 0x10 | SAFETY_CONTROL_TIMEOUT             | Control heartbeat timeout (500ms)      |
+| 5   | 0x20 | SAFETY_RELAY_UNAVAILABLE           | Safety relay path unavailable          |
 
-### Planner faults (0x80-0x8F, scalar)
+### Planner issue causes (0x80-0x8F, scalar)
 
 | Code | Constant         | Description                            |
 |------|------------------|----------------------------------------|
@@ -113,7 +114,7 @@ Multiple conditions can be active at once. The fault_code byte is OR'd together.
 | 0x82 | PLANNING         | Path planner failure                   |
 | 0x83 | PLANNER_HARDWARE | Planner hardware issue (thermal, etc.) |
 
-### Control faults (0x90-0x9F, scalar)
+### Control scalar causes (0x90-0x9F)
 
 | Code | Constant       | Description                        |
 |------|----------------|------------------------------------|
@@ -123,28 +124,35 @@ Multiple conditions can be active at once. The fault_code byte is OR'd together.
 | 0x93 | SENSOR_INVALID | F/R sensor invalid reading         |
 | 0x94 | RELAY_INIT     | Relay initialization failed        |
 
+## Stop Flags (NODE_STOP_*)
+
+`stop_flags` carries non-fault stop inputs. Multiple bits can be set.
+
+| Bit | Code | Constant                 | Trigger                                      |
+|-----|------|--------------------------|----------------------------------------------|
+| -   | 0x00 | NONE                     | No stop input                                |
+| 0   | 0x01 | PUSH_BUTTON              | Safety push button pressed                   |
+| 1   | 0x02 | REMOTE                   | Safety RF remote kill active                 |
+| 2   | 0x04 | ULTRASONIC_OBSTACLE      | Safety ultrasonic obstacle detected          |
+| 3   | 0x08 | APP_REQUEST              | Planner/app requested autonomy stop          |
+| 4   | 0x10 | OPERATOR_PEDAL           | Control pedal intervention                   |
+| 5   | 0x20 | OPERATOR_FR              | Control F/R intervention                     |
+| 6   | 0x40 | OPERATOR_STEER           | Control steering intervention                |
+| 7   | 0x80 | OPERATOR_BRAKE           | Control braking intervention                 |
+
 ### General
 
 | Code | Constant | Description       |
 |------|----------|-------------------|
-| 0xFF | GENERAL  | Unspecified fault |
+| 0xFF | GENERAL  | Unspecified issue |
 
-## Heartbeat Flags
+## Heartbeat Status Flags
 
 | Bit | Flag             | Description                                                                                                                             |
 |-----|------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
 | 0   | ENABLE_COMPLETE  | Node finished ENABLE, ready for ACTIVE                                                                                                  |
 | 1   | AUTONOMY_REQUEST | Planner requests autonomy enable (READY -> ENABLE gate) and keeps it asserted while autonomy should remain active (drop = halt retreat) |
-| 2   | RESERVED         | Reserved (legacy ENABLE_READY bit; ignored)                                                                                             |
-
-## F/R Switch States (FR_STATE_*)
-
-| Code | State   | Description                  |
-|------|---------|------------------------------|
-| 0    | NEUTRAL | Switch in neutral            |
-| 1    | FORWARD | Switch in forward            |
-| 2    | REVERSE | Switch in reverse            |
-| 3    | INVALID | Buzzer active without anti-arc (reverse pre-bypass, wiring fault post-bypass) |
+| 2   | RESERVED         | Reserved                                                                                                                                |
 
 ## Override Reasons (OVERRIDE_REASON_*)
 

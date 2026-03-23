@@ -65,7 +65,7 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon, const char *name, uint3
 // Runtime Updates
 // ============================================================================
 
-void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, heartbeat_seq_t sequence, node_state_t state)
+void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, node_seq_t sequence, node_state_t state)
 {
 	if (!mon || node_id < 0)
 		return;

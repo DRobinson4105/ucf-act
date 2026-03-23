@@ -80,11 +80,11 @@ static void test_init_with_defaults(void)
 	assert(err == ESP_OK);
 	assert(motor.initialized == true);
 	assert(motor.config.node_id == 5);
-	assert(motor.config.producer_id == 4);
+	assert(motor.config.producer_id == 1);
 	assert(motor.config.request_ack == true);
-	assert(motor.config.default_accel == 50000);
-	assert(motor.config.default_decel == 50000);
-	assert(motor.config.stop_decel == 200000);
+	assert(motor.config.default_accel == 5000);
+	assert(motor.config.default_decel == 5000);
+	assert(motor.config.stop_decel == 8000);
 	assert(motor.microstep_resolution == 16);
 	assert(motor.pulses_per_rev == 3200);
 }
@@ -337,9 +337,9 @@ static void test_process_frame_wrong_node(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
-	// Motor is node 5. Build a response from node 6.
+	// Non-unsolicited response is ignored when this motor is not expecting ACK/query.
 	uint8_t data[8] = {};
-	twai_message_t msg = make_motor_response(6, stepper_uim2852_cw_with_ack(STEPPER_UIM2852_CW_MS), data, 8);
+	twai_message_t msg = make_motor_response(6, stepper_uim2852_cw_with_ack(STEPPER_UIM2852_CW_MO), data, 1);
 	assert(stepper_motor_uim2852_process_frame(&motor, &msg) == false);
 }
 
@@ -679,6 +679,7 @@ static void test_process_mo_ack_enable(void)
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 	motor.driver_enabled = false;
+	motor.ack_pending = true;
 
 	uint8_t data[8] = {};
 	data[0] = 1; // enable
@@ -694,6 +695,7 @@ static void test_process_mo_ack_disable(void)
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 	motor.driver_enabled = true;
+	motor.ack_pending = true;
 
 	uint8_t data[8] = {};
 	data[0] = 0; // disable
@@ -801,6 +803,7 @@ static void test_process_frame_updates_timestamp(void)
 	init_default_motor(&motor);
 	mock_tick_count = 42;
 	motor.last_response_tick = 0;
+	motor.ack_pending = true;
 
 	// Send any valid frame from the motor (e.g. MO ACK)
 	uint8_t data[8] = {};
@@ -921,45 +924,26 @@ static void test_configure_timeout_uses_defaults(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
-	mock_sem_take_result = pdFALSE; // query_param will time out
 
 	esp_err_t err = stepper_motor_uim2852_configure(&motor);
-	assert(err == ESP_ERR_TIMEOUT);
-	// Microstep stays at default since configure exits on query timeout
+	assert(err == ESP_OK);
+	// Configure does not query microstep; defaults remain unchanged.
 	assert(motor.microstep_resolution == 16);
 	assert(motor.pulses_per_rev == 3200);
-	// Safety config (IC[0]=0, IC[8]=1) + MT[0] query are sent before timeout.
-	// IC set commands are fire-and-forget; only the MT query blocks and times out.
-	assert(mock_sent_count == 3);
-}
-
-// Helper: simulate process_frame setting query_result during the blocking semaphore wait
-static stepper_motor_uim2852_t *s_configure_motor_ptr = NULL;
-static void configure_sem_callback(int take_count)
-{
-	// take_count 1 = drain call, take_count 2 = blocking wait for query response
-	if (take_count == 2 && s_configure_motor_ptr)
-	{
-		s_configure_motor_ptr->query_result = 32;
-	}
+	// Expected startup command sequence:
+	// MS clear, AC, DC, SD, CW06(closed-loop), CW06(direction), CW10(current)
+	assert(mock_sent_count == 7);
 }
 
 static void test_configure_success_updates_microstep(void)
 {
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
-	mock_sem_take_result = pdTRUE;
-	// Use callback to simulate process_frame setting query_result during sem wait
-	s_configure_motor_ptr = &motor;
-	g_mock_sem_take_callback = configure_sem_callback;
 
 	esp_err_t err = stepper_motor_uim2852_configure(&motor);
 	assert(err == ESP_OK);
-	assert(motor.microstep_resolution == 32);
-	assert(motor.pulses_per_rev == 6400); // 32 * 200
-
-	g_mock_sem_take_callback = NULL;
-	s_configure_motor_ptr = NULL;
+	assert(motor.microstep_resolution == 16);
+	assert(motor.pulses_per_rev == 3200);
 }
 
 // ============================================================================

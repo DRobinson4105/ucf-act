@@ -59,7 +59,7 @@ typedef struct
 	TickType_t timeout_ticks;
 	TickType_t last_seen;
 	bool seen_heartbeat;
-	heartbeat_seq_t last_sequence;
+	node_seq_t last_sequence;
 	node_state_t last_state;
 	bool active;
 	bool alive;
@@ -132,7 +132,7 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon, const char *name, uint3
  * @param sequence  Heartbeat sequence number from the CAN frame
  * @param state     Node state reported in the heartbeat
  */
-void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, heartbeat_seq_t sequence, node_state_t state);
+void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, node_seq_t sequence, node_state_t state);
 
 /**
  * @brief Check all registered nodes for heartbeat timeout.

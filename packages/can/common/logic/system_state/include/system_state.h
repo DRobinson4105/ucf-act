@@ -3,9 +3,7 @@
  * @brief Pure decision logic for Safety ESP32 system state machine.
  *
  * The Safety ESP32 is the system target-state authority — it advances only
- * NOT_READY -> READY -> ENABLE -> ACTIVE. Any node can report OVERRIDE or FAULT as a
- * local live state for immediate safety; Safety reacts by pulling target back
- * to NOT_READY.
+ * NOT_READY -> READY -> ENABLE -> ACTIVE.
  *
  * This module is a pure function library with no hardware dependencies,
  * allowing comprehensive unit testing on the host.
@@ -36,8 +34,8 @@ typedef struct
 	uint32_t boot_start_ms;
 	uint32_t init_dwell_ms;
 
-	// E-stop evaluation result (from safety_logic)
-	bool estop_active;
+	// Stop/fault evaluation result (from safety_logic)
+	bool stop_active;
 
 	// Node actual states (from heartbeats)
 	node_state_t planner_state;
@@ -47,16 +45,21 @@ typedef struct
 	bool planner_alive;
 	bool control_alive;
 
-	// Enable completion flags (from heartbeat flags field)
+	// Enable completion flags (from heartbeat status_flags field)
 	bool planner_enable_complete;
 	bool control_enable_complete;
 
-	// Planner/Orin autonomy-enable request gate (from Planner heartbeat flags)
+	// Planner/Orin autonomy-enable request gate (from Planner heartbeat status_flags)
 	bool autonomy_request;
 
-	// Planner/Orin autonomy hold level (from Planner heartbeat flags level).
+	// Planner/Orin autonomy hold level (from Planner heartbeat status_flags level).
 	// If this drops while target is ENABLE or ACTIVE, Safety retreats target.
 	bool autonomy_hold;
+
+	// True only for a short window right after Safety first enters ACTIVE.
+	// During this grace period, nodes are allowed to still report ENABLE
+	// while they consume the new ACTIVE target and switch their live state.
+	bool active_entry_grace;
 } system_state_inputs_t;
 
 // ============================================================================
@@ -82,14 +85,22 @@ typedef struct
  * Given the current target, e-stop status, and node states/flags, determine
  * what the new target state should be.
  *
- * Transitions:
- *   - INIT -> NOT_READY: after init_dwell_ms has elapsed since boot_start_ms
- *   - NOT_READY -> READY: both nodes report READY, both alive, no e-stop
- *   - READY -> ENABLE: both nodes READY, Planner autonomy request asserted
- *   - ENABLE -> ACTIVE: both nodes ENABLE, both enable_complete, no e-stop
- *   - ENABLE/ACTIVE -> READY: Planner autonomy hold dropped and nodes still READY
- *   - ENABLE/ACTIVE -> NOT_READY: Planner autonomy hold dropped and nodes not READY
- *   - ANY target -> NOT_READY: e-stop active, node fault, node override, node timeout
+ * Evaluation order (highest priority first):
+ *   1) INIT dwell gate:
+ *      - While dwell has not elapsed, stay INIT.
+ *      - When dwell elapses, transition to READY if clear/alive/ready; else NOT_READY.
+ *   2) Problem retreat:
+ *      - Any non-INIT target retreats to NOT_READY on a problem
+ *        (e-stop asserted or node timeout/liveness loss).
+ *   3) Autonomy hold drop:
+ *      - In ENABLE/ACTIVE, if autonomy_hold drops, retreat to READY when both
+ *        nodes are READY, otherwise NOT_READY.
+ *   4) Forward path:
+ *      - NOT_READY -> READY when both nodes report READY.
+ *      - READY -> ENABLE when Planner autonomy request is asserted.
+ *      - ENABLE -> ACTIVE when both nodes report ENABLE and both set enable_complete.
+ *      - ACTIVE stays ACTIVE only when both nodes report ACTIVE
+ *        (ENABLE is accepted during active_entry_grace).
  *
  * @param inputs  All state machine inputs
  * @return New target state and whether it changed

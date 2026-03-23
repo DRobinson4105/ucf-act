@@ -17,7 +17,7 @@ static system_state_inputs_t default_inputs(void)
 		.now_ms = 0,
 		.boot_start_ms = 0,
 		.init_dwell_ms = 0,
-		.estop_active = false,
+		.stop_active = false,
 		.planner_state = NODE_STATE_READY,
 		.control_state = NODE_STATE_READY,
 		.planner_alive = true,
@@ -26,6 +26,7 @@ static system_state_inputs_t default_inputs(void)
 		.control_enable_complete = false,
 		.autonomy_request = false,
 		.autonomy_hold = true,
+		.active_entry_grace = false,
 	};
 	return in;
 }
@@ -36,6 +37,8 @@ static void test_init_dwell_holds_then_not_ready(void)
 	in.current_target = NODE_STATE_INIT;
 	in.boot_start_ms = 1000;
 	in.init_dwell_ms = 500;
+	in.planner_state = NODE_STATE_NOT_READY;
+	in.control_state = NODE_STATE_NOT_READY;
 
 	in.now_ms = 1499;
 	system_state_result_t r = system_state_step(&in);
@@ -45,6 +48,21 @@ static void test_init_dwell_holds_then_not_ready(void)
 	in.now_ms = 1500;
 	r = system_state_step(&in);
 	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_init_dwell_can_transition_to_ready(void)
+{
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_INIT;
+	in.boot_start_ms = 1000;
+	in.init_dwell_ms = 500;
+	in.now_ms = 1700;
+	in.planner_state = NODE_STATE_READY;
+	in.control_state = NODE_STATE_READY;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_READY);
 	assert(r.target_changed == true);
 }
 
@@ -160,7 +178,7 @@ static void test_hard_negative_retreats_to_not_ready(void)
 {
 	system_state_inputs_t in = default_inputs();
 	in.current_target = NODE_STATE_ACTIVE;
-	in.estop_active = true;
+	in.stop_active = true;
 
 	system_state_result_t r = system_state_step(&in);
 	assert(r.new_target == NODE_STATE_NOT_READY);
@@ -168,7 +186,7 @@ static void test_hard_negative_retreats_to_not_ready(void)
 
 	in = default_inputs();
 	in.current_target = NODE_STATE_ACTIVE;
-	in.control_state = NODE_STATE_FAULT;
+	in.control_alive = false;
 	r = system_state_step(&in);
 	assert(r.new_target == NODE_STATE_NOT_READY);
 	assert(r.target_changed == true);
@@ -178,6 +196,33 @@ static void test_active_stays_active_when_nominal(void)
 {
 	system_state_inputs_t in = default_inputs();
 	in.current_target = NODE_STATE_ACTIVE;
+	in.planner_state = NODE_STATE_ACTIVE;
+	in.control_state = NODE_STATE_ACTIVE;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_ACTIVE);
+	assert(r.target_changed == false);
+}
+
+static void test_active_retreats_when_node_not_active(void)
+{
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ACTIVE;
+	in.planner_state = NODE_STATE_ACTIVE;
+	in.control_state = NODE_STATE_ENABLE;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_active_grace_allows_enable_handoff(void)
+{
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ACTIVE;
+	in.active_entry_grace = true;
+	in.planner_state = NODE_STATE_ENABLE;
+	in.control_state = NODE_STATE_ACTIVE;
 
 	system_state_result_t r = system_state_step(&in);
 	assert(r.new_target == NODE_STATE_ACTIVE);
@@ -199,6 +244,7 @@ int main(void)
 	printf("=== system_state tests ===\n\n");
 
 	TEST(test_init_dwell_holds_then_not_ready);
+	TEST(test_init_dwell_can_transition_to_ready);
 	TEST(test_not_ready_to_ready_when_both_nodes_ready);
 	TEST(test_not_ready_stays_when_node_not_ready);
 	TEST(test_ready_to_enable_on_request);
@@ -210,6 +256,8 @@ int main(void)
 	TEST(test_autonomy_halt_active_to_not_ready_when_nodes_not_ready);
 	TEST(test_hard_negative_retreats_to_not_ready);
 	TEST(test_active_stays_active_when_nominal);
+	TEST(test_active_retreats_when_node_not_active);
+	TEST(test_active_grace_allows_enable_handoff);
 	TEST(test_unknown_target_retreats_to_not_ready);
 
 	TEST_REPORT();

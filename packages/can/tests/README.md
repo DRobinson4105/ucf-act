@@ -124,22 +124,23 @@ Tests the pure `safety_logic` module (e-stop bitmask evaluation, ultrasonic fail
 
 ### `test_control_logic.cpp`
 
-Tests the pure `control_logic` module (state machine, throttle slew, preconditions, fault injection, envelope clamping). 63 tests covering all public functions and every state machine branch.
+Tests the pure `control_logic` module (state machine, throttle slew, preconditions, fault injection, envelope clamping). 74 tests covering all public functions and every state machine branch.
 
 | Category                        | What it covers                                                                                          |
 |---------------------------------|---------------------------------------------------------------------------------------------------------|
-| State transitions (16)          | INIT/NOT_READY/READY/ENABLE/ACTIVE/OVERRIDE/FAULT transitions, precondition-driven readiness            |
-| Precondition checker (5)        | NULL returns ALL, FR not forward, pedal not rearmed, active fault, multiple combine as bitmask           |
+| State transitions (16)          | INIT/NOT_READY/READY/ENABLE/ACTIVE transitions, precondition-driven readiness, operator-stop retreat/recovery |
+| Precondition checker (7)        | NULL returns ALL, FR reverse/invalid/neutral, pedal not rearmed, active fault, multiple combine as bitmask |
 | Throttle slew (6)               | At target (no change), step up/down by 1, rate limited, NULL inputs, uint32 timer overflow               |
-| Command clamping (3)            | Below min, above max, in range                                                                          |
+| Command clamping (4)            | Below min, above max, in range, misconfigured (min > max) returns neutral                                |
 | INIT edge cases (2)             | Stays when dwell not expired, uint32 timer wrap still transitions                                       |
-| ENABLE abort (5)                | Safety retreat, FR not forward, timer not expired (stays), complete fires once, exact timer boundary     |
-| ACTIVE override (4)             | FR changed, steering error, braking error, safety retreat priority over pedal override                   |
-| ACTIVE throttle + steering (7)  | Slew applies APPLY_THROTTLE, at target no action, steering dedup (same skips, changed sends),           |
-|                                 | dedup reset always sends, unconfigured envelope forces neutral, envelope clamps out-of-range             |
+| ENABLE abort (6)                | Safety retreat, FR reverse, neutral doesn't abort, timer not expired (stays), complete fires once, exact timer boundary |
+| ACTIVE override (6)             | FR changed, neutral zeros throttle, neutral at zero no change, steering error, braking error, safety retreat priority |
+| ACTIVE throttle + steering (9)  | Slew applies APPLY_THROTTLE, at target no action, clamps to envelope, unconfigured forces neutral,      |
+|                                 | steering dedup (same skips, changed sends), braking dedup reset always sends,                            |
+|                                 | envelope unconfigured forces neutral, envelope clamps out-of-range                                       |
 | Motor fault injection (4)       | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), from READY (FAULT only), ignored if faulted |
-| FR_INVALID sensor fault (3)     | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), no re-trigger when already faulted          |
-| OVERRIDE recovery (2)           | Stays when pedal not rearmed, stays when FR not forward                                                  |
+| FR_INVALID sensor fault (5)     | From ACTIVE, from ENABLE, from NOT_READY (no fault), from READY (no fault), no re-trigger when faulted  |
+| OVERRIDE recovery (3)           | Stays when pedal not rearmed, stays when FR reverse, recovers when FR neutral                            |
 | FAULT recovery (3)              | MOTOR_COMM clears when motor OK, SENSOR_INVALID clears when FR valid, unknown fault stays with RECOVERY |
 | Target sanitization (1)         | Invalid target (0xFF) treated as NOT_READY, triggers safety retreat from ACTIVE                          |
 | Safe outputs (1)                | Override zeros throttle, resets stepper dedup trackers to sentinel                                       |

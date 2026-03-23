@@ -53,9 +53,10 @@ typedef uint8_t override_reason_t; // OVERRIDE_REASON_* values
 #define PRECONDITION_FAIL_PEDAL_PRESSED     0x02
 #define PRECONDITION_FAIL_PEDAL_NOT_REARMED 0x04
 #define PRECONDITION_FAIL_ACTIVE_FAULT      0x08
+#define PRECONDITION_FAIL_STOP_ACTIVE       0x10
 #define PRECONDITION_FAIL_ALL                                                                                  \
 	(PRECONDITION_FAIL_FR_IN_REVERSE | PRECONDITION_FAIL_PEDAL_PRESSED | PRECONDITION_FAIL_PEDAL_NOT_REARMED | \
-	 PRECONDITION_FAIL_ACTIVE_FAULT)
+	 PRECONDITION_FAIL_ACTIVE_FAULT | PRECONDITION_FAIL_STOP_ACTIVE)
 typedef uint8_t precondition_fail_t; // PRECONDITION_FAIL_* bitmask
 
 #define CONTROL_ACTION_NONE             0x0000
@@ -63,7 +64,6 @@ typedef uint8_t precondition_fail_t; // PRECONDITION_FAIL_* bitmask
 #define CONTROL_ACTION_COMPLETE_ENABLE  0x0002 // Finish enable (steppers on, throttle autonomous)
 #define CONTROL_ACTION_ABORT_ENABLE     0x0004 // Cancel enable (relay off, throttle disable)
 #define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008 // Emergency disable all actuators
-#define CONTROL_ACTION_ATTEMPT_RECOVERY 0x0010 // Try fault recovery
 #define CONTROL_ACTION_APPLY_THROTTLE   0x0020 // Update throttle actuator to new level
 #define CONTROL_ACTION_DISABLE_AUTONOMY 0x0040 // Disable actuators (non-override retreat/fault)
 typedef uint16_t control_actions_t;            // CONTROL_ACTION_* bitmask

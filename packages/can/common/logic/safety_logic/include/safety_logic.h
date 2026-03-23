@@ -34,8 +34,10 @@ typedef struct
 	bool ultrasonic_healthy;   // Sensor responding within timeout
 	bool planner_alive;        // Planner heartbeat received within timeout
 	bool control_alive;        // Control ESP32 heartbeat within timeout
-	bool planner_error;        // Planner reported FAULT state
-	bool control_error;        // Control reported FAULT state
+	bool planner_issue;        // Planner reported an unexpected issue cause
+	bool control_issue;        // Control reported an unexpected issue cause
+	node_stop_t planner_stop;  // Planner non-fault stop flags (NODE_STOP_*)
+	node_stop_t control_stop;  // Control non-fault stop flags (NODE_STOP_*)
 } safety_inputs_t;
 
 // ============================================================================
@@ -44,8 +46,9 @@ typedef struct
 
 typedef struct
 {
-	bool estop_active;       // true = e-stop condition present
-	node_fault_t fault_code; // NODE_FAULT_ESTOP_* from can_protocol.h (0 when safe)
+	bool stop_active;        // true = any stop or fault condition present
+	node_stop_t stop_flags;  // NODE_STOP_* bitmask (non-fault stop causes)
+	node_fault_t fault_code; // NODE_FAULT_SAFETY_* bitmask (fault causes)
 	bool relay_enable;       // true = power relay should be ON
 } safety_decision_t;
 
@@ -69,12 +72,13 @@ bool safety_compute_ultrasonic_trigger(bool too_close, bool healthy);
 /**
  * @brief Evaluate all safety inputs and produce a decision.
  *
- * Builds an e-stop fault bitmask where each active condition sets its bit:
- *   push_button | rf_remote | ultrasonic | planner_error |
- *   planner_timeout | control_error | control_timeout
+ * Builds separate stop/fault bitmasks:
+ *   stop_flags: push_button | rf_remote | ultrasonic_obstacle | planner_stop | control_stop
+ *   fault_code: ultrasonic_unhealthy | planner_issue | planner_timeout |
+ *               control_issue | control_timeout
  *
  * @param inputs  All sensor and heartbeat readings
- * @return Decision: estop state, fault_code, relay command
+ * @return Decision: stop state, stop_flags, fault_code, relay command
  */
 safety_decision_t safety_evaluate(const safety_inputs_t *inputs);
 

@@ -15,42 +15,47 @@ bool safety_compute_ultrasonic_trigger(bool too_close, bool healthy)
 safety_decision_t safety_evaluate(const safety_inputs_t *inputs)
 {
 	safety_decision_t d = {
-		.estop_active = true,
+		.stop_active = true,
+		.stop_flags = NODE_STOP_NONE,
 		.fault_code = NODE_FAULT_NONE,
 		.relay_enable = false,
 	};
 
-	// Fail-safe: NULL input returns estop_active=true (blocks everything)
+	// Fail-safe: NULL input returns stop_active=true (blocks everything)
 	if (!inputs)
 		return d;
 
-	// Compute ultrasonic trigger with fail-safe
-	bool ultrasonic_triggered =
-		safety_compute_ultrasonic_trigger(inputs->ultrasonic_too_close, inputs->ultrasonic_healthy);
-
-	// Build fault bitmask — all active faults are OR'd together
-	node_fault_t faults = 0;
+	// Build separate stop/fault bitmasks.
+	// planner_issue/control_issue/planner_stop/control_stop are classified
+	// by the caller from heartbeat cause codes.
+	node_stop_t stops = NODE_STOP_NONE;
+	node_fault_t faults = NODE_FAULT_NONE;
 
 	if (inputs->push_button_active)
-		faults |= NODE_FAULT_ESTOP_BUTTON;
+		stops |= NODE_STOP_PUSH_BUTTON;
 	if (inputs->rf_remote_active)
-		faults |= NODE_FAULT_ESTOP_REMOTE;
-	if (ultrasonic_triggered)
-		faults |= NODE_FAULT_ESTOP_ULTRASONIC;
-	if (inputs->planner_error)
-		faults |= NODE_FAULT_ESTOP_PLANNER;
+		stops |= NODE_STOP_REMOTE;
+	if (inputs->ultrasonic_too_close)
+		stops |= NODE_STOP_ULTRASONIC_OBSTACLE;
+	stops |= inputs->planner_stop;
+	stops |= inputs->control_stop;
+	if (!inputs->ultrasonic_healthy)
+		faults |= NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY;
+	if (inputs->planner_issue)
+		faults |= NODE_FAULT_SAFETY_PLANNER_ISSUE;
 	if (!inputs->planner_alive)
-		faults |= NODE_FAULT_ESTOP_PLANNER_TIMEOUT;
-	if (inputs->control_error)
-		faults |= NODE_FAULT_ESTOP_CONTROL;
+		faults |= NODE_FAULT_SAFETY_PLANNER_TIMEOUT;
+	if (inputs->control_issue)
+		faults |= NODE_FAULT_SAFETY_CONTROL_ISSUE;
 	if (!inputs->control_alive)
-		faults |= NODE_FAULT_ESTOP_CONTROL_TIMEOUT;
+		faults |= NODE_FAULT_SAFETY_CONTROL_TIMEOUT;
 
+	d.stop_flags = stops;
 	d.fault_code = faults;
-	d.estop_active = (faults != NODE_FAULT_NONE);
+	d.stop_active = (stops != NODE_STOP_NONE || faults != NODE_FAULT_NONE);
 
 	// Relay ON only when no e-stop
-	d.relay_enable = !d.estop_active;
+	d.relay_enable = !d.stop_active;
 
 	return d;
 }

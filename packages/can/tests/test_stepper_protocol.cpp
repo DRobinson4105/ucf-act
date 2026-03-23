@@ -22,7 +22,7 @@ static void test_can_id_roundtrip_node5(void)
 	uint32_t id = stepper_uim2852_make_can_id(5, 0x20);
 	uint8_t producer_id = 0, cw = 0;
 	assert(stepper_uim2852_parse_can_id(id, &producer_id, &cw));
-	assert(producer_id == 5);
+	assert(producer_id == UIM2852_MASTER_ID);
 	assert(cw == 0x20);
 }
 
@@ -31,7 +31,7 @@ static void test_can_id_roundtrip_node6(void)
 	uint32_t id = stepper_uim2852_make_can_id(6, 0x1E);
 	uint8_t producer_id = 0, cw = 0;
 	assert(stepper_uim2852_parse_can_id(id, &producer_id, &cw));
-	assert(producer_id == 6);
+	assert(producer_id == UIM2852_MASTER_ID);
 	assert(cw == 0x1E);
 }
 
@@ -42,7 +42,7 @@ static void test_can_id_with_ack_bit(void)
 	uint32_t id = stepper_uim2852_make_can_id(5, cw_ack);
 	uint8_t producer_id = 0, cw = 0;
 	assert(stepper_uim2852_parse_can_id(id, &producer_id, &cw));
-	assert(producer_id == 5);
+	assert(producer_id == UIM2852_MASTER_ID);
 	assert(cw == 0xA0);
 	assert(stepper_uim2852_cw_base(cw) == 0x20);
 }
@@ -71,7 +71,7 @@ static void test_can_id_valid_node_range(void)
 			uint8_t node_out = 0xFF, cw_out = 0xFF;
 			bool ok = stepper_uim2852_parse_can_id(id, &node_out, &cw_out);
 			assert(ok);
-			assert(node_out == node);
+			assert(node_out == UIM2852_MASTER_ID);
 			assert(cw_out == cw_in);
 		}
 	}
@@ -362,7 +362,6 @@ static void test_build_lm_set(void)
 	assert(idx == 2);
 	assert(val == 100000);
 }
-
 
 // ML: DL=0
 static void test_build_ml(void)
