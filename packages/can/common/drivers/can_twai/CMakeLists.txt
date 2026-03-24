@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "can_twai.cpp"
     INCLUDE_DIRS "include"
-    REQUIRES driver
+    REQUIRES driver can_protocol
+    PRIV_REQUIRES stepper_protocol_uim2852
 )

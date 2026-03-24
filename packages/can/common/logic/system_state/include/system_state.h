@@ -82,7 +82,7 @@ typedef struct
 /**
  * @brief Compute the next system target state.
  *
- * Given the current target, e-stop status, and node states/flags, determine
+ * Given the current target, stop/fault status, and node states/flags, determine
  * what the new target state should be.
  *
  * Evaluation order (highest priority first):
@@ -91,7 +91,7 @@ typedef struct
  *      - When dwell elapses, transition to READY if clear/alive/ready; else NOT_READY.
  *   2) Problem retreat:
  *      - Any non-INIT target retreats to NOT_READY on a problem
- *        (e-stop asserted or node timeout/liveness loss).
+ *        (stop/fault active or node timeout/liveness loss).
  *   3) Autonomy hold drop:
  *      - In ENABLE/ACTIVE, if autonomy_hold drops, retreat to READY when both
  *        nodes are READY, otherwise NOT_READY.

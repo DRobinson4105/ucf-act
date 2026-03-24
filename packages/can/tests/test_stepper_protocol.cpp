@@ -22,7 +22,7 @@ static void test_can_id_roundtrip_node5(void)
 	uint32_t id = stepper_uim2852_make_can_id(5, 0x20);
 	uint8_t producer_id = 0, cw = 0;
 	assert(stepper_uim2852_parse_can_id(id, &producer_id, &cw));
-	assert(producer_id == UIM2852_MASTER_ID);
+	assert(producer_id == UIM2852_HOST_PRODUCER_ID);
 	assert(cw == 0x20);
 }
 
@@ -31,7 +31,7 @@ static void test_can_id_roundtrip_node6(void)
 	uint32_t id = stepper_uim2852_make_can_id(6, 0x1E);
 	uint8_t producer_id = 0, cw = 0;
 	assert(stepper_uim2852_parse_can_id(id, &producer_id, &cw));
-	assert(producer_id == UIM2852_MASTER_ID);
+	assert(producer_id == UIM2852_HOST_PRODUCER_ID);
 	assert(cw == 0x1E);
 }
 
@@ -42,7 +42,7 @@ static void test_can_id_with_ack_bit(void)
 	uint32_t id = stepper_uim2852_make_can_id(5, cw_ack);
 	uint8_t producer_id = 0, cw = 0;
 	assert(stepper_uim2852_parse_can_id(id, &producer_id, &cw));
-	assert(producer_id == UIM2852_MASTER_ID);
+	assert(producer_id == UIM2852_HOST_PRODUCER_ID);
 	assert(cw == 0xA0);
 	assert(stepper_uim2852_cw_base(cw) == 0x20);
 }
@@ -71,7 +71,7 @@ static void test_can_id_valid_node_range(void)
 			uint8_t node_out = 0xFF, cw_out = 0xFF;
 			bool ok = stepper_uim2852_parse_can_id(id, &node_out, &cw_out);
 			assert(ok);
-			assert(node_out == UIM2852_MASTER_ID);
+			assert(node_out == UIM2852_HOST_PRODUCER_ID);
 			assert(cw_out == cw_in);
 		}
 	}
@@ -497,15 +497,18 @@ static void test_parse_ms1_negative_speed(void)
 	data[7] = 0;
 
 	int32_t speed = 0;
-	assert(stepper_uim2852_parse_ms1(data, 8, &speed, NULL));
+	int32_t pos = 0;
+	assert(stepper_uim2852_parse_ms1(data, 8, &speed, &pos));
 	assert(speed == -200);
+	assert(pos == 0);
 }
 
 static void test_parse_ms1_null(void)
 {
-	assert(!stepper_uim2852_parse_ms1(NULL, 8, NULL, NULL));
+	int32_t speed = 0, pos = 0;
+	assert(!stepper_uim2852_parse_ms1(NULL, 8, &speed, &pos));
 	uint8_t data[4] = {};
-	assert(!stepper_uim2852_parse_ms1(data, 4, NULL, NULL));
+	assert(!stepper_uim2852_parse_ms1(data, 4, &speed, &pos));
 }
 
 static void test_parse_ms1_wrong_index(void)

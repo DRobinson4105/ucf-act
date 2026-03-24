@@ -43,8 +43,8 @@ extern "C"
 //   gpio: GPIO pin controlling relay trigger (IN pin)
 //
 // Polarity is hardcoded active-high (HIGH energizes relay) to match the
-// AEDIKO module hardware. Internal pull-down is always enabled to keep the
-// relay safely de-energized during boot/reset before firmware configures GPIO.
+// AEDIKO module hardware. The output latch is preloaded LOW before GPIO
+// configuration to keep the relay de-energized during boot/reset.
 typedef struct
 {
 	gpio_num_t gpio;

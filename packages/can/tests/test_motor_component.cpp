@@ -98,6 +98,7 @@ static void test_init_with_custom_config(void)
 		.default_accel = 100000,
 		.default_decel = 80000,
 		.stop_decel = 500000,
+		.working_current = 10,
 		.request_ack = false,
 	};
 	stepper_motor_uim2852_t motor;

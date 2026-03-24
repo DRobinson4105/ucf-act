@@ -35,7 +35,7 @@ extern "C"
 //
 // Safety:
 //   - Used for obstacle detection during autonomous operation
-//   - If object detected closer than threshold, e-stop triggered
+//   - If object detected closer than threshold, stop triggered
 //   - Timeout/no-data condition should be treated as fault
 // ============================================================================
 

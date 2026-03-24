@@ -47,7 +47,6 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs)
 	// ----------------------------------------------------------------
 	if (inputs->stop_active || !inputs->planner_alive || !inputs->control_alive)
 	{
-
 		r.new_target = NODE_STATE_NOT_READY;
 		r.target_changed = (current != NODE_STATE_NOT_READY);
 		return r;

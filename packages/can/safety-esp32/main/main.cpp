@@ -1,6 +1,6 @@
 /**
  * @file main.cpp
- * @brief Safety ESP32 main application — e-stop monitoring and system state authority.
+ * @brief Safety ESP32 main application — stop/fault monitoring and system state authority.
  */
 
 #include "freertos/FreeRTOS.h"
@@ -24,7 +24,6 @@
 #include "battery_monitor.h"
 #include "safety_logic.h"
 #include "system_state.h"
-#include "can_tx_track.h"
 #include "node_utils.h"
 
 // ============================================================================
@@ -65,25 +64,27 @@
 #endif
 #endif // CONFIG_PRODUCTION_BUILD
 
-// Safety ESP32 - System state authority and e-stop monitoring
+// Safety ESP32 - System state authority and stop/fault monitoring
 //
-// Monitors physical e-stop inputs (push button HB2-ES544, RF remote EV1527, ultrasonic A02YYUW)
-// and node heartbeats (Planner, Control). When any e-stop condition is active, disables power
-// relay and retreats the system target state to NOT_READY.
+// Monitors physical stop inputs (push button, RF remote, ultrasonic) and node
+// heartbeats (Planner, Control). When any stop or fault condition is active,
+// disables power relay and retreats the system target state to NOT_READY.
 //
 // Safety is the ONLY node that can advance state forward (NOT_READY -> READY -> ENABLE -> ACTIVE).
-// It broadcasts a heartbeat (0x100) with target_state in the state field and the estop
-// fault_code. All three nodes use the same heartbeat format (node_heartbeat_t).
+// It broadcasts a heartbeat (0x100) with target_state in the state field, stop_flags,
+// and fault_flags. All three nodes use the same heartbeat format (node_heartbeat_t).
 //
 // State advancement:
-//   NOT_READY -> READY: both Planner and Control report READY, no e-stop,
+//   NOT_READY -> READY: both Planner and Control report READY, no stop/fault active
 //   READY -> ENABLE:    Planner/Orin autonomy request edge latched
 //   ENABLE -> ACTIVE:   both report ENABLE + enable_complete flag set
 //   ENABLE/ACTIVE -> READY: Planner/Orin autonomy request dropped (halt)
-//   ANY -> NOT_READY:   e-stop, fault, override, timeout
+//   ANY -> NOT_READY:   stop/fault active or node timeout
 //
-// E-stop faults are OR'd into a bitmask — all active faults are reported simultaneously.
-// Fault bits: button | remote | ultrasonic | planner | planner_timeout | control | control_timeout
+// Cause reporting uses two separate channels:
+//   stop_flags: push_button | remote | ultrasonic_obstacle | planner_stop | control_stop
+//   fault_flags: ultrasonic_unhealthy | planner_issue | planner_timeout |
+//                control_issue | control_timeout | relay_unavailable
 
 namespace
 {
@@ -160,9 +161,9 @@ constexpr uint8_t ESTOP_DISENGAGE_COUNT = 3;
 
 // Ultrasonic obstacle debounce: require N consecutive close/clear reads before
 // toggling the latched obstacle state.
-// At 50ms loop cadence, 2 samples = 100ms engage hold, 3 samples = 150ms clear hold.
-constexpr uint8_t ULTRASONIC_ENGAGE_COUNT = 2;
-constexpr uint8_t ULTRASONIC_DISENGAGE_COUNT = 3;
+// At 50ms loop cadence, 4 samples = 200ms engage hold, 6 samples = 300ms clear hold.
+constexpr uint8_t ULTRASONIC_ENGAGE_COUNT = 4;
+constexpr uint8_t ULTRASONIC_DISENGAGE_COUNT = 6;
 
 // Ultrasonic health hysteresis: require N consecutive agreeing health samples
 // before changing health state. Prevents flap around timeout boundary.
@@ -185,7 +186,7 @@ constexpr int PUSH_BUTTON_HB2ES544_ACTIVE_LEVEL = 1;
 constexpr gpio_num_t RF_REMOTE_EV1527_GPIO = GPIO_NUM_7;
 constexpr int RF_REMOTE_EV1527_ACTIVE_LEVEL = 1;
 
-// Power relay output (cuts power to actuators when e-stop active)
+// Power relay output (cuts power to actuators when stop/fault active)
 constexpr gpio_num_t POWER_RELAY_GPIO = GPIO_NUM_2;
 
 // CAN bus (WAVESHARE SN65HVD230 transceiver)
@@ -201,8 +202,8 @@ constexpr uart_port_t ULTRASONIC_A02YYUW_UART = UART_NUM_1;
 constexpr int ULTRASONIC_A02YYUW_TX_GPIO = GPIO_NUM_10; // Sensor RX (mode select)
 constexpr int ULTRASONIC_A02YYUW_RX_GPIO = GPIO_NUM_11; // Sensor TX (data output)
 constexpr int ULTRASONIC_A02YYUW_BAUD_RATE = 9600;
-constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 1000;
-constexpr uint16_t ULTRASONIC_CLEAR_DISTANCE_MM = 1200;
+constexpr uint16_t ULTRASONIC_STOP_DISTANCE_MM = 2000;  // 2m — stop if obstacle within this range
+constexpr uint16_t ULTRASONIC_CLEAR_DISTANCE_MM = 2500; // 2.5m — resume only after obstacle clears to this range
 
 // ============================================================================
 // Global State
@@ -216,12 +217,12 @@ int g_node_control = -1;
 // Node state tracking (set by CAN RX task, read by safety_task)
 // Mirror fields are updated/read as grouped snapshots under g_hb_mirror_lock.
 volatile node_state_t g_planner_state = NODE_STATE_INIT;
-volatile node_fault_t g_planner_fault_code = NODE_FAULT_NONE;
+volatile node_fault_t g_planner_fault_flags = NODE_FAULT_NONE;
 volatile node_status_flags_t g_planner_status_flags = 0;
 volatile node_stop_t g_planner_stop_flags = NODE_STOP_NONE;
 
 volatile node_state_t g_control_state = NODE_STATE_INIT;
-volatile node_fault_t g_control_fault_code = NODE_FAULT_NONE;
+volatile node_fault_t g_control_fault_flags = NODE_FAULT_NONE;
 volatile node_status_flags_t g_control_status_flags = 0;
 volatile node_stop_t g_control_stop_flags = NODE_STOP_NONE;
 
@@ -240,7 +241,7 @@ portMUX_TYPE g_safety_hb_seq_lock = portMUX_INITIALIZER_UNLOCKED;
 
 // Safety heartbeat cause channels.
 volatile node_stop_t g_stop_flags = NODE_STOP_NONE;
-volatile node_fault_t g_fault_code = NODE_FAULT_NONE;
+volatile node_fault_t g_fault_flags = NODE_FAULT_NONE;
 
 // Component health tracking.
 volatile bool g_push_button_init_ok = false;
@@ -446,14 +447,14 @@ void mark_component_lost(volatile bool *ready, const char *name, const char *det
 }
 
 /**
- * @brief Convert a Safety fault code to a logging string.
+ * @brief Convert Safety fault flags to a logging string.
  *
- * @param fault_code  Fault code to convert
+ * @param fault_flags  Fault flags to convert
  * @return Static string label for logging
  */
-const char *safety_fault_to_log_string(node_fault_t fault_code)
+const char *safety_fault_to_log_string(node_fault_t fault_flags)
 {
-	return node_fault_to_string(fault_code);
+	return node_fault_to_string(fault_flags);
 }
 
 // ============================================================================
@@ -475,7 +476,7 @@ portMUX_TYPE g_can_tx_lock = portMUX_INITIALIZER_UNLOCKED;
  */
 void quiesce_can_rx()
 {
-	node_quiesce_can_rx(&g_can_tx_lock, &g_can_tx_in_flight);
+	can_twai_quiesce(&g_can_tx_lock, &g_can_tx_in_flight);
 }
 
 // Rate-limit retry failure logs: log on 1st attempt, then every RETRY_LOG_EVERY_N
@@ -659,7 +660,7 @@ void retry_failed_components(void)
 			node_heartbeat_t probe_hb = {
 				.sequence = 0,
 				.state = g_target_state,
-				.fault_code = g_fault_code,
+				.fault_flags = g_fault_flags,
 				.status_flags = 0,
 				.stop_flags = g_stop_flags,
 			};
@@ -814,19 +815,19 @@ void send_safety_heartbeat(bool log_as_change)
 	uint8_t data[8] = {};
 	node_seq_t seq = 0;
 	node_state_t target_state = NODE_STATE_NOT_READY;
-	node_fault_t fault_code = NODE_FAULT_NONE;
+	node_fault_t fault_flags = NODE_FAULT_NONE;
 	node_stop_t stop_flags = NODE_STOP_NONE;
 	taskENTER_CRITICAL(&g_safety_hb_seq_lock);
 	seq = g_safety_hb_seq;
 	g_safety_hb_seq = (node_seq_t)(seq + 1);
 	target_state = g_target_state;
-	fault_code = g_fault_code;
+	fault_flags = g_fault_flags;
 	stop_flags = g_stop_flags;
 	taskEXIT_CRITICAL(&g_safety_hb_seq_lock);
 	node_heartbeat_t hb = {
 		.sequence = seq,
 		.state = target_state,
-		.fault_code = fault_code,
+		.fault_flags = fault_flags,
 		.status_flags = 0,
 		.stop_flags = stop_flags,
 	};
@@ -858,7 +859,7 @@ void send_safety_heartbeat(bool log_as_change)
 			g_hb_tx_failing = false;
 		}
 		ESP_LOGI(TAG_TX, "HB TX: target=%s fault=%s stop=%s trigger=%s", node_state_to_string(target_state),
-		         safety_fault_to_log_string(fault_code), node_stop_to_string(stop_flags),
+		         safety_fault_to_log_string(fault_flags), node_stop_to_string(stop_flags),
 		         log_as_change ? "change" : "periodic");
 	}
 #endif
@@ -898,14 +899,14 @@ bool process_heartbeat_rx(const twai_message_t &msg, int node_handle, volatile n
 
 	taskENTER_CRITICAL(&g_hb_mirror_lock);
 	*state_out = hb.state;
-	*fault_out = hb.fault_code;
+	*fault_out = hb.fault_flags;
 	*status_flags_out = hb.status_flags;
 	*stop_out = hb.stop_flags;
 	taskEXIT_CRITICAL(&g_hb_mirror_lock);
 
 #ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
 	ESP_LOGI(TAG_RX, "%s HB RX: seq=%u state=%s fault=%s stop=%s status_flags=0x%02X", label, hb.sequence,
-	         node_state_to_string(hb.state), node_fault_to_string(hb.fault_code), node_stop_to_string(hb.stop_flags),
+	         node_state_to_string(hb.state), node_fault_to_string(hb.fault_flags), node_stop_to_string(hb.stop_flags),
 	         hb.status_flags);
 #endif
 	return true;
@@ -949,7 +950,7 @@ void can_rx_task(void *param)
 		// Process Planner heartbeat (0x110)
 		if (msg.identifier == CAN_ID_PLANNER_HEARTBEAT)
 		{
-			if (!process_heartbeat_rx(msg, g_node_planner, &g_planner_state, &g_planner_fault_code,
+			if (!process_heartbeat_rx(msg, g_node_planner, &g_planner_state, &g_planner_fault_flags,
 			                          &g_planner_status_flags, &g_planner_stop_flags, "Planner"))
 				continue;
 		}
@@ -957,7 +958,7 @@ void can_rx_task(void *param)
 		// Process Control ESP32 heartbeat (0x120)
 		else if (msg.identifier == CAN_ID_CONTROL_HEARTBEAT)
 		{
-			if (!process_heartbeat_rx(msg, g_node_control, &g_control_state, &g_control_fault_code,
+			if (!process_heartbeat_rx(msg, g_node_control, &g_control_state, &g_control_fault_flags,
 			                          &g_control_status_flags, &g_control_stop_flags, "Control"))
 				continue;
 		}
@@ -997,7 +998,7 @@ void safety_task(void *param)
 	bool request_latched = false;
 	uint32_t active_target_entered_ms = 0;
 #ifdef CONFIG_LOG_SAFETY_FAULT_CHANGES
-	node_fault_t prev_fault_code = NODE_FAULT_NONE;
+	node_fault_t prev_fault_flags = NODE_FAULT_NONE;
 	node_stop_t prev_stop_flags = NODE_STOP_NONE;
 #endif
 #ifdef CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE
@@ -1133,36 +1134,36 @@ void safety_task(void *param)
 			.rf_remote_active = g_rf_remote_debounced,
 			.ultrasonic_too_close = g_ultrasonic_too_close_debounced,
 			.ultrasonic_healthy = filtered_ultrasonic_healthy,
-			.planner_alive = true,  // updated below from heartbeat monitor
-			.control_alive = true,  // updated below from heartbeat monitor
-			.planner_issue = false, // updated from grouped snapshot below
-			.control_issue = false, // updated from grouped snapshot below
-			.planner_stop = 0,      // updated from grouped snapshot below
-			.control_stop = 0,      // updated from grouped snapshot below
+			.planner_alive = true,                  // updated below from heartbeat monitor
+			.control_alive = true,                  // updated below from heartbeat monitor
+			.planner_fault_flags = NODE_FAULT_NONE, // updated from grouped snapshot below
+			.control_fault_flags = NODE_FAULT_NONE, // updated from grouped snapshot below
+			.planner_stop_flags = NODE_STOP_NONE,   // updated from grouped snapshot below
+			.control_stop_flags = NODE_STOP_NONE,   // updated from grouped snapshot below
 		};
 
 		node_state_t planner_state = NODE_STATE_INIT;
-		[[maybe_unused]] node_fault_t planner_fault_code = NODE_FAULT_NONE;
+		node_fault_t planner_fault_flags = NODE_FAULT_NONE;
 		node_status_flags_t planner_status_flags = 0;
 		node_state_t control_state = NODE_STATE_INIT;
-		[[maybe_unused]] node_fault_t control_fault_code = NODE_FAULT_NONE;
+		node_fault_t control_fault_flags = NODE_FAULT_NONE;
 		node_status_flags_t control_status_flags = 0;
 		node_stop_t planner_stop_flags = NODE_STOP_NONE;
 		node_stop_t control_stop_flags = NODE_STOP_NONE;
 		taskENTER_CRITICAL(&g_hb_mirror_lock);
 		planner_state = g_planner_state;
-		planner_fault_code = g_planner_fault_code;
+		planner_fault_flags = g_planner_fault_flags;
 		planner_status_flags = g_planner_status_flags;
 		planner_stop_flags = g_planner_stop_flags;
 		control_state = g_control_state;
-		control_fault_code = g_control_fault_code;
+		control_fault_flags = g_control_fault_flags;
 		control_status_flags = g_control_status_flags;
 		control_stop_flags = g_control_stop_flags;
 		taskEXIT_CRITICAL(&g_hb_mirror_lock);
-		inputs.planner_issue = node_fault_is_planner_issue(planner_fault_code);
-		inputs.control_issue = node_fault_is_control_issue(control_fault_code);
-		inputs.planner_stop = planner_stop_flags;
-		inputs.control_stop = control_stop_flags;
+		inputs.planner_fault_flags = planner_fault_flags;
+		inputs.control_fault_flags = control_fault_flags;
+		inputs.planner_stop_flags = planner_stop_flags;
+		inputs.control_stop_flags = control_stop_flags;
 
 		// Check heartbeat timeouts
 		heartbeat_monitor_check_timeouts(&g_hb_monitor);
@@ -1172,13 +1173,13 @@ void safety_task(void *param)
 		// Apply test bypasses
 #ifdef CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS
 		inputs.planner_alive = true;
-		inputs.planner_issue = false;
-		inputs.planner_stop = NODE_STOP_NONE;
+		inputs.planner_fault_flags = NODE_FAULT_NONE;
+		inputs.planner_stop_flags = NODE_STOP_NONE;
 #endif
 #ifdef CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS
 		inputs.control_alive = true;
-		inputs.control_issue = false;
-		inputs.control_stop = NODE_STOP_NONE;
+		inputs.control_fault_flags = NODE_FAULT_NONE;
+		inputs.control_stop_flags = NODE_STOP_NONE;
 #endif
 #ifdef CONFIG_BYPASS_INPUT_PUSH_BUTTON
 		inputs.push_button_active = false;
@@ -1260,8 +1261,7 @@ void safety_task(void *param)
 		if (!g_relay_init_ok)
 		{
 			decision.stop_active = true;
-			decision.fault_code |= NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
-			decision.relay_enable = false;
+			decision.fault_flags |= NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
 		}
 
 		// Snapshot state values used by heartbeat send path.
@@ -1376,7 +1376,7 @@ void safety_task(void *param)
 		// Relay power is allowed only when e-stop is clear and target is
 		// in the autonomy power window (ENABLE/ACTIVE).
 		bool relay_should_enable =
-			decision.relay_enable && (ss_out.new_target == NODE_STATE_ENABLE || ss_out.new_target == NODE_STATE_ACTIVE);
+			!decision.stop_active && (ss_out.new_target == NODE_STATE_ENABLE || ss_out.new_target == NODE_STATE_ACTIVE);
 
 #ifndef CONFIG_BYPASS_PLANNER_AUTONOMY_GATE
 		if (ss_out.target_changed && current_target == NODE_STATE_READY && ss_out.new_target == NODE_STATE_ENABLE &&
@@ -1406,16 +1406,16 @@ void safety_task(void *param)
 			else if (ss_out.new_target == NODE_STATE_READY || ss_out.new_target == NODE_STATE_NOT_READY)
 			{
 				if ((current_target == NODE_STATE_ENABLE || current_target == NODE_STATE_ACTIVE) &&
-				    !ss_in.autonomy_hold && decision.fault_code == NODE_FAULT_NONE &&
+				    !ss_in.autonomy_hold && decision.fault_flags == NODE_FAULT_NONE &&
 				    decision.stop_flags == NODE_STOP_NONE)
 					reason = "autonomy_halt";
-				else if (ss_out.new_target == NODE_STATE_NOT_READY && decision.fault_code == NODE_FAULT_NONE &&
+				else if (ss_out.new_target == NODE_STATE_NOT_READY && decision.fault_flags == NODE_FAULT_NONE &&
 				         decision.stop_flags == NODE_STOP_NONE)
 					reason = "not_ready";
 				else if (decision.stop_flags != NODE_STOP_NONE)
 					reason = node_stop_to_string(decision.stop_flags);
 				else
-					reason = safety_fault_to_log_string(decision.fault_code);
+					reason = safety_fault_to_log_string(decision.fault_flags);
 			}
 
 			ESP_LOGI(TAG, "Target: %s -> %s (reason=%s)", node_state_to_string(current_target),
@@ -1423,12 +1423,12 @@ void safety_task(void *param)
 
 			// Log node detail when retreat is caused by a specific node
 			if ((ss_out.new_target == NODE_STATE_READY || ss_out.new_target == NODE_STATE_NOT_READY) &&
-			    (decision.fault_code != NODE_FAULT_NONE || decision.stop_flags != NODE_STOP_NONE))
+			    (decision.fault_flags != NODE_FAULT_NONE || decision.stop_flags != NODE_STOP_NONE))
 			{
-				if (decision.fault_code & NODE_FAULT_SAFETY_CONTROL_ISSUE)
-					ESP_LOGI(TAG, "  Control issue: %s", node_fault_to_string(control_fault_code));
-				if (decision.fault_code & NODE_FAULT_SAFETY_PLANNER_ISSUE)
-					ESP_LOGI(TAG, "  Planner issue: %s", node_fault_to_string(planner_fault_code));
+				if (decision.fault_flags & NODE_FAULT_SAFETY_CONTROL_ISSUE)
+					ESP_LOGI(TAG, "  Control issue: %s", node_fault_to_string(control_fault_flags));
+				if (decision.fault_flags & NODE_FAULT_SAFETY_PLANNER_ISSUE)
+					ESP_LOGI(TAG, "  Planner issue: %s", node_fault_to_string(planner_fault_flags));
 				if ((decision.stop_flags & NODE_STOP_OPERATOR_ANY) != 0)
 					ESP_LOGI(TAG, "  Control stop: %s", node_stop_to_string(control_stop_flags));
 				if (decision.stop_flags & NODE_STOP_APP_REQUEST)
@@ -1439,23 +1439,23 @@ void safety_task(void *param)
 
 		// Log stop/fault code changes (edge-triggered)
 #ifdef CONFIG_LOG_SAFETY_FAULT_CHANGES
-		if (decision.fault_code != prev_fault_code)
+		if (decision.fault_flags != prev_fault_flags)
 		{
-			ESP_LOGI(TAG, "Safety fault: %s -> %s", safety_fault_to_log_string(prev_fault_code),
-			         safety_fault_to_log_string(decision.fault_code));
+			ESP_LOGI(TAG, "Safety fault: %s -> %s", safety_fault_to_log_string(prev_fault_flags),
+			         safety_fault_to_log_string(decision.fault_flags));
 		}
 		if (decision.stop_flags != prev_stop_flags)
 		{
 			ESP_LOGI(TAG, "Safety stop: %s -> %s", node_stop_to_string(prev_stop_flags),
 			         node_stop_to_string(decision.stop_flags));
 		}
-		prev_fault_code = decision.fault_code;
+		prev_fault_flags = decision.fault_flags;
 		prev_stop_flags = decision.stop_flags;
 #endif
 
 		// Publish new target + cause channels atomically for heartbeat snapshots.
 		taskENTER_CRITICAL(&g_safety_hb_seq_lock);
-		g_fault_code = decision.fault_code;
+		g_fault_flags = decision.fault_flags;
 		g_stop_flags = decision.stop_flags;
 		g_target_state = ss_out.new_target;
 		taskEXIT_CRITICAL(&g_safety_hb_seq_lock);
@@ -1474,7 +1474,7 @@ void safety_task(void *param)
 					// Immediately force e-stop in this iteration — don't wait
 					// for the next loop cycle to detect g_relay_init_ok == false.
 					taskENTER_CRITICAL(&g_safety_hb_seq_lock);
-					g_fault_code = NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
+					g_fault_flags = NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
 					g_stop_flags = NODE_STOP_NONE;
 					g_target_state = NODE_STATE_NOT_READY;
 					taskEXIT_CRITICAL(&g_safety_hb_seq_lock);
@@ -1495,7 +1495,7 @@ void safety_task(void *param)
 					mark_component_lost(&g_relay_init_ok, "RELAY", "runtime disable command failed");
 					// Immediately force e-stop — relay state is indeterminate.
 					taskENTER_CRITICAL(&g_safety_hb_seq_lock);
-					g_fault_code = NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
+					g_fault_flags = NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
 					g_stop_flags = NODE_STOP_NONE;
 					g_target_state = NODE_STATE_NOT_READY;
 					taskEXIT_CRITICAL(&g_safety_hb_seq_lock);

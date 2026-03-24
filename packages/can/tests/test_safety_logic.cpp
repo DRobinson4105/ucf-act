@@ -20,10 +20,10 @@ static safety_inputs_t safe_inputs(void)
 		.ultrasonic_healthy = true,
 		.planner_alive = true,
 		.control_alive = true,
-		.planner_issue = false,
-		.control_issue = false,
-		.planner_stop = NODE_STOP_NONE,
-		.control_stop = NODE_STOP_NONE,
+		.planner_fault_flags = NODE_FAULT_NONE,
+		.control_fault_flags = NODE_FAULT_NONE,
+		.planner_stop_flags = NODE_STOP_NONE,
+		.control_stop_flags = NODE_STOP_NONE,
 	};
 	return in;
 }
@@ -42,8 +42,7 @@ static void test_all_clear(void)
 	safety_decision_t d = safety_evaluate(&in);
 	assert(!d.stop_active);
 	assert(d.stop_flags == NODE_STOP_NONE);
-	assert(d.fault_code == NODE_FAULT_NONE);
-	assert(d.relay_enable);
+	assert(d.fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_stop_only_local_inputs(void)
@@ -56,54 +55,50 @@ static void test_stop_only_local_inputs(void)
 
 	assert(d.stop_active);
 	assert(d.stop_flags == (NODE_STOP_PUSH_BUTTON | NODE_STOP_REMOTE | NODE_STOP_ULTRASONIC_OBSTACLE));
-	assert(d.fault_code == NODE_FAULT_NONE);
-	assert(!d.relay_enable);
+	assert(d.fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_stop_only_forwarded_from_nodes(void)
 {
 	safety_inputs_t in = safe_inputs();
-	in.planner_stop = NODE_STOP_APP_REQUEST;
-	in.control_stop = NODE_STOP_OPERATOR_PEDAL | NODE_STOP_OPERATOR_FR;
+	in.planner_stop_flags = NODE_STOP_APP_REQUEST;
+	in.control_stop_flags = NODE_STOP_OPERATOR_THROTTLE | NODE_STOP_OPERATOR_REVERSE;
 	safety_decision_t d = safety_evaluate(&in);
 
 	assert(d.stop_active);
-	assert(d.stop_flags == (NODE_STOP_APP_REQUEST | NODE_STOP_OPERATOR_PEDAL | NODE_STOP_OPERATOR_FR));
-	assert(d.fault_code == NODE_FAULT_NONE);
-	assert(!d.relay_enable);
+	assert(d.stop_flags == (NODE_STOP_APP_REQUEST | NODE_STOP_OPERATOR_THROTTLE | NODE_STOP_OPERATOR_REVERSE));
+	assert(d.fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_fault_only_timeouts_and_issues(void)
 {
 	safety_inputs_t in = safe_inputs();
 	in.ultrasonic_healthy = false;
-	in.planner_issue = true;
+	in.planner_fault_flags = NODE_FAULT_PLANNER_PERCEPTION;
 	in.planner_alive = false;
-	in.control_issue = true;
+	in.control_fault_flags = NODE_FAULT_CONTROL_MOTOR_COMM;
 	in.control_alive = false;
 	safety_decision_t d = safety_evaluate(&in);
 
 	assert(d.stop_active);
 	assert(d.stop_flags == NODE_STOP_NONE);
-	assert(d.fault_code ==
+	assert(d.fault_flags ==
 	       (NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY | NODE_FAULT_SAFETY_PLANNER_ISSUE |
 	        NODE_FAULT_SAFETY_PLANNER_TIMEOUT | NODE_FAULT_SAFETY_CONTROL_ISSUE | NODE_FAULT_SAFETY_CONTROL_TIMEOUT));
-	assert(!d.relay_enable);
 }
 
 static void test_combined_stop_and_fault_channels(void)
 {
 	safety_inputs_t in = safe_inputs();
 	in.push_button_active = true;
-	in.control_stop = NODE_STOP_OPERATOR_STEER;
-	in.planner_issue = true;
+	in.control_stop_flags = NODE_STOP_OPERATOR_STEER;
+	in.planner_fault_flags = NODE_FAULT_PLANNER_PERCEPTION;
 	in.control_alive = false;
 	safety_decision_t d = safety_evaluate(&in);
 
 	assert(d.stop_active);
 	assert(d.stop_flags == (NODE_STOP_PUSH_BUTTON | NODE_STOP_OPERATOR_STEER));
-	assert(d.fault_code == (NODE_FAULT_SAFETY_PLANNER_ISSUE | NODE_FAULT_SAFETY_CONTROL_TIMEOUT));
-	assert(!d.relay_enable);
+	assert(d.fault_flags == (NODE_FAULT_SAFETY_PLANNER_ISSUE | NODE_FAULT_SAFETY_CONTROL_TIMEOUT));
 }
 
 static void test_null_input_is_fail_safe(void)
@@ -111,8 +106,7 @@ static void test_null_input_is_fail_safe(void)
 	safety_decision_t d = safety_evaluate(NULL);
 	assert(d.stop_active);
 	assert(d.stop_flags == NODE_STOP_NONE);
-	assert(d.fault_code == NODE_FAULT_NONE);
-	assert(!d.relay_enable);
+	assert(d.fault_flags == NODE_FAULT_NONE);
 }
 
 int main(void)

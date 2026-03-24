@@ -141,18 +141,18 @@ throttle_slew_result_t control_compute_throttle_slew(const throttle_slew_inputs_
 static void apply_safe_outputs(control_step_result_t *r)
 {
 	r->throttle_level = 0;
-	r->new_last_steering = STEPPER_DEDUP_RESET;
-	r->new_last_braking = STEPPER_DEDUP_RESET;
+	r->new_last_steering = STEPPER_DEDUP_RESET_STEERING;
+	r->new_last_braking = STEPPER_DEDUP_RESET_BRAKING;
 }
 
 static node_stop_t override_reason_to_stop_flag(override_reason_t reason)
 {
 	switch (reason)
 	{
-	case OVERRIDE_REASON_PEDAL:
-		return NODE_STOP_OPERATOR_PEDAL;
-	case OVERRIDE_REASON_FR_CHANGED:
-		return NODE_STOP_OPERATOR_FR;
+	case OVERRIDE_REASON_THROTTLE:
+		return NODE_STOP_OPERATOR_THROTTLE;
+	case OVERRIDE_REASON_REVERSE:
+		return NODE_STOP_OPERATOR_REVERSE;
 	case OVERRIDE_REASON_STEERING:
 		return NODE_STOP_OPERATOR_STEER;
 	case OVERRIDE_REASON_BRAKING:
@@ -162,22 +162,40 @@ static node_stop_t override_reason_to_stop_flag(override_reason_t reason)
 	}
 }
 
-static bool fault_cleared_from_inputs(node_fault_t fault, const control_inputs_t *inputs)
+/**
+ * @brief Clear individual fault bits whose recovery conditions are met.
+ *
+ * Returns the updated fault bitmask with resolved bits cleared.
+ * Unrecognized bits are preserved (not cleared).
+ *
+ * @param fault   Current fault bitmask
+ * @param inputs  Current sensor/CAN state
+ * @return Updated fault bitmask with resolved bits cleared
+ */
+static node_fault_t fault_clear_resolved_bits(node_fault_t fault, const control_inputs_t *inputs)
 {
-	if (!inputs)
-		return false;
+	if (!inputs || fault == NODE_FAULT_NONE)
+		return fault;
 
-	switch (fault)
-	{
-	case NODE_FAULT_NONE:
-		return true;
-	case NODE_FAULT_MOTOR_COMM:
-		return (inputs->motor_fault_code == NODE_FAULT_NONE);
-	case NODE_FAULT_SENSOR_INVALID:
-		return (inputs->fr_state != FR_STATE_INVALID);
-	default:
-		return false;
-	}
+	// Only process control faults (0x80 prefix range)
+	if (!node_fault_is_control(fault))
+		return fault;
+
+	// Work with the fault-specific bits (strip prefix)
+	uint8_t bits = fault & ~NODE_FAULT_CONTROL_PREFIX;
+
+	// Motor comm fault clears when CAN RX stops reporting it
+	if ((bits & (NODE_FAULT_CONTROL_MOTOR_COMM & ~NODE_FAULT_CONTROL_PREFIX)) &&
+	    inputs->motor_fault_code == NODE_FAULT_NONE)
+		bits &= ~(NODE_FAULT_CONTROL_MOTOR_COMM & ~NODE_FAULT_CONTROL_PREFIX);
+
+	// Sensor invalid fault clears when F/R reads a valid state
+	if ((bits & (NODE_FAULT_CONTROL_SENSOR_INVALID & ~NODE_FAULT_CONTROL_PREFIX)) &&
+	    inputs->fr_state != FR_STATE_INVALID)
+		bits &= ~(NODE_FAULT_CONTROL_SENSOR_INVALID & ~NODE_FAULT_CONTROL_PREFIX);
+
+	// If all fault bits cleared, return NONE; otherwise re-add prefix
+	return (bits == 0) ? NODE_FAULT_NONE : (node_fault_t)(NODE_FAULT_CONTROL_PREFIX | bits);
 }
 
 static node_stop_t stop_flags_cleared_from_inputs(node_stop_t stop_flags, const control_inputs_t *inputs)
@@ -187,12 +205,12 @@ static node_stop_t stop_flags_cleared_from_inputs(node_stop_t stop_flags, const 
 
 	node_stop_t updated = stop_flags;
 
-	if ((updated & NODE_STOP_OPERATOR_PEDAL) && inputs->pedal_rearmed)
-		updated &= (node_stop_t)~NODE_STOP_OPERATOR_PEDAL;
+	if ((updated & NODE_STOP_OPERATOR_THROTTLE) && inputs->pedal_rearmed)
+		updated &= (node_stop_t)~NODE_STOP_OPERATOR_THROTTLE;
 
-	if ((updated & NODE_STOP_OPERATOR_FR) &&
+	if ((updated & NODE_STOP_OPERATOR_REVERSE) &&
 	    (inputs->fr_state != FR_STATE_REVERSE && inputs->fr_state != FR_STATE_INVALID))
-		updated &= (node_stop_t)~NODE_STOP_OPERATOR_FR;
+		updated &= (node_stop_t)~NODE_STOP_OPERATOR_REVERSE;
 
 	if ((updated & NODE_STOP_OPERATOR_STEER) && !inputs->steering_position_error)
 		updated &= (node_stop_t)~NODE_STOP_OPERATOR_STEER;
@@ -217,7 +235,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 {
 	control_step_result_t r = {
 		.new_state = current_state,
-		.new_fault_code = current_fault,
+		.new_fault_flags = current_fault,
 		.new_stop_flags = NODE_STOP_NONE,
 		.override_reason = OVERRIDE_REASON_NONE,
 		.disable_reason = CONTROL_DISABLE_REASON_NONE,
@@ -241,9 +259,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		return r;
 
 	node_state_t target_state = sanitize_target_state(inputs->target_state);
-	node_fault_t effective_fault = current_fault;
-	if (effective_fault != NODE_FAULT_NONE && fault_cleared_from_inputs(effective_fault, inputs))
-		effective_fault = NODE_FAULT_NONE;
+	node_fault_t effective_fault = fault_clear_resolved_bits(current_fault, inputs);
 	node_stop_t effective_stop_flags = stop_flags_cleared_from_inputs(inputs->stop_flags, inputs);
 
 	// Carry forward dedup trackers and timing by default
@@ -253,7 +269,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 	r.throttle_change_ms = inputs->last_throttle_change_ms;
 	r.enable_start_ms = inputs->enable_start_ms;
 	r.enable_work_done = inputs->enable_work_done;
-	r.new_fault_code = effective_fault;
+	r.new_fault_flags = effective_fault;
 	r.new_stop_flags = effective_stop_flags;
 
 	// Check for motor fault from CAN RX task (one-shot)
@@ -270,7 +286,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 			r.abort_reason = CONTROL_ABORT_REASON_MOTOR_FAULT;
 		}
 		r.new_state = NODE_STATE_NOT_READY;
-		r.new_fault_code = inputs->motor_fault_code;
+		r.new_fault_flags = inputs->motor_fault_code;
 		apply_safe_outputs(&r);
 		return r;
 	}
@@ -281,13 +297,13 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 	// not as a fault.  Post-bypass (ACTIVE, after COMPLETE_ENABLE energizes
 	// the DPDT relay), the anti-arc switch is readable, so INVALID is a
 	// genuine wiring fault.
-	if (inputs->fr_state == FR_STATE_INVALID && current_fault != NODE_FAULT_SENSOR_INVALID &&
+	if (inputs->fr_state == FR_STATE_INVALID && current_fault != NODE_FAULT_CONTROL_SENSOR_INVALID &&
 	    current_state == NODE_STATE_ACTIVE)
 	{
 		r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
 		r.disable_reason = CONTROL_DISABLE_REASON_SENSOR_INVALID;
 		r.new_state = NODE_STATE_NOT_READY;
-		r.new_fault_code = NODE_FAULT_SENSOR_INVALID;
+		r.new_fault_flags = NODE_FAULT_CONTROL_SENSOR_INVALID;
 		apply_safe_outputs(&r);
 		return r;
 	}
@@ -419,12 +435,12 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		// Check override conditions
 		if (inputs->pedal_pressed)
 		{
-			trigger_override_retreat(&r, OVERRIDE_REASON_PEDAL);
+			trigger_override_retreat(&r, OVERRIDE_REASON_THROTTLE);
 			break;
 		}
 		if (inputs->fr_state == FR_STATE_REVERSE)
 		{
-			trigger_override_retreat(&r, OVERRIDE_REASON_FR_CHANGED);
+			trigger_override_retreat(&r, OVERRIDE_REASON_REVERSE);
 			break;
 		}
 		// FR_INVALID in ACTIVE is caught by the pre-switch guard (wiring fault cause).
@@ -508,17 +524,15 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		r.steering_position = clamped_steering;
 		r.braking_position = clamped_braking;
 
-		// Stepper dedup (uses clamped values)
+		// Stepper dedup (uses clamped values already set in r.steering/braking_position)
 		if (clamped_steering != inputs->last_steering_sent)
 		{
 			r.send_steering = true;
-			r.steering_position = clamped_steering;
 			r.new_last_steering = clamped_steering;
 		}
 		if (clamped_braking != inputs->last_braking_sent)
 		{
 			r.send_braking = true;
-			r.braking_position = clamped_braking;
 			r.new_last_braking = clamped_braking;
 		}
 		break;
@@ -526,9 +540,9 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 
 	default:
 		r.new_state = NODE_STATE_NOT_READY;
-		r.new_fault_code = NODE_FAULT_GENERAL;
+		r.new_fault_flags = NODE_FAULT_GENERAL;
 		r.actions |= CONTROL_ACTION_DISABLE_AUTONOMY;
-		r.disable_reason = CONTROL_DISABLE_REASON_NONE;
+		r.disable_reason = CONTROL_DISABLE_REASON_INTERNAL;
 		apply_safe_outputs(&r);
 		break;
 	}

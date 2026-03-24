@@ -18,7 +18,7 @@
 #include <stdbool.h>
 
 #include "can_protocol.h"
-#include "control_domain_types.h"
+#include "control_types.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -52,7 +52,7 @@ extern "C"
 
 typedef struct
 {
-	fr_state_t fr_state;     // FR_STATE_* from control_domain_types.h
+	fr_state_t fr_state;     // FR_STATE_* from control_types.h
 	bool pedal_pressed;      // true if pedal above threshold
 	bool pedal_rearmed;      // true if pedal below threshold for 500ms
 	node_fault_t fault_code; // NODE_FAULT_* from can_protocol.h
@@ -167,7 +167,7 @@ typedef struct
 {
 	// Updated state
 	node_state_t new_state;                // NODE_STATE_* from can_protocol.h
-	node_fault_t new_fault_code;           // NODE_FAULT_* issue code (0 = none)
+	node_fault_t new_fault_flags;          // NODE_FAULT_* issue code (0 = none)
 	node_stop_t new_stop_flags;            // NODE_STOP_* bitmask (0 = none)
 	override_reason_t override_reason;     // OVERRIDE_REASON_* (set when triggering override)
 	disable_reason_t disable_reason;       // CONTROL_DISABLE_REASON_* (non-override disable)
@@ -224,10 +224,10 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 // ============================================================================
 
 /**
- * @brief Clamp a signed 16-bit command value to [min, max].
+ * @brief Clamp a signed 32-bit command value to [min, max].
  *
- * Used to enforce safe steering and braking position envelopes before
- * forwarding planner commands to stepper motors.
+ * Used to enforce safe throttle, steering, and braking position envelopes
+ * before forwarding planner commands to actuators.
  *
  * @param value  Raw command value from planner
  * @param min    Minimum allowed value (inclusive)

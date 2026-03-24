@@ -16,7 +16,7 @@
 #include "esp_task_wdt.h"
 
 #ifdef CONFIG_THROTTLE_TEST_MODE
-#include "serial_console.h"
+#include "serial_input.h"
 #endif
 
 #include "can_protocol.h"
@@ -28,7 +28,6 @@
 #include "adc_12bitsar.h"
 #include "optocoupler_pc817.h"
 #include "control_logic.h"
-#include "can_tx_track.h"
 #include "heartbeat_monitor.h"
 #include "node_utils.h"
 
@@ -123,6 +122,7 @@ constexpr uint32_t ENABLE_SEQUENCE_MS = 200;                   // ENABLE dwell b
 constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;            // throttle slew timing interval
 constexpr int16_t THROTTLE_SLEW_STEP = 12;                     // throttle: max wiper delta per interval (0-255 range)
 constexpr TickType_t PLANNER_CMD_TIMEOUT = pdMS_TO_TICKS(500); // stale planner command cutoff
+constexpr uint8_t PLANNER_CMD_STALE_COUNT = 10;                // same sequence seen this many cycles = stale
 constexpr uint16_t PEDAL_ADC_THRESHOLD_MV = 500;               // pedal override trigger threshold
 constexpr uint32_t PEDAL_REARM_MS = 500;                       // pedal must stay released this long to re-arm
 constexpr uint8_t PEDAL_ADC_OVERSAMPLE_COUNT = 8;              // samples averaged per pedal read
@@ -135,7 +135,7 @@ constexpr uint8_t PEDAL_ADC_TRIGGER_COUNT = 3;                 // consecutive ab
 constexpr int32_t STEPPER_POSITION_ERROR_THRESHOLD = 200;
 
 // Stepper liveness watchdog: if no CAN response from a motor within this
-// window, treat as NODE_FAULT_MOTOR_COMM and retreat to safe state.
+// window, treat as NODE_FAULT_CONTROL_MOTOR_COMM and retreat to safe state.
 // Must be longer than the query interval to allow at least one round-trip.
 constexpr TickType_t STEPPER_LIVENESS_TIMEOUT = pdMS_TO_TICKS(500);
 
@@ -219,7 +219,7 @@ optocoupler_pc817_config_t g_fr_pc817_cfg = {
 struct command_snapshot_t
 {
 	node_state_t target_state;      // from Safety heartbeat
-	node_fault_t safety_fault_code; // from Safety heartbeat fault_code channel
+	node_fault_t safety_fault_flags; // from Safety heartbeat fault_flags channel
 	node_stop_t safety_stop_flags;  // from Safety heartbeat stop_flags channel
 	int16_t throttle_cmd;
 	int32_t steering_cmd;
@@ -239,7 +239,7 @@ command_snapshot_t g_cmd = {}; // protected by g_cmd_lock
 
 // State machine
 volatile node_state_t g_control_state = NODE_STATE_INIT;
-volatile node_fault_t g_fault_code = NODE_FAULT_NONE;
+volatile node_fault_t g_fault_flags = NODE_FAULT_NONE;
 volatile node_stop_t g_stop_flags = NODE_STOP_NONE;
 volatile node_status_flags_t g_heartbeat_status_flags = 0; // NODE_STATUS_FLAG_* for next heartbeat
 
@@ -262,7 +262,6 @@ uint32_t g_boot_start_ms = 0;
 
 // Heartbeat
 volatile node_seq_t g_heartbeat_seq = 0;
-[[maybe_unused]] bool g_hb_tx_failing = false; // edge-trigger for heartbeat TX failure logging
 
 // Spinlock for heartbeat sequence (shared by control_task immediate send + heartbeat_task)
 portMUX_TYPE g_hb_seq_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -708,13 +707,13 @@ node_fault_t primary_fault_from_component_health(void)
 {
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
 	if (!g_digipot_ready)
-		return NODE_FAULT_THROTTLE_INIT;
+		return NODE_FAULT_CONTROL_THROTTLE_INIT;
 	if (!g_dpdt_relay_ready)
-		return NODE_FAULT_RELAY_INIT;
+		return NODE_FAULT_CONTROL_RELAY_INIT;
 #endif
 #if !defined(CONFIG_BYPASS_INPUT_PEDAL_ADC) || !defined(CONFIG_BYPASS_INPUT_FR_SENSOR)
 	if (!g_pedal_input_ready || !g_fr_inputs_ready)
-		return NODE_FAULT_SENSOR_INVALID;
+		return NODE_FAULT_CONTROL_SENSOR_INVALID;
 #endif
 	return NODE_FAULT_NONE;
 }
@@ -743,7 +742,7 @@ const char *fr_state_to_string(fr_state_t state)
 }
 
 /**
- * @brief Build a diagnostic detail string for NODE_FAULT_SENSOR_INVALID.
+ * @brief Build a diagnostic detail string for NODE_FAULT_CONTROL_SENSOR_INVALID.
  *
  * Identifies which sensor input caused the fault: F/R invalid reading,
  * pedal input unavailable, F/R input unavailable, or a combination.
@@ -781,17 +780,17 @@ const char *sensor_fault_detail_string(fr_state_t fr_state, bool has_fr_sample)
 /**
  * @brief Return a diagnostic detail string for a given fault code, or NULL.
  *
- * Currently only provides detail for NODE_FAULT_SENSOR_INVALID.
+ * Currently only provides detail for NODE_FAULT_CONTROL_SENSOR_INVALID.
  * All other fault codes return NULL (no additional detail).
  *
- * @param fault_code     Active fault code
+ * @param fault_flags    Active fault flags
  * @param fr_state       Current F/R gear state
  * @param has_fr_sample  true if at least one F/R reading has been taken
  * @return Detail string or NULL if no additional detail is available
  */
-const char *fault_detail_string(node_fault_t fault_code, fr_state_t fr_state, bool has_fr_sample)
+const char *fault_detail_string(node_fault_t fault_flags, fr_state_t fr_state, bool has_fr_sample)
 {
-	if (fault_code == NODE_FAULT_SENSOR_INVALID)
+	if (fault_flags == NODE_FAULT_CONTROL_SENSOR_INVALID)
 	{
 		return sensor_fault_detail_string(fr_state, has_fr_sample);
 	}
@@ -848,7 +847,7 @@ void mark_component_lost(volatile bool *ready, const char *name, const char *det
 /**
  * @brief Apply base component-health fault gating.
  *
- * If any required base component is unhealthy, force fault_code to the
+ * If any required base component is unhealthy, force fault_flags to the
  * highest-priority component fault and retreat state to NOT_READY.
  * If all required base components recover and the current fault code is a
  * base component fault, clear it.
@@ -858,17 +857,17 @@ void update_control_state_from_component_health(void)
 	if (!all_required_components_ready())
 	{
 		taskENTER_CRITICAL(&g_hb_seq_lock);
-		g_fault_code = primary_fault_from_component_health();
+		g_fault_flags = primary_fault_from_component_health();
 		if (g_control_state != NODE_STATE_INIT)
 			g_control_state = NODE_STATE_NOT_READY;
 		taskEXIT_CRITICAL(&g_hb_seq_lock);
 		return;
 	}
 
-	if (g_fault_code == NODE_FAULT_THROTTLE_INIT || g_fault_code == NODE_FAULT_RELAY_INIT)
+	if (g_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT || g_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT)
 	{
 		taskENTER_CRITICAL(&g_hb_seq_lock);
-		g_fault_code = NODE_FAULT_NONE;
+		g_fault_flags = NODE_FAULT_NONE;
 		taskEXIT_CRITICAL(&g_hb_seq_lock);
 	}
 }
@@ -881,7 +880,7 @@ void update_control_state_from_component_health(void)
  */
 void quiesce_can_rx()
 {
-	node_quiesce_can_rx(&g_can_tx_lock, &g_can_tx_in_flight);
+	can_twai_quiesce(&g_can_tx_lock, &g_can_tx_in_flight);
 }
 
 // Rate-limit retry failure logs: log on 1st attempt, then every RETRY_LOG_EVERY_N
@@ -942,8 +941,9 @@ void retry_failed_components(void)
 			node_heartbeat_t probe_hb = {
 				.sequence = 0,
 				.state = g_control_state,
-				.fault_code = g_fault_code,
+				.fault_flags = g_fault_flags,
 				.status_flags = g_heartbeat_status_flags,
+				.stop_flags = g_stop_flags,
 			};
 			can_encode_heartbeat(probe_data, &probe_hb);
 			(void)can_twai_send(CAN_ID_CONTROL_HEARTBEAT, probe_data, pdMS_TO_TICKS(50));
@@ -1271,14 +1271,14 @@ void send_control_heartbeat(void)
 
 	node_seq_t seq = 0;
 	node_state_t state = NODE_STATE_INIT;
-	node_fault_t fault_code = NODE_FAULT_NONE;
+	node_fault_t fault_flags = NODE_FAULT_NONE;
 	node_stop_t stop_flags = NODE_STOP_NONE;
 	node_status_flags_t status_flags = 0;
 	taskENTER_CRITICAL(&g_hb_seq_lock);
 	seq = g_heartbeat_seq;
 	g_heartbeat_seq = (node_seq_t)(seq + 1);
 	state = g_control_state;
-	fault_code = g_fault_code;
+	fault_flags = g_fault_flags;
 	stop_flags = g_stop_flags;
 	status_flags = g_heartbeat_status_flags;
 	taskEXIT_CRITICAL(&g_hb_seq_lock);
@@ -1286,7 +1286,7 @@ void send_control_heartbeat(void)
 	node_heartbeat_t hb_msg = {
 		.sequence = seq,
 		.state = state,
-		.fault_code = fault_code,
+		.fault_flags = fault_flags,
 		.status_flags = status_flags,
 		.stop_flags = stop_flags,
 	};
@@ -1316,14 +1316,14 @@ void send_control_heartbeat(void)
 {
 	switch (reason)
 	{
-	case OVERRIDE_REASON_PEDAL:
-		return "pedal";
-	case OVERRIDE_REASON_FR_CHANGED:
-		return "fr_changed";
+	case OVERRIDE_REASON_THROTTLE:
+		return "throttle";
+	case OVERRIDE_REASON_REVERSE:
+		return "reverse";
 	case OVERRIDE_REASON_STEERING:
-		return "steering_position_error";
+		return "steering";
 	case OVERRIDE_REASON_BRAKING:
-		return "braking_position_error";
+		return "braking";
 	case OVERRIDE_REASON_NONE:
 	default:
 		return "none";
@@ -1346,6 +1346,8 @@ void send_control_heartbeat(void)
 		return "motor_fault";
 	case CONTROL_DISABLE_REASON_SENSOR_INVALID:
 		return "sensor_invalid";
+	case CONTROL_DISABLE_REASON_INTERNAL:
+		return "internal";
 	case CONTROL_DISABLE_REASON_NONE:
 	default:
 		return "none";
@@ -1522,30 +1524,30 @@ void execute_trigger_override(override_reason_t reason)
  * delegates to disable_autonomous_actuators().
  *
  * @param reason              Why autonomy is being disabled
- * @param safety_fault_code   Safety fault bitmask (for Safety-retreat logging)
+ * @param safety_fault_flags   Safety fault bitmask (for Safety-retreat logging)
  * @param safety_stop_flags   Safety stop bitmask (for Safety-retreat logging)
- * @param control_fault_code  Control's own issue code (for local issue logging)
+ * @param control_fault_flags  Control's own issue code (for local issue logging)
  */
-void execute_disable_autonomy(disable_reason_t reason, node_fault_t safety_fault_code, node_stop_t safety_stop_flags,
-                              node_fault_t control_fault_code)
+void execute_disable_autonomy(disable_reason_t reason, node_fault_t safety_fault_flags, node_stop_t safety_stop_flags,
+                              node_fault_t control_fault_flags)
 {
 #if defined(CONFIG_LOG_CONTROL_STATE_CHANGES) || defined(CONFIG_LOG_CONTROL_ENABLE_SEQUENCE)
 	if (reason == CONTROL_DISABLE_REASON_SAFETY_RETREAT)
 	{
 		ESP_LOGI(TAG, "AUTONOMY DISABLED (reason=%s, safety_fault=%s, safety_stop=%s)",
-		         disable_reason_to_string(reason), node_fault_to_string(safety_fault_code),
+		         disable_reason_to_string(reason), node_fault_to_string(safety_fault_flags),
 		         node_stop_to_string(safety_stop_flags));
 	}
 	else
 	{
 		ESP_LOGI(TAG, "AUTONOMY DISABLED (reason=%s, control_issue=%s)", disable_reason_to_string(reason),
-		         node_fault_to_string(control_fault_code));
+		         node_fault_to_string(control_fault_flags));
 	}
 #else
 	(void)reason;
-	(void)safety_fault_code;
+	(void)safety_fault_flags;
 	(void)safety_stop_flags;
-	(void)control_fault_code;
+	(void)control_fault_flags;
 #endif
 
 	disable_autonomous_actuators();
@@ -1752,7 +1754,7 @@ void can_rx_task(void *param)
 						         g_braking_stepper.last_error.error_code, g_braking_stepper.last_error.related_cw,
 						         g_braking_stepper.last_error.subindex);
 					taskENTER_CRITICAL(&g_cmd_lock);
-					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+					g_cmd.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 					taskEXIT_CRITICAL(&g_cmd_lock);
 				}
 			}
@@ -1772,7 +1774,7 @@ void can_rx_task(void *param)
 						         g_steering_stepper.last_error.error_code, g_steering_stepper.last_error.related_cw,
 						         g_steering_stepper.last_error.subindex);
 					taskENTER_CRITICAL(&g_cmd_lock);
-					g_cmd.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+					g_cmd.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 					taskEXIT_CRITICAL(&g_cmd_lock);
 				}
 			}
@@ -1827,12 +1829,12 @@ void can_rx_task(void *param)
 			}
 
 			node_state_t new_target = sanitize_safety_target_state(hb.state); // Safety system target
-			node_fault_t safety_fault_code = hb.fault_code;
+			node_fault_t safety_fault_flags = hb.fault_flags;
 			node_stop_t safety_stop_flags = hb.stop_flags;
 
 			taskENTER_CRITICAL(&g_cmd_lock);
 			g_cmd.target_state = new_target;
-			g_cmd.safety_fault_code = safety_fault_code;
+			g_cmd.safety_fault_flags = safety_fault_flags;
 			g_cmd.safety_stop_flags = safety_stop_flags;
 			taskEXIT_CRITICAL(&g_cmd_lock);
 
@@ -1867,15 +1869,15 @@ void control_task(void *param)
 	node_state_t prev_state = 0xFF;
 #endif
 #ifdef CONFIG_LOG_CONTROL_FAULT_CHANGES
-	node_fault_t prev_fault_code = 0xFF;
+	node_fault_t prev_fault_flags = 0xFF;
 #endif
 #ifdef CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES
 	node_state_t prev_target_state = 0xFF;
 	node_fault_t prev_safety_fault = 0xFF;
 	node_stop_t prev_safety_stop = 0xFF;
 #endif
-	int32_t last_steering_sent = STEPPER_DEDUP_RESET;
-	int16_t last_braking_sent = STEPPER_DEDUP_RESET;
+	int32_t last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
+	int16_t last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
 	TickType_t next_steering_pt_feed_tick = 0;
 	TickType_t next_braking_pt_feed_tick = 0;
 
@@ -1885,12 +1887,12 @@ void control_task(void *param)
 	prev_state = g_control_state;
 #endif
 #ifdef CONFIG_LOG_CONTROL_FAULT_CHANGES
-	prev_fault_code = g_fault_code;
+	prev_fault_flags = g_fault_flags;
 #endif
 #ifdef CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES
 	taskENTER_CRITICAL(&g_cmd_lock);
 	prev_target_state = g_cmd.target_state;
-	prev_safety_fault = g_cmd.safety_fault_code;
+	prev_safety_fault = g_cmd.safety_fault_flags;
 	prev_safety_stop = g_cmd.safety_stop_flags;
 	taskEXIT_CRITICAL(&g_cmd_lock);
 #endif
@@ -1910,7 +1912,7 @@ void control_task(void *param)
 		g_cmd.motor_fault_code = NODE_FAULT_NONE;
 		taskEXIT_CRITICAL(&g_cmd_lock);
 
-		if (cmd_local.motor_fault_code == NODE_FAULT_MOTOR_COMM)
+		if (cmd_local.motor_fault_code == NODE_FAULT_CONTROL_MOTOR_COMM)
 		{
 			mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "runtime communication fault");
 			mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "runtime communication fault");
@@ -1927,7 +1929,7 @@ void control_task(void *param)
 		cmd_local.target_state = NODE_STATE_ACTIVE;
 #endif
 #ifdef CONFIG_BYPASS_SAFETY_ESTOP_MIRROR
-		cmd_local.safety_fault_code = NODE_FAULT_NONE;
+		cmd_local.safety_fault_flags = NODE_FAULT_NONE;
 		cmd_local.safety_stop_flags = NODE_STOP_NONE;
 #endif
 #ifdef CONFIG_BYPASS_PLANNER_COMMAND_INPUTS
@@ -2033,14 +2035,14 @@ void control_task(void *param)
 		};
 
 		// Compute next state (pure function — no side effects)
-		control_step_result_t step = control_compute_step(g_control_state, g_fault_code, &step_in);
+		control_step_result_t step = control_compute_step(g_control_state, g_fault_flags, &step_in);
 
 #ifdef CONFIG_LOG_CONTROL_STATE_TICK
 		ESP_LOGI(
 			TAG,
 			"tick state=%s target=%s safety_fault=%s safety_stop=%s fr=%d pedal=%d/%d thr=%d/%d actions=0x%02X -> %s",
 			node_state_to_string(g_control_state), node_state_to_string(cmd_local.target_state),
-			node_fault_to_string(cmd_local.safety_fault_code), node_stop_to_string(cmd_local.safety_stop_flags),
+			node_fault_to_string(cmd_local.safety_fault_flags), node_stop_to_string(cmd_local.safety_stop_flags),
 			fr_state, pedal_pressed_now, pedal_rearmed_now, g_throttle_current, cmd_local.throttle_cmd, step.actions,
 			node_state_to_string(step.new_state));
 #endif
@@ -2053,7 +2055,7 @@ void control_task(void *param)
 			{
 				ESP_LOGW(TAG, "Enable blocked: fr=%s pedal_pressed=%d pedal_rearmed=%d fault=%s",
 				         fr_state_to_string(fr_state), pedal_pressed_now, pedal_rearmed_now,
-				         node_fault_to_string(g_fault_code));
+				         node_fault_to_string(g_fault_flags));
 			}
 			else if (step.precondition_fail == PRECONDITION_OK && prev_precondition_fail != PRECONDITION_OK)
 			{
@@ -2070,8 +2072,8 @@ void control_task(void *param)
 		}
 		if (step.actions & CONTROL_ACTION_DISABLE_AUTONOMY)
 		{
-			execute_disable_autonomy(step.disable_reason, cmd_local.safety_fault_code, cmd_local.safety_stop_flags,
-			                         step.new_fault_code);
+			execute_disable_autonomy(step.disable_reason, cmd_local.safety_fault_flags, cmd_local.safety_stop_flags,
+			                         step.new_fault_flags);
 		}
 		if (step.actions & CONTROL_ACTION_START_ENABLE)
 		{
@@ -2093,10 +2095,9 @@ void control_task(void *param)
 				// Do not emit FAULT here; otherwise Safety would drop relay power and
 				// stepper init would deadlock waiting for power.
 				step.new_state = NODE_STATE_ENABLE;
-				step.new_fault_code = NODE_FAULT_NONE;
+				step.new_fault_flags = NODE_FAULT_NONE;
 				step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
-				step.status_flags =
-					(node_status_flags_t)(step.status_flags & ~NODE_STATUS_FLAG_ENABLE_COMPLETE);
+				step.status_flags = (node_status_flags_t)(step.status_flags & ~NODE_STATUS_FLAG_ENABLE_COMPLETE);
 			}
 			else
 			{
@@ -2106,10 +2107,9 @@ void control_task(void *param)
 				if (!digipot_mcp41hvx1_is_autonomous())
 				{
 					step.new_state = NODE_STATE_ENABLE;
-					step.new_fault_code = NODE_FAULT_NONE;
+					step.new_fault_flags = NODE_FAULT_NONE;
 					step.enable_work_done = false; // retry COMPLETE_ENABLE on next tick
-					step.status_flags =
-						(node_status_flags_t)(step.status_flags & ~NODE_STATUS_FLAG_ENABLE_COMPLETE);
+					step.status_flags = (node_status_flags_t)(step.status_flags & ~NODE_STATUS_FLAG_ENABLE_COMPLETE);
 				}
 #endif
 			}
@@ -2200,17 +2200,17 @@ void control_task(void *param)
 		}
 #endif
 
-		// Detect fault entry (before overwriting g_fault_code)
-		if (step.new_fault_code != NODE_FAULT_NONE && step.new_fault_code != g_fault_code)
+		// Detect fault entry (before overwriting g_fault_flags)
+		if (step.new_fault_flags != NODE_FAULT_NONE && step.new_fault_flags != g_fault_flags)
 		{
-			const char *detail = fault_detail_string(step.new_fault_code, fr_state, true);
+			const char *detail = fault_detail_string(step.new_fault_flags, fr_state, true);
 			if (detail)
 			{
-				ESP_LOGE(TAG, "Fault asserted: %s (detail=%s)", node_fault_to_string(step.new_fault_code), detail);
+				ESP_LOGE(TAG, "Fault asserted: %s (detail=%s)", node_fault_to_string(step.new_fault_flags), detail);
 			}
 			else
 			{
-				ESP_LOGE(TAG, "Fault asserted: %s", node_fault_to_string(step.new_fault_code));
+				ESP_LOGE(TAG, "Fault asserted: %s", node_fault_to_string(step.new_fault_flags));
 			}
 		}
 
@@ -2223,7 +2223,7 @@ void control_task(void *param)
 		taskENTER_CRITICAL(&g_hb_seq_lock);
 		old_state = g_control_state;
 		g_control_state = step.new_state;
-		g_fault_code = step.new_fault_code;
+		g_fault_flags = step.new_fault_flags;
 		g_stop_flags = step.new_stop_flags;
 		g_heartbeat_status_flags = status_flags;
 		new_state = g_control_state;
@@ -2236,21 +2236,21 @@ void control_task(void *param)
 		last_steering_sent = step.new_last_steering;
 		last_braking_sent = step.new_last_braking;
 
-		if (step.new_fault_code == NODE_FAULT_THROTTLE_INIT && g_digipot_ready)
+		if (step.new_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT && g_digipot_ready)
 		{
 			mark_component_lost(&g_digipot_ready, "DIGIPOT", "runtime init fault");
 		}
-		if (step.new_fault_code == NODE_FAULT_RELAY_INIT && g_dpdt_relay_ready)
+		if (step.new_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT && g_dpdt_relay_ready)
 		{
 			mark_component_lost(&g_dpdt_relay_ready, "DPDT_RELAY", "runtime init fault");
 		}
-		if (step.new_fault_code == NODE_FAULT_SENSOR_INVALID && g_fr_inputs_ready)
+		if (step.new_fault_flags == NODE_FAULT_CONTROL_SENSOR_INVALID && g_fr_inputs_ready)
 		{
 			char fr_detail[64];
 			snprintf(fr_detail, sizeof(fr_detail), "runtime sensor invalid (fr=%s)", fr_state_to_string(fr_state));
 			mark_component_lost(&g_fr_inputs_ready, "FR_INPUT", fr_detail);
 		}
-		if (step.new_fault_code == NODE_FAULT_MOTOR_COMM)
+		if (step.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM)
 		{
 			mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "runtime motor communication fault");
 			mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "runtime motor communication fault");
@@ -2260,15 +2260,15 @@ void control_task(void *param)
 		{
 			taskENTER_CRITICAL(&g_hb_seq_lock);
 			g_control_state = NODE_STATE_NOT_READY;
-			g_fault_code = primary_fault_from_component_health();
+			g_fault_flags = primary_fault_from_component_health();
 			g_heartbeat_status_flags = 0;
 			new_state = g_control_state;
 			taskEXIT_CRITICAL(&g_hb_seq_lock);
 		}
-		else if (g_fault_code == NODE_FAULT_THROTTLE_INIT || g_fault_code == NODE_FAULT_RELAY_INIT)
+		else if (g_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT || g_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT)
 		{
 			taskENTER_CRITICAL(&g_hb_seq_lock);
-			g_fault_code = NODE_FAULT_NONE;
+			g_fault_flags = NODE_FAULT_NONE;
 			g_heartbeat_status_flags = 0;
 			new_state = g_control_state;
 			taskEXIT_CRITICAL(&g_hb_seq_lock);
@@ -2280,9 +2280,9 @@ void control_task(void *param)
 			send_control_heartbeat();
 		}
 
-		// Log control-local transitions only
+		// Log control-local transitions using local snapshots (not volatile reads)
 #ifdef CONFIG_LOG_CONTROL_STATE_CHANGES
-		if (g_control_state != prev_state)
+		if (new_state != prev_state)
 		{
 			const char *reason = "none";
 			if (step.actions & CONTROL_ACTION_TRIGGER_OVERRIDE)
@@ -2297,27 +2297,28 @@ void control_task(void *param)
 				reason = "abort_enable";
 
 			ESP_LOGI(TAG, "State: %s -> %s (reason=%s)", node_state_to_string(prev_state),
-			         node_state_to_string(g_control_state), reason);
+			         node_state_to_string(new_state), reason);
 		}
-		prev_state = g_control_state;
+		prev_state = new_state;
 #endif
 
 #ifdef CONFIG_LOG_CONTROL_FAULT_CHANGES
-		if (g_fault_code != prev_fault_code)
+		node_fault_t new_fault = step.new_fault_flags;
+		if (new_fault != prev_fault_flags)
 		{
-			const char *detail = fault_detail_string(g_fault_code, fr_state, true);
+			const char *detail = fault_detail_string(new_fault, fr_state, true);
 			if (detail)
 			{
-				ESP_LOGI(TAG, "Fault: %s -> %s (detail=%s)", node_fault_to_string(prev_fault_code),
-				         node_fault_to_string(g_fault_code), detail);
+				ESP_LOGI(TAG, "Fault: %s -> %s (detail=%s)", node_fault_to_string(prev_fault_flags),
+				         node_fault_to_string(new_fault), detail);
 			}
 			else
 			{
-				ESP_LOGI(TAG, "Fault: %s -> %s", node_fault_to_string(prev_fault_code),
-				         node_fault_to_string(g_fault_code));
+				ESP_LOGI(TAG, "Fault: %s -> %s", node_fault_to_string(prev_fault_flags),
+				         node_fault_to_string(new_fault));
 			}
 		}
-		prev_fault_code = g_fault_code;
+		prev_fault_flags = new_fault;
 #endif
 
 		// Log Safety mirrored state/fault changes separately
@@ -2327,10 +2328,10 @@ void control_task(void *param)
 			ESP_LOGI(TAG, "Safety target: %s -> %s", node_state_to_string(prev_target_state),
 			         node_state_to_string(cmd_local.target_state));
 		}
-		if (cmd_local.safety_fault_code != prev_safety_fault)
+		if (cmd_local.safety_fault_flags != prev_safety_fault)
 		{
 			ESP_LOGI(TAG, "Safety fault: %s -> %s", node_fault_to_string(prev_safety_fault),
-			         node_fault_to_string(cmd_local.safety_fault_code));
+			         node_fault_to_string(cmd_local.safety_fault_flags));
 		}
 		if (cmd_local.safety_stop_flags != prev_safety_stop)
 		{
@@ -2339,7 +2340,7 @@ void control_task(void *param)
 		}
 
 		prev_target_state = cmd_local.target_state;
-		prev_safety_fault = cmd_local.safety_fault_code;
+		prev_safety_fault = cmd_local.safety_fault_flags;
 		prev_safety_stop = cmd_local.safety_stop_flags;
 #endif
 
@@ -2372,7 +2373,7 @@ void heartbeat_task(void *param)
 	{
 		task_wdt_reset_or_log("heartbeat_task", &wdt_reset_failed);
 
-		led_ws2812_set_fault_overlay(g_fault_code != NODE_FAULT_NONE);
+		led_ws2812_set_fault_overlay(g_fault_flags != NODE_FAULT_NONE);
 		led_ws2812_set_state(g_control_state);
 
 		// Send heartbeat (periodic 100ms)
@@ -2392,9 +2393,9 @@ void heartbeat_task(void *param)
  * @brief Standalone throttle test task — serial-controlled throttle levels.
  *
  * Replaces the normal CAN-based control loop when CONFIG_THROTTLE_TEST_MODE
- * is enabled.  Reads single keypresses from USB serial (0-7, d, q) and
- * directly drives the DG408DJZ mux / relay hardware.  No CAN, steppers,
- * or Safety/Planner dependencies.
+ * is enabled.  Reads wiper values 0-255 from USB serial (type digits, then
+ * space/enter to commit) and drives the MCP41HVX1 digipot / MY5NJ relay
+ * hardware directly.  No CAN, steppers, or Safety/Planner dependencies.
  *
  * Safety behavior:
  *   - Requires F/R in FORWARD to arm.
@@ -2412,7 +2413,7 @@ void throttle_test_task(void *param)
 
 	static const char *TAG_TEST = "THROTTLE_TEST";
 
-	esp_err_t console_err = serial_console_init();
+	esp_err_t console_err = serial_input_init();
 	if (console_err != ESP_OK)
 		ESP_LOGW(TAG_TEST, "Serial console init failed: %s (serial input may not work)", esp_err_to_name(console_err));
 
@@ -2476,13 +2477,14 @@ void throttle_test_task(void *param)
 	}
 
 	ESP_LOGI(TAG_TEST, "Throttle system ready — DPDT relay ON, digipot autonomous");
+	ESP_LOGI(TAG_TEST, "Type 0-255 + space/enter to set wiper. r=toggle relay, q=quit");
 	ESP_LOGI(TAG_TEST, "F/R software enforced: REVERSE disables throttle, NEUTRAL zeros level");
 
 	// ----------------------------------------------------------------
 	// State machine
 	//
 	// ARMED:    DPDT relay ON, digipot active.
-	//           Serial 0-7 sets throttle wiper (mapped to 256 range).
+	//           Type 0-255 + space/enter to set wiper position.
 	//           Pedal press or F/R REVERSE → OVERRIDE.
 	//           F/R NEUTRAL → zero throttle (stay ARMED).
 	// OVERRIDE: DPDT relay OFF (manual pedal drives).
@@ -2500,7 +2502,9 @@ void throttle_test_task(void *param)
 	bool relay_on = true; // MY5NJ DPDT relay (GPIO 10) — energized on boot
 	uint32_t last_status_log_ms = 0;
 
-	// Post-bypass F/R gate: bypass relay is energized so the full truth
+	serial_input_accum_t wiper_input = SERIAL_INPUT_ACCUM_INIT(255);
+
+	// Post-bypass F/R gate: DPDT relay is energized so the full truth
 	// table is readable.  Wait for debounce to settle, then start in
 	// OVERRIDE if the cart is in REVERSE (loop will recover when cleared).
 	vTaskDelay(pdMS_TO_TICKS(FR_PC817_DEBOUNCE_MS + 5));
@@ -2550,7 +2554,7 @@ void throttle_test_task(void *param)
 #endif
 
 		// Read serial input (non-blocking)
-		int ch = serial_console_read_char();
+		int ch = serial_input_read_char();
 
 		// ---- Quit: immediate shutdown from any state ----
 		if (ch == 'q' || ch == 'Q')
@@ -2561,6 +2565,7 @@ void throttle_test_task(void *param)
 			(void)relay_dpdt_my5nj_deenergize();
 			led_ws2812_set_state(NODE_STATE_INIT);
 			ESP_LOGI(TAG_TEST, "Shutdown complete — idle");
+			serial_input_accum_reset(&wiper_input);
 			state = TEST_SHUTDOWN;
 		}
 
@@ -2568,7 +2573,7 @@ void throttle_test_task(void *param)
 		switch (state)
 		{
 		// ............................................................
-		// ARMED: bypass relay ON, mux active, throttle relay ON.
+		// ARMED: DPDT relay ON, digipot active.
 		// Serial commands 0-7 control throttle level.
 		// Pedal press or F/R REVERSE → OVERRIDE (manual control).
 		// F/R NEUTRAL → zero throttle (stay ARMED).
@@ -2591,6 +2596,7 @@ void throttle_test_task(void *param)
 				(void)relay_dpdt_my5nj_deenergize();
 				relay_on = false;
 				current_wiper = 0;
+				serial_input_accum_reset(&wiper_input);
 				led_ws2812_set_fault_overlay(false);
 				led_ws2812_set_state(NODE_STATE_NOT_READY);
 				state = TEST_OVERRIDE;
@@ -2605,6 +2611,7 @@ void throttle_test_task(void *param)
 				(void)relay_dpdt_my5nj_deenergize();
 				relay_on = false;
 				current_wiper = 0;
+				serial_input_accum_reset(&wiper_input);
 				led_ws2812_set_fault_overlay(false);
 				led_ws2812_set_state(NODE_STATE_NOT_READY);
 				state = TEST_OVERRIDE;
@@ -2625,19 +2632,18 @@ void throttle_test_task(void *param)
 				}
 			}
 
-			// Handle serial throttle commands (0-7 mapped to wiper positions)
-			if (ch >= '0' && ch <= '7')
+			// Handle serial throttle commands: type 0-255 then space/enter to commit.
+			if (serial_input_accum_feed(&wiper_input, ch))
 			{
-				// Map 0-7 keypress to representative wiper positions across 0-255 range
-				static constexpr uint8_t wiper_map[8] = {0, 36, 73, 109, 146, 182, 219, 255};
-				uint8_t wiper = wiper_map[ch - '0'];
+				uint8_t wiper = (uint8_t)wiper_input.value;
+				serial_input_accum_reset(&wiper_input);
 				if (wiper != current_wiper)
 				{
 					esp_err_t serr = digipot_mcp41hvx1_set_wiper(wiper);
 					if (serr == ESP_OK)
 					{
 						current_wiper = wiper;
-						ESP_LOGI(TAG_TEST, "Throttle wiper: %u (key %c)", wiper, ch);
+						ESP_LOGI(TAG_TEST, "Throttle wiper: %u", wiper);
 						led_ws2812_set_fault_overlay(false);
 						led_ws2812_set_state(wiper > 0 ? NODE_STATE_ACTIVE : NODE_STATE_READY);
 					}
@@ -2954,7 +2960,7 @@ void main_task(void *param)
 		any_bypass = true;
 #endif
 #ifdef CONFIG_BYPASS_SAFETY_ESTOP_MIRROR
-		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: SAFETY_ESTOP_MIRROR (forcing e-stop clear)");
+		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: SAFETY_ESTOP_MIRROR (forcing stop/fault clear)");
 		any_bypass = true;
 #endif
 #ifdef CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS
@@ -2997,18 +3003,18 @@ void main_task(void *param)
 
 	update_control_state_from_component_health();
 
-	if (g_fault_code != NODE_FAULT_NONE)
+	if (g_fault_flags != NODE_FAULT_NONE)
 	{
-		const char *detail = fault_detail_string(g_fault_code, fr_state_debounced(), true);
+		const char *detail = fault_detail_string(g_fault_flags, fr_state_debounced(), true);
 		if (detail)
 		{
 			ESP_LOGE(TAG_INIT, "State: INIT -> %s (fault=%s detail=%s)", node_state_to_string(g_control_state),
-			         node_fault_to_string(g_fault_code), detail);
+			         node_fault_to_string(g_fault_flags), detail);
 		}
 		else
 		{
 			ESP_LOGE(TAG_INIT, "State: INIT -> %s (fault=%s)", node_state_to_string(g_control_state),
-			         node_fault_to_string(g_fault_code));
+			         node_fault_to_string(g_fault_flags));
 		}
 	}
 	else

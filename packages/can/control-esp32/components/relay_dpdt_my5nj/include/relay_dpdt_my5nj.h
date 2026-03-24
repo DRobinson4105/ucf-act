@@ -2,8 +2,8 @@
  * @file relay_dpdt_my5nj.h
  * @brief MY5NJ DPDT relay driver (24V coil via 2N5551 NPN transistor).
  *
- * Replaces both the SRD-05VDC throttle relay and the JD-2912 pedal bypass
- * relay with a single DPDT relay. Both poles switch together:
+ * Single DPDT relay handles both throttle source switching and pedal
+ * microswitch bypass. Both poles switch together:
  *   - Pole 1: switches Curtis throttle input between manual pedal (NC)
  *             and digipot wiper (NO)
  *   - Pole 2: bypasses pedal microswitch (NC = normal operation,

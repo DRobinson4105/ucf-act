@@ -559,9 +559,8 @@ void battery_monitor_get_status(battery_status_t *out)
 	out->voltage_mv = s_filters_primed ? (uint16_t)(s_voltage_filtered_mv + 0.5f) : 0;
 
 	// Convert current mA to 10mA units (round toward nearest, matching voltage rounding)
-	out->current_10ma = s_filters_primed
-	                        ? (int16_t)(s_current_filtered_ma / 10.0f + (s_current_filtered_ma >= 0 ? 0.5f : -0.5f))
-	                        : 0;
+	out->current_10ma =
+		s_filters_primed ? (int16_t)(s_current_filtered_ma / 10.0f + (s_current_filtered_ma >= 0 ? 0.5f : -0.5f)) : 0;
 
 	out->soc_pct = s_soc_pct;
 

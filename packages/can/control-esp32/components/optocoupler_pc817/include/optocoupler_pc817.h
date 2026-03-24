@@ -4,18 +4,19 @@
  *
  * Hardware note: The anti-arcing microswitch (forward_gpio) is wired in
  * series after the throttle pedal microswitch in the cart's 48V solenoid
- * circuit.  Before the pedal bypass relay (JD-2912) is energized, the
- * anti-arcing switch cannot conduct current.  This means:
+ * circuit.  Before the DPDT relay (MY5NJ) is energized, the anti-arcing
+ * switch cannot conduct current.  This means:
  *
  *   Pre-bypass:
  *     FORWARD reads as NEUTRAL  (anti-arc can't conduct, buzzer off)
  *     NEUTRAL reads as NEUTRAL  (anti-arc open, buzzer off)
  *     REVERSE reads as INVALID  (anti-arc can't conduct, buzzer on)
  *
- *   Post-bypass (JD-2912 energized during ENABLE):
+ *   Post-bypass (DPDT relay energized during ENABLE):
  *     All four states read correctly per the truth table below.
  *
  * The buzzer microswitch (reverse_gpio) is independent and always readable.
+ * Both GPIOs are active-low (optocoupler pulls low when microswitch is closed).
  */
 #pragma once
 
@@ -23,7 +24,7 @@
 
 #include "driver/gpio.h"
 #include "esp_err.h"
-#include "control_domain_types.h"
+#include "control_types.h"
 
 #ifdef __cplusplus
 extern "C"

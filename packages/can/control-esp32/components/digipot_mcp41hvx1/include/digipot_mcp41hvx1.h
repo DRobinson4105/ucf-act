@@ -20,8 +20,7 @@ extern "C"
 // MCP41HVX1 Digital Potentiometer Driver
 // ============================================================================
 // Controls throttle output level using an MCP41HVX1 SPI-controlled high-voltage
-// digital potentiometer. Replaces the DG408DJZ multiplexer + resistor ladder
-// with a single 256-position digipot. Throttle source selection and pedal
+// digital potentiometer (256 positions). Throttle source selection and pedal
 // microswitch bypass are handled separately by relay_dpdt_my5nj.
 //
 // Hardware:
@@ -30,7 +29,7 @@ extern "C"
 //   - Wiper output connects to DPDT relay
 //   - V+ powered from 24V rail, VL from ESP32 3.3V
 //   - 256 wiper positions (0 = minimum throttle, 255 = maximum throttle)
-//   - SPI interface (MOSI, SCK, CS) replaces the old DG408 address lines
+//   - SPI interface (MOSI, SCK, CS)
 //
 // Safe state: wiper position 0 (minimum throttle)
 // ============================================================================

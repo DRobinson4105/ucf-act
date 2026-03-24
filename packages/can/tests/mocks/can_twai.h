@@ -33,7 +33,8 @@ static inline esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8]
 	}
 	else
 	{
-		fprintf(stderr, "MOCK WARNING: mock_sent_count >= MOCK_MAX_FRAMES, frame dropped!\n");
+		fprintf(stderr, "MOCK ERROR: mock_sent_count >= MOCK_MAX_FRAMES, frame dropped!\n");
+		return ESP_FAIL;
 	}
 	return ESP_OK;
 }
@@ -59,7 +60,8 @@ static inline esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_
 	}
 	else
 	{
-		fprintf(stderr, "MOCK WARNING: mock_sent_count >= MOCK_MAX_FRAMES, frame dropped!\n");
+		fprintf(stderr, "MOCK ERROR: mock_sent_count >= MOCK_MAX_FRAMES, frame dropped!\n");
+		return ESP_FAIL;
 	}
 	return ESP_OK;
 }

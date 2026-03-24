@@ -20,7 +20,7 @@ extern "C"
 // ============================================================================
 // Heartbeat Monitor
 // ============================================================================
-// Allows Safety ESP32 to track liveness of CAN nodes by monitoring their heartbeat
+// Allows nodes to track liveness of other CAN nodes by monitoring their heartbeat
 // messages. Each node sends periodic heartbeats with sequence number and state.
 // If a node's heartbeat is not received within its timeout, it's marked dead.
 //
@@ -79,7 +79,7 @@ typedef struct
 } heartbeat_monitor_t;
 
 // heartbeat_monitor_config_t - initialization configuration
-//   name: Optional base name for monitor tag (e.g., "SAFETY" -> "SAFETY_HB")
+//   name: Optional base name for monitor tag (e.g., "SAFETY")
 typedef struct
 {
 	const char *name;
@@ -159,56 +159,6 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon);
  * @return true if the node is alive, false if timed out or invalid
  */
 bool heartbeat_monitor_is_alive(heartbeat_monitor_t *mon, int node_id);
-
-/**
- * @brief Check if all registered nodes are alive.
- *
- * Convenience function that returns true only when every registered
- * node has sent a heartbeat within its configured timeout.
- *
- * @param mon  Pointer to the monitor instance
- * @return true if all nodes are alive, false if any node has timed out
- */
-bool heartbeat_monitor_all_alive(heartbeat_monitor_t *mon);
-
-/**
- * @brief Get detailed status of a specific node.
- *
- * Copies the node's full tracking state into @p out_status, including
- * last_seen time, sequence number, reported state, and alive flag.
- *
- * @param mon         Pointer to the monitor instance
- * @param node_id     Index returned by heartbeat_monitor_register()
- * @param out_status  Pointer to structure to fill with node status
- * @return true on success, false if node_id is invalid or not registered
- */
-bool heartbeat_monitor_get_status(heartbeat_monitor_t *mon, int node_id, heartbeat_monitor_node_t *out_status);
-
-/**
- * @brief Get a bitmask of timed-out nodes.
- *
- * Returns a bitmask where bit N is set if node N has timed out.
- * Nodes that have never sent a heartbeat are excluded.
- * Useful for compact status reporting and fault aggregation.
- *
- * @param mon  Pointer to the monitor instance
- * @return Bitmask of timed-out nodes (bit N set = node N timed out)
- */
-uint8_t heartbeat_monitor_get_timeout_mask(heartbeat_monitor_t *mon);
-
-// ============================================================================
-// Debugging
-// ============================================================================
-
-/**
- * @brief Log the status of all monitored nodes.
- *
- * Prints each registered node's name, alive/dead state, last sequence
- * number, and last reported state via ESP_LOG. Intended for debugging.
- *
- * @param mon  Pointer to the monitor instance
- */
-void heartbeat_monitor_log_status(heartbeat_monitor_t *mon);
 
 #ifdef __cplusplus
 }

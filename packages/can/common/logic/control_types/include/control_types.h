@@ -1,6 +1,6 @@
 /**
- * @file control_domain_types.h
- * @brief Shared Control-domain semantic types and constants.
+ * @file control_types.h
+ * @brief Shared Control semantic types and constants.
  *
  * These values are not CAN wire-format definitions. They model local
  * Control-domain behavior (driver input decoding, state-machine actions,
@@ -31,21 +31,20 @@ typedef uint8_t fr_state_t; // FR_STATE_* values
 // Control Policy Constants
 // ============================================================================
 
-// Planner command considered stale after same sequence seen this many cycles.
-#define PLANNER_CMD_STALE_COUNT 10
-
 // Sentinel value for stepper dedup trackers — forces next command to send.
-#define STEPPER_DEDUP_RESET INT16_MIN
+// INT32_MIN for int32_t steering tracker, INT16_MIN for int16_t braking tracker.
+#define STEPPER_DEDUP_RESET_STEERING INT32_MIN
+#define STEPPER_DEDUP_RESET_BRAKING  INT16_MIN
 
 // ============================================================================
 // Override / Preconditions / Actions
 // ============================================================================
 
-#define OVERRIDE_REASON_NONE       0x00
-#define OVERRIDE_REASON_PEDAL      0x01
-#define OVERRIDE_REASON_FR_CHANGED 0x02
-#define OVERRIDE_REASON_STEERING   0x03
-#define OVERRIDE_REASON_BRAKING    0x04
+#define OVERRIDE_REASON_NONE     0x00
+#define OVERRIDE_REASON_REVERSE  0x01
+#define OVERRIDE_REASON_THROTTLE 0x02
+#define OVERRIDE_REASON_STEERING 0x03
+#define OVERRIDE_REASON_BRAKING  0x04
 typedef uint8_t override_reason_t; // OVERRIDE_REASON_* values
 
 #define PRECONDITION_OK                     0x00
@@ -64,6 +63,7 @@ typedef uint8_t precondition_fail_t; // PRECONDITION_FAIL_* bitmask
 #define CONTROL_ACTION_COMPLETE_ENABLE  0x0002 // Finish enable (steppers on, throttle autonomous)
 #define CONTROL_ACTION_ABORT_ENABLE     0x0004 // Cancel enable (relay off, throttle disable)
 #define CONTROL_ACTION_TRIGGER_OVERRIDE 0x0008 // Emergency disable all actuators
+// 0x0010 reserved
 #define CONTROL_ACTION_APPLY_THROTTLE   0x0020 // Update throttle actuator to new level
 #define CONTROL_ACTION_DISABLE_AUTONOMY 0x0040 // Disable actuators (non-override retreat/fault)
 typedef uint16_t control_actions_t;            // CONTROL_ACTION_* bitmask
@@ -72,7 +72,8 @@ typedef uint16_t control_actions_t;            // CONTROL_ACTION_* bitmask
 #define CONTROL_DISABLE_REASON_SAFETY_RETREAT 0x01
 #define CONTROL_DISABLE_REASON_MOTOR_FAULT    0x02
 #define CONTROL_DISABLE_REASON_SENSOR_INVALID 0x03
-typedef uint8_t disable_reason_t; // CONTROL_DISABLE_REASON_* values
+#define CONTROL_DISABLE_REASON_INTERNAL       0x04 // corrupted state or unexpected condition
+typedef uint8_t disable_reason_t;                  // CONTROL_DISABLE_REASON_* values
 
 #define CONTROL_ABORT_REASON_NONE           0x00
 #define CONTROL_ABORT_REASON_SAFETY_RETREAT 0x01

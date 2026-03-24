@@ -9,7 +9,7 @@ CXX = g++
 CXXFLAGS = -Wall -Wextra -Werror -std=c++17 -g -O0
 INCLUDES = -I../common/protocol/stepper_protocol_uim2852/include \
            -I../common/protocol/can_protocol/include \
-           -I../common/logic/control_domain_types/include
+           -I../common/logic/control_types/include
 
 STEPPER_SRC = ../common/protocol/stepper_protocol_uim2852/stepper_protocol_uim2852.cpp
 MOTOR_SRC   = ../control-esp32/components/stepper_motor_uim2852/stepper_motor_uim2852.cpp
@@ -112,7 +112,7 @@ test_safety_logic: test_safety_logic.cpp $(SAFETY_SRC)
 	@$(CXX) $(CXXFLAGS) -I../common/logic/safety_logic/include $(INCLUDES) -o $@ $^
 
 test_control_logic: test_control_logic.cpp $(CONTROL_SRC)
-	@$(CXX) $(CXXFLAGS) -I../common/logic/control_logic/include -I../common/logic/can_tx_track/include $(INCLUDES) -o $@ $^
+	@$(CXX) $(CXXFLAGS) -I../common/logic/control_logic/include $(INCLUDES) -o $@ $^
 
 test_system_state: test_system_state.cpp $(SYSTEM_STATE_SRC)
 	@$(CXX) $(CXXFLAGS) -I../common/logic/system_state/include $(INCLUDES) -o $@ $^

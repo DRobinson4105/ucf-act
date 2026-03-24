@@ -60,6 +60,9 @@ void release_resources()
  */
 esp_err_t write_wiper(uint8_t position)
 {
+	if (!s_spi_handle)
+		return ESP_ERR_INVALID_STATE;
+
 	uint8_t tx_data[2] = {CMD_WRITE_VOLATILE_WIPER, position};
 
 	spi_transaction_t txn = {};
@@ -101,6 +104,9 @@ esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config)
 	if (err == ESP_ERR_INVALID_STATE)
 	{
 		// Recover from stale host state and retry once.
+#ifdef CONFIG_LOG_RETRY_DIGIPOT
+		ESP_LOGW(TAG, "SPI bus stale, freeing and retrying");
+#endif
 		(void)spi_bus_free(config->spi_host);
 		err = spi_bus_initialize(config->spi_host, &bus_cfg, SPI_DMA_DISABLED);
 	}

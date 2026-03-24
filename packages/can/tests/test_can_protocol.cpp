@@ -205,7 +205,7 @@ static void test_safety_heartbeat_roundtrip_advancing(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 1,
 		.state = NODE_STATE_ENABLE,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -218,7 +218,7 @@ static void test_safety_heartbeat_roundtrip_advancing(void)
 
 	assert(hb_out.sequence == 1);
 	assert(hb_out.state == NODE_STATE_ENABLE);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_safety_heartbeat_roundtrip_retreating(void)
@@ -226,7 +226,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 55,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_SAFETY_PLANNER_TIMEOUT,
+		.fault_flags = NODE_FAULT_SAFETY_PLANNER_TIMEOUT,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_PUSH_BUTTON,
 	};
@@ -239,7 +239,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void)
 
 	assert(hb_out.sequence == 55);
 	assert(hb_out.state == NODE_STATE_READY);
-	assert(hb_out.fault_code == NODE_FAULT_SAFETY_PLANNER_TIMEOUT);
+	assert(hb_out.fault_flags == NODE_FAULT_SAFETY_PLANNER_TIMEOUT);
 	assert(hb_out.stop_flags == NODE_STOP_PUSH_BUTTON);
 }
 
@@ -248,7 +248,7 @@ static void test_safety_heartbeat_reserved_bytes_zero(void)
 	node_heartbeat_t hb = {
 		.sequence = 1,
 		.state = NODE_STATE_ACTIVE,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -272,7 +272,7 @@ static void test_heartbeat_roundtrip_basic(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 100,
 		.state = NODE_STATE_ACTIVE,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -285,7 +285,7 @@ static void test_heartbeat_roundtrip_basic(void)
 
 	assert(hb_out.sequence == 100);
 	assert(hb_out.state == NODE_STATE_ACTIVE);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 	assert(hb_out.status_flags == 0);
 }
 
@@ -294,7 +294,7 @@ static void test_heartbeat_roundtrip_with_fault(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 99,
 		.state = NODE_STATE_NOT_READY,
-		.fault_code = NODE_FAULT_PERCEPTION,
+		.fault_flags = NODE_FAULT_PLANNER_PERCEPTION,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -307,7 +307,7 @@ static void test_heartbeat_roundtrip_with_fault(void)
 
 	assert(hb_out.sequence == 99);
 	assert(hb_out.state == NODE_STATE_NOT_READY);
-	assert(hb_out.fault_code == NODE_FAULT_PERCEPTION);
+	assert(hb_out.fault_flags == NODE_FAULT_PLANNER_PERCEPTION);
 	assert(hb_out.status_flags == 0);
 }
 
@@ -316,7 +316,7 @@ static void test_heartbeat_roundtrip_enable_complete(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 50,
 		.state = NODE_STATE_ENABLE,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = NODE_STATUS_FLAG_ENABLE_COMPLETE,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -329,7 +329,7 @@ static void test_heartbeat_roundtrip_enable_complete(void)
 
 	assert(hb_out.sequence == 50);
 	assert(hb_out.state == NODE_STATE_ENABLE);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 	assert(hb_out.status_flags == NODE_STATUS_FLAG_ENABLE_COMPLETE);
 }
 
@@ -338,7 +338,7 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 51,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = NODE_STATUS_FLAG_AUTONOMY_REQUEST,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -351,7 +351,7 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 
 	assert(hb_out.sequence == 51);
 	assert(hb_out.state == NODE_STATE_READY);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 	assert(hb_out.status_flags == NODE_STATUS_FLAG_AUTONOMY_REQUEST);
 }
 
@@ -360,23 +360,23 @@ static void test_heartbeat_roundtrip_stop_flags(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 53,
 		.state = NODE_STATE_ACTIVE,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
-		.stop_flags = NODE_STOP_OPERATOR_FR,
+		.stop_flags = NODE_STOP_OPERATOR_REVERSE,
 	};
 
 	uint8_t data[8];
 	can_encode_heartbeat(data, &hb_in);
 
 	// Verify byte 4 carries stop_flags
-	assert(data[4] == NODE_STOP_OPERATOR_FR);
+	assert(data[4] == NODE_STOP_OPERATOR_REVERSE);
 
 	node_heartbeat_t hb_out = {};
 	assert(can_decode_heartbeat(data, 8, &hb_out));
 
 	assert(hb_out.sequence == 53);
 	assert(hb_out.state == NODE_STATE_ACTIVE);
-	assert(hb_out.stop_flags == NODE_STOP_OPERATOR_FR);
+	assert(hb_out.stop_flags == NODE_STOP_OPERATOR_REVERSE);
 }
 
 static void test_heartbeat_roundtrip_reserved_bit2(void)
@@ -384,7 +384,7 @@ static void test_heartbeat_roundtrip_reserved_bit2(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 52,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0x04,
 		.stop_flags = NODE_STOP_NONE,
 	};
@@ -397,7 +397,7 @@ static void test_heartbeat_roundtrip_reserved_bit2(void)
 
 	assert(hb_out.sequence == 52);
 	assert(hb_out.state == NODE_STATE_READY);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 	assert(hb_out.status_flags == 0x04);
 }
 
@@ -406,7 +406,7 @@ static void test_heartbeat_reserved_bytes_zero(void)
 	node_heartbeat_t hb = {
 		.sequence = 1,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_NONE,
+		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_REMOTE,
 	};
@@ -427,7 +427,7 @@ static void test_heartbeat_decode_rejects_short_dlc(void)
 	node_heartbeat_t hb_out = {
 		.sequence = 0xAA,
 		.state = 0xBB,
-		.fault_code = 0xCC,
+		.fault_flags = 0xCC,
 		.status_flags = 0xDD,
 		.stop_flags = 0x11,
 	};
@@ -436,11 +436,11 @@ static void test_heartbeat_decode_rejects_short_dlc(void)
 	assert(!can_decode_heartbeat(data, 4, &hb_out));
 	assert(can_decode_heartbeat(data, 5, &hb_out));  // minimum valid DLC
 	// Reset hb_out to sentinel values for the remaining checks
-	hb_out = {.sequence = 0xAA, .state = 0xBB, .fault_code = 0xCC, .status_flags = 0xDD, .stop_flags = 0x11};
+	hb_out = {.sequence = 0xAA, .state = 0xBB, .fault_flags = 0xCC, .status_flags = 0xDD, .stop_flags = 0x11};
 	assert(!can_decode_heartbeat(data, 0, &hb_out));
 	assert(hb_out.sequence == 0xAA);
 	assert(hb_out.state == 0xBB);
-	assert(hb_out.fault_code == 0xCC);
+	assert(hb_out.fault_flags == 0xCC);
 	assert(hb_out.status_flags == 0xDD);
 	assert(hb_out.stop_flags == 0x11);
 }
@@ -475,35 +475,170 @@ static void test_node_fault_all_values(void)
 	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_PLANNER_TIMEOUT | NODE_FAULT_SAFETY_CONTROL_TIMEOUT),
 	              "planner_timeout+control_timeout") == 0);
 	// Planner faults
-	assert(strcmp(node_fault_to_string(NODE_FAULT_PERCEPTION), "perception") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_LOCALIZATION), "localization") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNING), "planning") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_PERCEPTION), "perception") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_LOCALIZATION), "localization") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_PLANNING), "planning") == 0);
 	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_HARDWARE), "planner_hardware") == 0);
 	// Control faults
-	assert(strcmp(node_fault_to_string(NODE_FAULT_THROTTLE_INIT), "throttle_init") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_CAN_TX), "can_tx") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_MOTOR_COMM), "motor_comm") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_SENSOR_INVALID), "sensor_invalid") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_RELAY_INIT), "relay_init") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_THROTTLE_INIT), "throttle_init") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_CAN_TX), "can_tx") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_MOTOR_COMM), "motor_comm") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_SENSOR_INVALID), "sensor_invalid") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_RELAY_INIT), "relay_init") == 0);
 	// Unknown
-	assert(strcmp(node_fault_to_string(0xFE), "unknown") == 0);
+	assert(strcmp(node_fault_to_string(0xFE), "unknown(0xFE)") == 0);
 }
 
 static void test_fault_classification_helpers(void)
 {
-	assert(node_fault_is_planner_issue(NODE_FAULT_PERCEPTION));
-	assert(!node_fault_is_planner_issue(NODE_FAULT_THROTTLE_INIT));
+	assert(node_fault_is_planner(NODE_FAULT_PLANNER_PERCEPTION));
+	assert(node_fault_is_planner(NODE_FAULT_PLANNER_PERCEPTION | NODE_FAULT_PLANNER_LOCALIZATION));
+	assert(!node_fault_is_planner(NODE_FAULT_CONTROL_THROTTLE_INIT));
+	assert(!node_fault_is_planner(NODE_FAULT_NONE));
 
-	assert(node_fault_is_control_issue(NODE_FAULT_THROTTLE_INIT));
-	assert(node_fault_is_control_issue(NODE_FAULT_MOTOR_COMM));
-	assert(!node_fault_is_control_issue(NODE_FAULT_PERCEPTION));
+	assert(node_fault_is_control(NODE_FAULT_CONTROL_THROTTLE_INIT));
+	assert(node_fault_is_control(NODE_FAULT_CONTROL_MOTOR_COMM | NODE_FAULT_CONTROL_CAN_TX));
+	assert(!node_fault_is_control(NODE_FAULT_PLANNER_PERCEPTION));
+	assert(!node_fault_is_control(NODE_FAULT_NONE));
 
-	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_PEDAL));
-	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_FR));
+	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_THROTTLE));
+	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_REVERSE));
 	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_STEER));
 	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_BRAKE));
 	assert(!node_stop_has_operator_intervention(NODE_STOP_PUSH_BUTTON));
 	assert(!node_stop_has_operator_intervention(NODE_STOP_NONE));
+}
+
+// ============================================================================
+// Battery status encode/decode
+// ============================================================================
+
+static void test_battery_status_roundtrip(void)
+{
+	battery_status_t bat_in = {
+		.voltage_mv = 48700,
+		.current_10ma = 150, // 1.5A discharge
+		.soc_pct = 72,
+		.flags = BATTERY_FLAG_CHARGING,
+	};
+
+	uint8_t data[8];
+	can_encode_battery_status(data, &bat_in);
+
+	battery_status_t bat_out = {};
+	assert(can_decode_battery_status(data, 8, &bat_out));
+	assert(bat_out.voltage_mv == 48700);
+	assert(bat_out.current_10ma == 150);
+	assert(bat_out.soc_pct == 72);
+	assert(bat_out.flags == BATTERY_FLAG_CHARGING);
+}
+
+static void test_battery_status_negative_current(void)
+{
+	battery_status_t bat_in = {
+		.voltage_mv = 50400,
+		.current_10ma = -200, // 2A charge
+		.soc_pct = 95,
+		.flags = BATTERY_FLAG_CHARGING,
+	};
+
+	uint8_t data[8];
+	can_encode_battery_status(data, &bat_in);
+
+	battery_status_t bat_out = {};
+	assert(can_decode_battery_status(data, 8, &bat_out));
+	assert(bat_out.voltage_mv == 50400);
+	assert(bat_out.current_10ma == -200);
+	assert(bat_out.soc_pct == 95);
+	assert(bat_out.flags == BATTERY_FLAG_CHARGING);
+}
+
+static void test_battery_status_all_flags(void)
+{
+	battery_status_t bat_in = {
+		.voltage_mv = 42000,
+		.current_10ma = 0,
+		.soc_pct = 5,
+		.flags = BATTERY_FLAG_LOW_WARNING | BATTERY_FLAG_CRITICAL | BATTERY_FLAG_SENSOR_FAULT,
+	};
+
+	uint8_t data[8];
+	can_encode_battery_status(data, &bat_in);
+
+	battery_status_t bat_out = {};
+	assert(can_decode_battery_status(data, 8, &bat_out));
+	assert(bat_out.flags == (BATTERY_FLAG_LOW_WARNING | BATTERY_FLAG_CRITICAL | BATTERY_FLAG_SENSOR_FAULT));
+}
+
+static void test_battery_status_reserved_bytes_zero(void)
+{
+	battery_status_t bat_in = {
+		.voltage_mv = 48000,
+		.current_10ma = 100,
+		.soc_pct = 60,
+		.flags = 0,
+	};
+
+	uint8_t data[8];
+	memset(data, 0xFF, 8); // fill with junk
+	can_encode_battery_status(data, &bat_in);
+	assert(data[6] == 0);
+	assert(data[7] == 0);
+}
+
+static void test_battery_status_decode_rejects_short_dlc(void)
+{
+	uint8_t data[8] = {};
+	battery_status_t bat_out = {};
+	assert(!can_decode_battery_status(data, 5, &bat_out));
+	assert(can_decode_battery_status(data, 6, &bat_out)); // minimum valid
+	assert(can_decode_battery_status(data, 8, &bat_out)); // full frame
+}
+
+// ============================================================================
+// String helper reentrant variants
+// ============================================================================
+
+static void test_stop_to_string_r_buffer(void)
+{
+	char buf[80];
+	const char *result = node_stop_to_string_r(NODE_STOP_PUSH_BUTTON | NODE_STOP_REMOTE, buf, sizeof(buf));
+	assert(result == buf); // should return the buffer pointer
+	assert(strcmp(buf, "push_button+remote") == 0);
+}
+
+static void test_stop_to_string_r_none(void)
+{
+	char buf[80];
+	node_stop_to_string_r(NODE_STOP_NONE, buf, sizeof(buf));
+	assert(strcmp(buf, "none") == 0);
+}
+
+static void test_fault_to_string_r_safety_bitmask(void)
+{
+	char buf[96];
+	const char *result = node_fault_to_string_r(
+		NODE_FAULT_SAFETY_PLANNER_TIMEOUT | NODE_FAULT_SAFETY_CONTROL_TIMEOUT, buf, sizeof(buf));
+	assert(result == buf);
+	assert(strcmp(buf, "planner_timeout+control_timeout") == 0);
+}
+
+static void test_fault_to_string_r_planner_bitmask(void)
+{
+	char buf[96];
+	const char *result = node_fault_to_string_r(
+		NODE_FAULT_PLANNER_PERCEPTION | NODE_FAULT_PLANNER_LOCALIZATION, buf, sizeof(buf));
+	assert(result == buf);
+	assert(strcmp(buf, "perception+localization") == 0);
+}
+
+static void test_fault_to_string_r_control_bitmask(void)
+{
+	char buf[96];
+	const char *result = node_fault_to_string_r(
+		NODE_FAULT_CONTROL_MOTOR_COMM | NODE_FAULT_CONTROL_SENSOR_INVALID, buf, sizeof(buf));
+	assert(result == buf);
+	assert(strcmp(buf, "motor_comm+sensor_invalid") == 0);
 }
 
 // ============================================================================
@@ -605,6 +740,22 @@ int main(void)
 	TEST(test_node_state_all_values);
 	TEST(test_node_fault_all_values);
 	TEST(test_fault_classification_helpers);
+
+	// Battery status encode/decode (5)
+	printf("\n--- Battery status encode/decode ---\n");
+	TEST(test_battery_status_roundtrip);
+	TEST(test_battery_status_negative_current);
+	TEST(test_battery_status_all_flags);
+	TEST(test_battery_status_reserved_bytes_zero);
+	TEST(test_battery_status_decode_rejects_short_dlc);
+
+	// String helper reentrant variants (5)
+	printf("\n--- String helpers (reentrant) ---\n");
+	TEST(test_stop_to_string_r_buffer);
+	TEST(test_stop_to_string_r_none);
+	TEST(test_fault_to_string_r_safety_bitmask);
+	TEST(test_fault_to_string_r_planner_bitmask);
+	TEST(test_fault_to_string_r_control_bitmask);
 
 	// Safety checks (1)
 	printf("\n--- Compile-time safety checks ---\n");

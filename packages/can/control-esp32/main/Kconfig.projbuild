@@ -13,8 +13,8 @@ config THROTTLE_TEST_MODE
     default n
     help
         Replace the normal CAN-based control loop with a standalone
-        throttle test task. Reads throttle levels 0-7 from USB serial
-        keypress (no enter required). Skips CAN, steppers, and
+        throttle test task. Type a wiper value 0-255 and press
+        space or enter to commit. Skips CAN, steppers, and
         Safety/Planner dependencies entirely.
 
         Useful for validating throttle hardware wiring on the cart
@@ -22,9 +22,9 @@ config THROTTLE_TEST_MODE
         pedal ADC) without the full system operational.
 
         Controls (via idf.py monitor or serial terminal):
-          0-7  Set throttle wiper (mapped to 0-255 range)
-          r    Toggle DPDT relay (MY5NJ)
-          q    Quit (shutdown all actuators)
+          0-255 + space/enter  Set throttle wiper position
+          r                    Toggle DPDT relay (MY5NJ)
+          q                    Quit (shutdown all actuators)
 
         Safety behavior: requires F/R not in Reverse to arm.
         Disables DPDT relay if F/R moves to Reverse or pedal
@@ -45,11 +45,11 @@ menu "Test Bypasses"
                 Safety ESP32 heartbeat.
 
         config BYPASS_SAFETY_ESTOP_MIRROR
-            bool "Bypass Safety e-stop mirror: force clear"
+            bool "Bypass Safety stop/fault mirror: force clear"
             default n
             help
                 Ignore Safety stop/fault channels and force
-                safety_fault_code=NONE, safety_stop_flags=NONE
+                safety_fault_flags=NONE, safety_stop_flags=NONE
                 in Control task inputs and logs.
 
         config BYPASS_SAFETY_LIVENESS_CHECKS
@@ -109,7 +109,7 @@ menu "Test Bypasses"
             bool "Bypass steering stepper actuator"
             default n
             help
-                Skip steering stepper motor (node 5) initialization,
+                Skip steering stepper motor (node 7) initialization,
                 configuration, and CAN commands.
 
         config BYPASS_ACTUATOR_STEPPER_BRAKING
@@ -288,14 +288,14 @@ menu "Debug Logging"
             default n
             help
                 Log when a driver override is triggered with the reason
-                (pedal, F/R change, steering/braking position error).
+                (reverse, throttle, steering, braking).
 
         config LOG_CONTROL_SAFETY_TARGET_CHANGES
             bool "Log received Safety target/fault changes"
             default y
             help
                 Log edge-triggered changes in the Safety target state and
-                estop fault code as received by Control. These reflect what
+                stop/fault flags as received by Control. These reflect what
                 Safety is broadcasting, not Control's own state.
 
         config LOG_CONTROL_STATE_TICK
@@ -367,13 +367,6 @@ menu "Debug Logging"
     endmenu
 
     menu "Heartbeat LED"
-
-        config LOG_HEARTBEAT_LED_STATE_CHANGES
-            bool "Log heartbeat LED color/reason changes"
-            default n
-            help
-                Log when the WS2812 heartbeat LED changes color or blink
-                pattern due to a state change.
 
         config LOG_HEARTBEAT_LED_COLOR_UPDATES
             bool "Log heartbeat LED color updates"
