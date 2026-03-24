@@ -17,6 +17,7 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs)
 		return r;
 
 	node_state_t current = inputs->current_target;
+	bool nodes_ready = (inputs->planner_state == NODE_STATE_READY && inputs->control_state == NODE_STATE_READY);
 
 	// INIT dwell handling: hold INIT for a minimum stabilization period.
 	// This is evaluated before retreat checks so Safety can complete startup
@@ -26,7 +27,9 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs)
 		uint32_t elapsed = inputs->now_ms - inputs->boot_start_ms;
 		if (elapsed >= inputs->init_dwell_ms)
 		{
-			r.new_target = NODE_STATE_NOT_READY;
+			bool can_enter_ready =
+				(!inputs->stop_active && inputs->planner_alive && inputs->control_alive && nodes_ready);
+			r.new_target = can_enter_ready ? NODE_STATE_READY : NODE_STATE_NOT_READY;
 			r.target_changed = true;
 		}
 		else
@@ -37,24 +40,19 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs)
 		return r;
 	}
 
-	bool nodes_ready = (inputs->planner_state == NODE_STATE_READY && inputs->control_state == NODE_STATE_READY);
-
 	bool autonomy_halt = ((current == NODE_STATE_ENABLE || current == NODE_STATE_ACTIVE) && !inputs->autonomy_hold);
 
 	// ----------------------------------------------------------------
-	// Safety check: any hard negative condition forces retreat to NOT_READY.
+	// Problem retreat: any hard negative condition forces NOT_READY.
 	// ----------------------------------------------------------------
-	if (inputs->estop_active || !inputs->planner_alive || !inputs->control_alive ||
-	    inputs->planner_state == NODE_STATE_FAULT || inputs->control_state == NODE_STATE_FAULT ||
-	    inputs->planner_state == NODE_STATE_OVERRIDE || inputs->control_state == NODE_STATE_OVERRIDE)
+	if (inputs->stop_active || !inputs->planner_alive || !inputs->control_alive)
 	{
-
 		r.new_target = NODE_STATE_NOT_READY;
 		r.target_changed = (current != NODE_STATE_NOT_READY);
 		return r;
 	}
 
-	// Planner autonomy halt: retreat out of ENABLE/ACTIVE.
+	// Planner autonomy hold dropped: retreat out of ENABLE/ACTIVE.
 	if (autonomy_halt)
 	{
 		r.new_target = nodes_ready ? NODE_STATE_READY : NODE_STATE_NOT_READY;
@@ -125,10 +123,30 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs)
 		break;
 
 	case NODE_STATE_ACTIVE:
-		// Stay in ACTIVE — no further forward transition
-		r.new_target = NODE_STATE_ACTIVE;
-		r.target_changed = false;
+	{
+		bool planner_active = (inputs->planner_state == NODE_STATE_ACTIVE);
+		bool control_active = (inputs->control_state == NODE_STATE_ACTIVE);
+
+		// Right after ENABLE -> ACTIVE, nodes may still report ENABLE for a
+		// short handoff window while they consume the new target.
+		if (inputs->active_entry_grace)
+		{
+			planner_active = (inputs->planner_state == NODE_STATE_ACTIVE || inputs->planner_state == NODE_STATE_ENABLE);
+			control_active = (inputs->control_state == NODE_STATE_ACTIVE || inputs->control_state == NODE_STATE_ENABLE);
+		}
+
+		if (!planner_active || !control_active)
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = true;
+		}
+		else
+		{
+			r.new_target = NODE_STATE_ACTIVE;
+			r.target_changed = false;
+		}
 		break;
+	}
 
 	default:
 		// Unknown state — retreat to NOT_READY

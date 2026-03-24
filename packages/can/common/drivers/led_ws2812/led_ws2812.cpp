@@ -41,8 +41,7 @@ struct rgb_t
  *
  * Returns the RGB values used to indicate the current system state
  * on the onboard WS2812 LED: green for READY, blue for ACTIVE,
- * red for FAULT, and yellow for all other states (INIT, NOT_READY,
- * ENABLE, OVERRIDE).
+ * red for NOT_READY, and yellow for INIT/ENABLE.
  *
  * @param state  Current node state
  * @return RGB color struct at LED_BRIGHTNESS intensity
@@ -55,12 +54,10 @@ rgb_t state_to_rgb(node_state_t state)
 		return {0, LED_BRIGHTNESS, 0}; // Green
 	case NODE_STATE_ACTIVE:
 		return {0, 0, LED_BRIGHTNESS}; // Blue
-	case NODE_STATE_FAULT:
+	case NODE_STATE_NOT_READY:
 		return {LED_BRIGHTNESS, 0, 0}; // Red
 	case NODE_STATE_INIT:
-	case NODE_STATE_NOT_READY:
 	case NODE_STATE_ENABLE:
-	case NODE_STATE_OVERRIDE:
 	default:
 		return {LED_BRIGHTNESS, LED_BRIGHTNESS, 0}; // Yellow
 	}
@@ -71,8 +68,9 @@ rgb_t state_to_rgb(node_state_t state)
 // ============================================================================
 
 bool s_initialized = false;
-TickType_t s_last_update = 0;
+volatile TickType_t s_last_update = 0;
 volatile node_state_t s_node_state = NODE_STATE_INIT;
+volatile bool s_fault_overlay = false;
 
 // ============================================================================
 // WS2812 RMT Driver
@@ -117,7 +115,9 @@ void ws2812_set_rgb(const rgb_t &c)
 	tx_cfg.loop_count = 0;
 	tx_cfg.flags.eot_level = 0;
 
-	rmt_transmit(s_rmt_channel, s_rmt_encoder, symbols, sizeof(symbols), &tx_cfg);
+	esp_err_t err = rmt_transmit(s_rmt_channel, s_rmt_encoder, symbols, sizeof(symbols), &tx_cfg);
+	if (err != ESP_OK)
+		ESP_LOGW(TAG, "RMT transmit failed: %s", esp_err_to_name(err));
 }
 
 } // namespace
@@ -195,11 +195,24 @@ void led_ws2812_set_state(node_state_t node_state)
 	if (!state_changed && (now - s_last_update) < UPDATE_INTERVAL)
 		return;
 
-	rgb_t c = state_to_rgb(node_state);
+	rgb_t c = s_fault_overlay ? rgb_t{LED_BRIGHTNESS, 0, 0} : state_to_rgb(node_state);
 	ws2812_set_rgb(c);
 	s_last_update = now;
 
 #ifdef CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES
 	ESP_LOGI(TAG, "LED: state=%s rgb=(%u,%u,%u)", node_state_to_string(node_state), c.r, c.g, c.b);
 #endif
+}
+
+void led_ws2812_set_fault_overlay(bool enabled)
+{
+	if (!s_initialized)
+		return;
+
+	if (s_fault_overlay == enabled)
+		return;
+
+	s_fault_overlay = enabled;
+	// Force immediate color update.
+	led_ws2812_set_state(s_node_state);
 }

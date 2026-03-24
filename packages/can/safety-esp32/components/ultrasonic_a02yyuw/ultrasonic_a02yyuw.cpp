@@ -391,7 +391,7 @@ bool ultrasonic_a02yyuw_get_distance_mm(uint16_t *out_distance_mm)
 
 // NOTE: Returns false (not too close) when sensor has no valid data. This is
 // intentional — the fail-safe is handled by the caller's safety_compute_ultrasonic_trigger()
-// which combines this function with is_healthy() to trigger e-stop when the sensor
+// which combines this function with is_healthy() to trigger a stop when the sensor
 // is unhealthy, regardless of the distance reading.
 bool ultrasonic_a02yyuw_is_too_close(uint16_t threshold_mm, uint16_t *out_distance_mm)
 {

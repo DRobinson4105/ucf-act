@@ -2,13 +2,13 @@
  * @file safety_logic.h
  * @brief Pure decision logic for the Safety ESP32.
  *
- * This module contains the safety-critical e-stop evaluation, extracted as
+ * This module contains the safety-critical stop/fault evaluation, extracted as
  * pure functions with no hardware dependencies. This allows comprehensive
  * unit testing on the host without mocking any ESP-IDF or FreeRTOS APIs.
  *
  * The system state machine (advancing NOT_READY -> READY -> ENABLE -> ACTIVE) is now
  * handled by the system_state component. safety_logic focuses solely on
- * e-stop evaluation and relay decisions.
+ * stop/fault evaluation.
  */
 #pragma once
 
@@ -28,14 +28,21 @@ extern "C"
 
 typedef struct
 {
-	bool push_button_active;   // Physical push button e-stop pressed
-	bool rf_remote_active;     // RF remote e-stop engaged
+	// Local sensor inputs
+	bool push_button_active;   // Physical push button pressed
+	bool rf_remote_active;     // RF remote kill engaged
 	bool ultrasonic_too_close; // Obstacle within stop distance
 	bool ultrasonic_healthy;   // Sensor responding within timeout
-	bool planner_alive;        // Planner heartbeat received within timeout
-	bool control_alive;        // Control ESP32 heartbeat within timeout
-	bool planner_error;        // Planner reported FAULT state
-	bool control_error;        // Control reported FAULT state
+
+	// Heartbeat liveness
+	bool planner_alive; // Planner heartbeat received within timeout
+	bool control_alive; // Control ESP32 heartbeat within timeout
+
+	// Remote node cause channels (from decoded heartbeats)
+	node_fault_t planner_fault_flags; // Planner fault flags (NODE_FAULT_PLANNER_*, bitmask)
+	node_fault_t control_fault_flags; // Control fault flags (NODE_FAULT_CONTROL_*, bitmask)
+	node_stop_t planner_stop_flags;   // Planner stop flags (NODE_STOP_*, bitmask)
+	node_stop_t control_stop_flags;   // Control stop flags (NODE_STOP_*, bitmask)
 } safety_inputs_t;
 
 // ============================================================================
@@ -44,9 +51,9 @@ typedef struct
 
 typedef struct
 {
-	bool estop_active;       // true = e-stop condition present
-	node_fault_t fault_code; // NODE_FAULT_ESTOP_* from can_protocol.h (0 when safe)
-	bool relay_enable;       // true = power relay should be ON
+	bool stop_active;         // true = any stop or fault condition present
+	node_stop_t stop_flags;   // NODE_STOP_* bitmask (non-fault stop causes)
+	node_fault_t fault_flags; // NODE_FAULT_SAFETY_* bitmask (fault causes)
 } safety_decision_t;
 
 // ============================================================================
@@ -62,19 +69,20 @@ typedef struct
  *
  * @param too_close  true if obstacle within threshold distance
  * @param healthy    true if sensor data is recent / valid
- * @return true if ultrasonic should trigger an e-stop
+ * @return true if ultrasonic should trigger a stop
  */
 bool safety_compute_ultrasonic_trigger(bool too_close, bool healthy);
 
 /**
  * @brief Evaluate all safety inputs and produce a decision.
  *
- * Builds an e-stop fault bitmask where each active condition sets its bit:
- *   push_button | rf_remote | ultrasonic | planner_error |
- *   planner_timeout | control_error | control_timeout
+ * Builds separate stop/fault bitmasks:
+ *   stop_flags:  push_button | rf_remote | ultrasonic_obstacle | planner_stop | control_stop
+ *   fault_flags: ultrasonic_unhealthy | planner_issue | planner_timeout |
+ *                control_issue | control_timeout
  *
  * @param inputs  All sensor and heartbeat readings
- * @return Decision: estop state, fault_code, relay command
+ * @return Decision: stop_active, stop_flags, fault_flags
  */
 safety_decision_t safety_evaluate(const safety_inputs_t *inputs);
 

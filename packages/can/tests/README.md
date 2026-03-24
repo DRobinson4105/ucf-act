@@ -111,35 +111,36 @@ Tests the `stepper_motor_uim2852` driver component using mocked ESP-IDF/FreeRTOS
 
 ### `test_safety_logic.cpp`
 
-Tests the pure `safety_logic` module (e-stop bitmask evaluation, ultrasonic fail-safe, relay decisions).
+Tests the pure `safety_logic` module (stop/fault bitmask evaluation, ultrasonic fail-safe).
 
 | Category                         | What it covers                                                                                            |
 |----------------------------------|-----------------------------------------------------------------------------------------------------------|
 | Ultrasonic trigger               | Clear path, obstacle detected, sensor unhealthy (fail-safe), both bad                                     |
-| E-stop bitmask                   | All clear, each individual source, and combined conditions represented as OR'ed fault bits                |
-| Ultrasonic fail-safe in evaluate | Unhealthy sensor triggers estop, healthy+clear passes                                                     |
-| Relay output                     | Enabled when safe, disabled on estop, disabled on timeout                                                 |
-| Combined scenarios               | Multiple simultaneous faults (all bits preserved), estop on/off transition, ultrasonic fault alone blocks |
-| NULL input guard                 | `safety_evaluate(NULL)` returns fail-safe defaults (estop=true, relay=false)                              |
+| Stop-only inputs                 | Local stop inputs (push button, remote, ultrasonic) produce stop_flags with no fault_flags                |
+| Stop forwarding                  | Planner/Control stop_flags forwarded into Safety stop_flags                                               |
+| Fault-only inputs                | Timeouts and issues produce fault_flags with no stop_flags                                                |
+| Combined stop + fault            | Multiple simultaneous causes in both channels (all bits preserved)                                        |
+| NULL input guard                 | `safety_evaluate(NULL)` returns fail-safe defaults (stop_active=true)                                     |
 
 ### `test_control_logic.cpp`
 
-Tests the pure `control_logic` module (state machine, throttle slew, preconditions, fault injection, envelope clamping). 63 tests covering all public functions and every state machine branch.
+Tests the pure `control_logic` module (state machine, throttle slew, preconditions, fault injection, envelope clamping). 74 tests covering all public functions and every state machine branch.
 
 | Category                        | What it covers                                                                                          |
 |---------------------------------|---------------------------------------------------------------------------------------------------------|
-| State transitions (16)          | INIT/NOT_READY/READY/ENABLE/ACTIVE/OVERRIDE/FAULT transitions, precondition-driven readiness            |
-| Precondition checker (5)        | NULL returns ALL, FR not forward, pedal not rearmed, active fault, multiple combine as bitmask           |
+| State transitions (16)          | INIT/NOT_READY/READY/ENABLE/ACTIVE transitions, precondition-driven readiness, operator-stop retreat/recovery |
+| Precondition checker (7)        | NULL returns ALL, FR reverse/invalid/neutral, pedal not rearmed, active fault, multiple combine as bitmask |
 | Throttle slew (6)               | At target (no change), step up/down by 1, rate limited, NULL inputs, uint32 timer overflow               |
-| Command clamping (3)            | Below min, above max, in range                                                                          |
+| Command clamping (4)            | Below min, above max, in range, misconfigured (min > max) returns neutral                                |
 | INIT edge cases (2)             | Stays when dwell not expired, uint32 timer wrap still transitions                                       |
-| ENABLE abort (5)                | Safety retreat, FR not forward, timer not expired (stays), complete fires once, exact timer boundary     |
-| ACTIVE override (4)             | FR changed, steering error, braking error, safety retreat priority over pedal override                   |
-| ACTIVE throttle + steering (7)  | Slew applies APPLY_THROTTLE, at target no action, steering dedup (same skips, changed sends),           |
-|                                 | dedup reset always sends, unconfigured envelope forces neutral, envelope clamps out-of-range             |
+| ENABLE abort (6)                | Safety retreat, FR reverse, neutral doesn't abort, timer not expired (stays), complete fires once, exact timer boundary |
+| ACTIVE override (6)             | FR changed, neutral zeros throttle, neutral at zero no change, steering error, braking error, safety retreat priority |
+| ACTIVE throttle + steering (9)  | Slew applies APPLY_THROTTLE, at target no action, clamps to envelope, unconfigured forces neutral,      |
+|                                 | steering dedup (same skips, changed sends), braking dedup reset always sends,                            |
+|                                 | envelope unconfigured forces neutral, envelope clamps out-of-range                                       |
 | Motor fault injection (4)       | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), from READY (FAULT only), ignored if faulted |
-| FR_INVALID sensor fault (3)     | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), no re-trigger when already faulted          |
-| OVERRIDE recovery (2)           | Stays when pedal not rearmed, stays when FR not forward                                                  |
+| FR_INVALID sensor fault (5)     | From ACTIVE, from ENABLE, from NOT_READY (no fault), from READY (no fault), no re-trigger when faulted  |
+| OVERRIDE recovery (3)           | Stays when pedal not rearmed, stays when FR reverse, recovers when FR neutral                            |
 | FAULT recovery (3)              | MOTOR_COMM clears when motor OK, SENSOR_INVALID clears when FR valid, unknown fault stays with RECOVERY |
 | Target sanitization (1)         | Invalid target (0xFF) treated as NOT_READY, triggers safety retreat from ACTIVE                          |
 | Safe outputs (1)                | Override zeros throttle, resets stepper dedup trackers to sentinel                                       |
@@ -152,14 +153,14 @@ Tests the pure `system_state` module (Safety's target state advancement logic).
 | Category                       | What it covers                                                                    |
 |--------------------------------|-----------------------------------------------------------------------------------|
 | INIT -> NOT_READY              | Transitions after boot dwell                                                      |
-| NOT_READY -> READY             | Both nodes READY, both alive, no e-stop                                           |
+| NOT_READY -> READY             | Both nodes READY, both alive, no stop/fault active                                |
 | READY -> ENABLE                | Both nodes READY and autonomy_request asserted                                    |
 | ENABLE -> ACTIVE               | Both nodes ENABLE with enable_complete flag                                       |
 | ENABLE stays                   | One node complete, no nodes complete                                              |
 | ACTIVE stays                   | Normal operation                                                                  |
 | Autonomy halt retreat          | ENABLE/ACTIVE retreat to READY/NOT_READY when Planner drops autonomy hold request |
-| E-stop retreat                 | From READY, ENABLE, ACTIVE -- all retreat to NOT_READY                            |
-| Fault/override/timeout retreat | Planner/Control hard negatives retreat target to NOT_READY                        |
+| Problem retreat                | From READY, ENABLE, ACTIVE -- stop/fault active retreats to NOT_READY             |
+| Timeout retreat                | Planner/Control liveness loss retreats target to NOT_READY                        |
 | Edge cases                     | Unknown state retreats to NOT_READY                                               |
 
 ### `test_heartbeat_monitor.cpp`

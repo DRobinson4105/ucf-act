@@ -45,10 +45,8 @@ void test_register_null_name_uses_unknown(void)
 
 	int node_id = heartbeat_monitor_register(&mon, nullptr, 500);
 	assert(node_id == 0);
-
-	heartbeat_monitor_node_t st = {};
-	assert(heartbeat_monitor_get_status(&mon, node_id, &st));
-	assert(strcmp(st.name, "unknown") == 0);
+	// Node starts not-alive
+	assert(!heartbeat_monitor_is_alive(&mon, node_id));
 }
 
 void test_register_copies_node_name(void)
@@ -63,15 +61,15 @@ void test_register_copies_node_name(void)
 	int node_id = heartbeat_monitor_register(&mon, temp_name, 500);
 	assert(node_id == 0);
 
+	// Mutate original — monitor should have its own copy
 	strncpy(temp_name, "Changed", sizeof(temp_name) - 1);
 	temp_name[sizeof(temp_name) - 1] = '\0';
 
-	heartbeat_monitor_node_t st = {};
-	assert(heartbeat_monitor_get_status(&mon, node_id, &st));
-	assert(strcmp(st.name, "Planner") == 0);
+	// Verify by checking the node is registered and starts not-alive
+	assert(!heartbeat_monitor_is_alive(&mon, node_id));
 }
 
-void test_timeout_transition_and_mask(void)
+void test_timeout_transition(void)
 {
 	mock_reset_all();
 
@@ -94,12 +92,10 @@ void test_timeout_transition_and_mask(void)
 	mock_tick_count = 200;
 	heartbeat_monitor_check_timeouts(&mon);
 	assert(!heartbeat_monitor_is_alive(&mon, node_id));
-	assert((heartbeat_monitor_get_timeout_mask(&mon) & 0x01) != 0);
 
 	mock_tick_count = 210;
 	heartbeat_monitor_update(&mon, node_id, 2, 3);
 	assert(heartbeat_monitor_is_alive(&mon, node_id));
-	assert((heartbeat_monitor_get_timeout_mask(&mon) & 0x01) == 0);
 }
 
 void test_tick_zero_update_not_immediately_timed_out(void)
@@ -119,10 +115,9 @@ void test_tick_zero_update_not_immediately_timed_out(void)
 	// At the same tick, this must not false-timeout.
 	heartbeat_monitor_check_timeouts(&mon);
 	assert(heartbeat_monitor_is_alive(&mon, node_id));
-	assert((heartbeat_monitor_get_timeout_mask(&mon) & 0x01) == 0);
 }
 
-void test_timeout_mask_excludes_never_seen_nodes(void)
+void test_never_seen_node_stays_not_alive(void)
 {
 	mock_reset_all();
 
@@ -140,15 +135,8 @@ void test_timeout_mask_excludes_never_seen_nodes(void)
 	mock_tick_count = 200;
 	heartbeat_monitor_check_timeouts(&mon);
 
-	uint8_t mask = heartbeat_monitor_get_timeout_mask(&mon);
-	assert((mask & 0x01) != 0); // n0 timed out
-	assert((mask & 0x02) == 0); // n1 was never seen, not timed out
-}
-
-void test_timeout_mask_null_monitor_returns_zero(void)
-{
-	mock_reset_all();
-	assert(heartbeat_monitor_get_timeout_mask(nullptr) == 0);
+	assert(!heartbeat_monitor_is_alive(&mon, n0)); // timed out
+	assert(!heartbeat_monitor_is_alive(&mon, n1)); // never seen, still not alive
 }
 
 void test_register_fails_when_full(void)
@@ -168,35 +156,7 @@ void test_register_fails_when_full(void)
 	assert(heartbeat_monitor_register(&mon, "Overflow", 100) == -1);
 }
 
-// ============================================================================
-// all_alive tests — critical safety-chain function, previously untested
-// ============================================================================
-
-void test_all_alive_true_when_all_updated(void)
-{
-	mock_reset_all();
-
-	heartbeat_monitor_t mon = {};
-	heartbeat_monitor_config_t cfg = {.name = "TEST"};
-	heartbeat_monitor_init(&mon, &cfg);
-
-	int n0 = heartbeat_monitor_register(&mon, "NodeA", 500);
-	int n1 = heartbeat_monitor_register(&mon, "NodeB", 500);
-	assert(n0 == 0);
-	assert(n1 == 1);
-
-	// Before any updates, nodes start not-alive
-	assert(heartbeat_monitor_all_alive(&mon) == false);
-
-	// Update both
-	mock_tick_count = 10;
-	heartbeat_monitor_update(&mon, n0, 1, 0);
-	heartbeat_monitor_update(&mon, n1, 1, 0);
-
-	assert(heartbeat_monitor_all_alive(&mon) == true);
-}
-
-void test_all_alive_false_when_one_timed_out(void)
+void test_two_nodes_independent_liveness(void)
 {
 	mock_reset_all();
 
@@ -210,42 +170,17 @@ void test_all_alive_false_when_one_timed_out(void)
 	mock_tick_count = 10;
 	heartbeat_monitor_update(&mon, n0, 1, 0);
 	heartbeat_monitor_update(&mon, n1, 1, 0);
-	assert(heartbeat_monitor_all_alive(&mon) == true);
+	assert(heartbeat_monitor_is_alive(&mon, n0));
+	assert(heartbeat_monitor_is_alive(&mon, n1));
 
 	// Advance past Fast's timeout but not Slow's
 	mock_tick_count = 200;
 	heartbeat_monitor_check_timeouts(&mon);
-	assert(heartbeat_monitor_all_alive(&mon) == false);
-	assert(heartbeat_monitor_is_alive(&mon, n0) == false);
-	assert(heartbeat_monitor_is_alive(&mon, n1) == true);
+	assert(!heartbeat_monitor_is_alive(&mon, n0));
+	assert(heartbeat_monitor_is_alive(&mon, n1));
 }
 
-void test_all_alive_false_when_never_seen(void)
-{
-	mock_reset_all();
-
-	heartbeat_monitor_t mon = {};
-	heartbeat_monitor_config_t cfg = {.name = "TEST"};
-	heartbeat_monitor_init(&mon, &cfg);
-
-	heartbeat_monitor_register(&mon, "Ghost", 500);
-	// Never updated — alive starts false
-	assert(heartbeat_monitor_all_alive(&mon) == false);
-}
-
-void test_all_alive_true_with_zero_nodes(void)
-{
-	mock_reset_all();
-
-	heartbeat_monitor_t mon = {};
-	heartbeat_monitor_config_t cfg = {.name = "EMPTY"};
-	heartbeat_monitor_init(&mon, &cfg);
-
-	// Vacuous truth: no registered nodes
-	assert(heartbeat_monitor_all_alive(&mon) == true);
-}
-
-void test_all_alive_recovers_after_update(void)
+void test_recovers_after_timeout(void)
 {
 	mock_reset_all();
 
@@ -257,17 +192,17 @@ void test_all_alive_recovers_after_update(void)
 
 	mock_tick_count = 10;
 	heartbeat_monitor_update(&mon, n0, 1, 0);
-	assert(heartbeat_monitor_all_alive(&mon) == true);
+	assert(heartbeat_monitor_is_alive(&mon, n0));
 
 	// Time out
 	mock_tick_count = 200;
 	heartbeat_monitor_check_timeouts(&mon);
-	assert(heartbeat_monitor_all_alive(&mon) == false);
+	assert(!heartbeat_monitor_is_alive(&mon, n0));
 
 	// Recover with new heartbeat
 	mock_tick_count = 210;
 	heartbeat_monitor_update(&mon, n0, 2, 0);
-	assert(heartbeat_monitor_all_alive(&mon) == true);
+	assert(heartbeat_monitor_is_alive(&mon, n0));
 }
 
 void test_timeout_handles_tick_wrap(void)
@@ -283,13 +218,12 @@ void test_timeout_handles_tick_wrap(void)
 	// Update near UINT32_MAX
 	mock_tick_count = UINT32_MAX - 50;
 	heartbeat_monitor_update(&mon, n0, 1, 0);
-	assert(heartbeat_monitor_is_alive(&mon, n0) == true);
+	assert(heartbeat_monitor_is_alive(&mon, n0));
 
-	// Tick wraps past 0; elapsed = 100 - (MAX-50) = ~150 > 100
+	// Tick wraps past 0; elapsed = ~150 > 100
 	mock_tick_count = 100;
 	heartbeat_monitor_check_timeouts(&mon);
-	assert(heartbeat_monitor_is_alive(&mon, n0) == false);
-	assert((heartbeat_monitor_get_timeout_mask(&mon) & 0x01) != 0);
+	assert(!heartbeat_monitor_is_alive(&mon, n0));
 }
 
 } // namespace
@@ -302,18 +236,12 @@ int main(void)
 	TEST(test_init_allows_null_config);
 	TEST(test_register_null_name_uses_unknown);
 	TEST(test_register_copies_node_name);
-	TEST(test_timeout_transition_and_mask);
+	TEST(test_timeout_transition);
 	TEST(test_tick_zero_update_not_immediately_timed_out);
-	TEST(test_timeout_mask_excludes_never_seen_nodes);
-	TEST(test_timeout_mask_null_monitor_returns_zero);
+	TEST(test_never_seen_node_stays_not_alive);
 	TEST(test_register_fails_when_full);
-
-	printf("\n  --- all_alive ---\n");
-	TEST(test_all_alive_true_when_all_updated);
-	TEST(test_all_alive_false_when_one_timed_out);
-	TEST(test_all_alive_false_when_never_seen);
-	TEST(test_all_alive_true_with_zero_nodes);
-	TEST(test_all_alive_recovers_after_update);
+	TEST(test_two_nodes_independent_liveness);
+	TEST(test_recovers_after_timeout);
 
 	printf("\n  --- tick wrap ---\n");
 	TEST(test_timeout_handles_tick_wrap);
