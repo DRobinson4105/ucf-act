@@ -2,14 +2,16 @@
  * @file can_protocol.h
  * @brief Shared CAN bus protocol definitions for Safety, Control, and Planner nodes.
  *
- * All nodes share a unified state and fault code enum. Safety ESP32 acts as the
- * system state authority — it commands target state using NOT_READY/READY/ENABLE/ACTIVE.
- * Planner and Control own their live states and can enter OVERRIDE or FAULT locally
- * for immediate safety; local FAULT clears back to NOT_READY/READY when faults clear.
+ * All nodes share a unified state enum and heartbeat wire format. Safety ESP32 acts
+ * as the system state authority and commands target state using
+ * NOT_READY/READY/ENABLE/ACTIVE.
+ *
+ * Cause reporting is split into two channels:
+ *   - stop_flags: non-fault stop inputs (button/remote/obstacle/app/operator)
+ *   - fault_flags: node-specific fault bitmasks (Safety/Planner/Control each have their own range)
  *
  * Every node sends an identical heartbeat format (node_heartbeat_t) at 100ms.
- * Safety's "state" field carries the system target state; its "fault_code" field
- * carries the e-stop reason using the NODE_FAULT_ESTOP_* range.
+ * Safety's "state" field carries the system target state.
  */
 
 #pragma once
@@ -32,24 +34,25 @@ extern "C"
 // remain freely interchangeable with uint8_t so existing C code compiles
 // without casts.
 
-typedef uint8_t node_state_t;      // NODE_STATE_* values
-typedef uint8_t node_fault_t;      // NODE_FAULT_* values (scalar or estop bitmask)
-typedef uint8_t heartbeat_flags_t; // HEARTBEAT_FLAG_* bitmask
-typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
+typedef uint8_t node_state_t;        // NODE_STATE_* values
+typedef uint8_t node_fault_t;        // NODE_FAULT_* bitmask (node-specific prefix + fault bits)
+typedef uint8_t node_stop_t;         // NODE_STOP_* bitmask (non-fault stop inputs)
+typedef uint8_t node_status_flags_t; // NODE_STATUS_FLAG_* bitmask
+typedef uint8_t node_seq_t;          // Rolling 0-255 heartbeat sequence counter
 // ============================================================================
 // CAN Message ID Allocation
 // ============================================================================
 
 // Safety ESP32 (0x100-0x10F)
-#define CAN_ID_SAFETY_HEARTBEAT      0x100 // Safety heartbeat (target_state, estop fault_code)
+#define CAN_ID_SAFETY_HEARTBEAT      0x100 // Safety heartbeat (target_state, fault_flags, stop_flags)
 #define CAN_ID_SAFETY_BATTERY_STATUS 0x101 // Battery voltage, current, SOC (1 Hz)
 
 // Planner (0x110-0x11F)
-#define CAN_ID_PLANNER_HEARTBEAT 0x110 // Planner heartbeat (seq, state, fault_code, flags)
+#define CAN_ID_PLANNER_HEARTBEAT 0x110 // Planner heartbeat (seq, state, fault_flags, status_flags)
 #define CAN_ID_PLANNER_COMMAND   0x111 // Throttle/steering/braking commands
 
 // Control ESP32 (0x120-0x12F)
-#define CAN_ID_CONTROL_HEARTBEAT 0x120 // Control heartbeat (seq, state, fault_code, flags)
+#define CAN_ID_CONTROL_HEARTBEAT 0x120 // Control heartbeat (seq, state, fault_flags, status_flags)
 
 // ============================================================================
 // Timing Constants
@@ -63,59 +66,83 @@ typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
 // ============================================================================
 // All nodes share the same state enum.
 // Safety heartbeat uses NOT_READY/READY/ENABLE/ACTIVE as commanded target states.
-// Nodes report live state and may use OVERRIDE/FAULT locally for immediate safety.
 
 #define NODE_STATE_INIT      0 // Booting, not ready
 #define NODE_STATE_NOT_READY 1 // Running/manual-safe, but autonomy preconditions not satisfied
 #define NODE_STATE_READY     2 // Running/manual-safe and autonomy preconditions satisfied
 #define NODE_STATE_ENABLE    3 // Preparing for autonomous (hardware settle / planning init)
 #define NODE_STATE_ACTIVE    4 // Autonomous mode — processing/sending commands
-#define NODE_STATE_OVERRIDE  5 // Driver took over (local, immediate)
-#define NODE_STATE_FAULT     6 // Fault condition (local, immediate)
 
 // ============================================================================
-// Unified Fault Codes (NODE_FAULT_*)
+// Unified Cause/Fault Codes (NODE_FAULT_*)
 // ============================================================================
-// Two encoding modes in the same byte:
+// All nodes use bitmask encoding with node-specific prefixes:
 //   0x00:       No fault
-//   0x01-0x7F:  E-stop BITMASK (Safety heartbeat only) — multiple bits can be set
-//   0x80-0x8F:  Planner faults (scalar, one at a time)
-//   0x90-0x9F:  Control faults (scalar, one at a time)
+//   0x01-0x3F:  Safety fault bitmask (bits 0-5, Safety heartbeat only)
+//   0x40-0x4F:  Planner fault bitmask (bit 6 prefix + bits 0-3)
+//   0x80-0x9F:  Control fault bitmask (bit 7 prefix + bits 0-4)
 //   0xFF:       General / unspecified
 //
-// Safety's fault_code is a bitmask: if button AND remote are both active,
-// fault_code = 0x01 | 0x02 = 0x03. Use node_estop_to_string() to decode.
-// Planner/Control fault_code is a single scalar value.
+// Multiple faults can be set simultaneously on any node by ORing flags.
+// The prefix bits ensure ranges stay disjoint when combined.
 
 // Common
 #define NODE_FAULT_NONE    0x00
 #define NODE_FAULT_GENERAL 0xFF // Unspecified fault
 
-// E-stop bitmask flags (0x01-0x40, used only by Safety heartbeat)
-// Multiple bits can be set simultaneously when multiple e-stops are active.
-#define NODE_FAULT_ESTOP_BUTTON          0x01 // bit 0: push_button_hb2es544 pressed
-#define NODE_FAULT_ESTOP_REMOTE          0x02 // bit 1: rf_remote_ev1527 kill active
-#define NODE_FAULT_ESTOP_ULTRASONIC      0x04 // bit 2: ultrasonic_a02yyuw obstacle or unhealthy
-#define NODE_FAULT_ESTOP_PLANNER         0x08 // bit 3: Planner reported FAULT state
-#define NODE_FAULT_ESTOP_PLANNER_TIMEOUT 0x10 // bit 4: Planner heartbeat timeout
-#define NODE_FAULT_ESTOP_CONTROL         0x20 // bit 5: Control ESP32 reported FAULT state
-#define NODE_FAULT_ESTOP_CONTROL_TIMEOUT 0x40 // bit 6: Control ESP32 heartbeat timeout
+// Safety fault bitmask flags (0x01-0x3F, Safety heartbeat only)
+// Multiple bits can be set simultaneously when multiple faults are active.
+#define NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY 0x01 // bit 0: ultrasonic sensor unhealthy/timeout
+#define NODE_FAULT_SAFETY_PLANNER_ISSUE        0x02 // bit 1: Planner reported fault
+#define NODE_FAULT_SAFETY_PLANNER_TIMEOUT      0x04 // bit 2: Planner heartbeat timeout
+#define NODE_FAULT_SAFETY_CONTROL_ISSUE        0x08 // bit 3: Control reported fault
+#define NODE_FAULT_SAFETY_CONTROL_TIMEOUT      0x10 // bit 4: Control heartbeat timeout
+#define NODE_FAULT_SAFETY_RELAY_UNAVAILABLE    0x20 // bit 5: Safety relay path unavailable
 
-// Mask for any estop bit set
-#define NODE_FAULT_ESTOP_ANY 0x7F
+#define NODE_FAULT_SAFETY_ANY                                                                                       \
+	(NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY | NODE_FAULT_SAFETY_PLANNER_ISSUE | NODE_FAULT_SAFETY_PLANNER_TIMEOUT | \
+	 NODE_FAULT_SAFETY_CONTROL_ISSUE | NODE_FAULT_SAFETY_CONTROL_TIMEOUT | NODE_FAULT_SAFETY_RELAY_UNAVAILABLE)
 
-// Planner faults (0x80-0x8F, scalar)
-#define NODE_FAULT_PERCEPTION       0x80 // Camera/LiDAR failure
-#define NODE_FAULT_LOCALIZATION     0x81 // Localization lost
-#define NODE_FAULT_PLANNING         0x82 // Path planner failure
-#define NODE_FAULT_PLANNER_HARDWARE 0x83 // Planner hardware issue (thermal, etc.)
+// Planner fault bitmask flags (0x40 prefix + bits 0-3, Planner heartbeat only)
+// Multiple bits can be set simultaneously.
+#define NODE_FAULT_PLANNER_PREFIX       0x40
+#define NODE_FAULT_PLANNER_PERCEPTION   (NODE_FAULT_PLANNER_PREFIX | 0x01) // bit 0: camera/LiDAR failure
+#define NODE_FAULT_PLANNER_LOCALIZATION (NODE_FAULT_PLANNER_PREFIX | 0x02) // bit 1: localization lost
+#define NODE_FAULT_PLANNER_PLANNING     (NODE_FAULT_PLANNER_PREFIX | 0x04) // bit 2: path planner failure
+#define NODE_FAULT_PLANNER_HARDWARE     (NODE_FAULT_PLANNER_PREFIX | 0x08) // bit 3: hardware issue (thermal, etc.)
 
-// Control faults (0x90-0x9F, scalar)
-#define NODE_FAULT_THROTTLE_INIT  0x90 // Throttle mux init failed
-#define NODE_FAULT_CAN_TX         0x91 // CAN transmit failures
-#define NODE_FAULT_MOTOR_COMM     0x92 // Stepper communication lost
-#define NODE_FAULT_SENSOR_INVALID 0x93 // F/R sensor invalid reading
-#define NODE_FAULT_RELAY_INIT     0x94 // Relay initialization failed
+#define NODE_FAULT_PLANNER_ANY                                                                       \
+	(NODE_FAULT_PLANNER_PERCEPTION | NODE_FAULT_PLANNER_LOCALIZATION | NODE_FAULT_PLANNER_PLANNING | \
+	 NODE_FAULT_PLANNER_HARDWARE)
+
+// Control fault bitmask flags (0x80 prefix + bits 0-4, Control heartbeat only)
+// Multiple bits can be set simultaneously.
+#define NODE_FAULT_CONTROL_PREFIX         0x80
+#define NODE_FAULT_CONTROL_THROTTLE_INIT  (NODE_FAULT_CONTROL_PREFIX | 0x01) // bit 0: throttle init failed
+#define NODE_FAULT_CONTROL_CAN_TX         (NODE_FAULT_CONTROL_PREFIX | 0x02) // bit 1: CAN transmit failures
+#define NODE_FAULT_CONTROL_MOTOR_COMM     (NODE_FAULT_CONTROL_PREFIX | 0x04) // bit 2: stepper communication lost
+#define NODE_FAULT_CONTROL_SENSOR_INVALID (NODE_FAULT_CONTROL_PREFIX | 0x08) // bit 3: F/R sensor invalid reading
+#define NODE_FAULT_CONTROL_RELAY_INIT     (NODE_FAULT_CONTROL_PREFIX | 0x10) // bit 4: relay initialization failed
+
+#define NODE_FAULT_CONTROL_ANY                                                                      \
+	(NODE_FAULT_CONTROL_THROTTLE_INIT | NODE_FAULT_CONTROL_CAN_TX | NODE_FAULT_CONTROL_MOTOR_COMM | \
+	 NODE_FAULT_CONTROL_SENSOR_INVALID | NODE_FAULT_CONTROL_RELAY_INIT)
+
+// Non-fault stop inputs (NODE_STOP_*, heartbeat stop_flags byte)
+// Multiple bits can be set simultaneously.
+#define NODE_STOP_NONE                0x00
+#define NODE_STOP_PUSH_BUTTON         0x01 // Safety input: push button pressed
+#define NODE_STOP_REMOTE              0x02 // Safety input: RF remote kill active
+#define NODE_STOP_ULTRASONIC_OBSTACLE 0x04 // Safety input: obstacle detected
+#define NODE_STOP_APP_REQUEST         0x08 // App/operator requested autonomy stop
+#define NODE_STOP_OPERATOR_REVERSE    0x10 // Control input: reverse intervention
+#define NODE_STOP_OPERATOR_THROTTLE   0x20 // Control input: throttle intervention
+#define NODE_STOP_OPERATOR_STEER      0x40 // Control input: steering intervention
+#define NODE_STOP_OPERATOR_BRAKE      0x80 // Control input: braking intervention
+
+#define NODE_STOP_OPERATOR_ANY \
+	(NODE_STOP_OPERATOR_THROTTLE | NODE_STOP_OPERATOR_REVERSE | NODE_STOP_OPERATOR_STEER | NODE_STOP_OPERATOR_BRAKE)
+#define NODE_STOP_ANY 0xFF
 
 // ============================================================================
 // Battery Status Flags (CAN_ID_SAFETY_BATTERY_STATUS byte 5)
@@ -127,11 +154,11 @@ typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
 #define BATTERY_FLAG_SENSOR_FAULT 0x08 // ADC read failure
 
 // ============================================================================
-// Heartbeat Flags
+// Node Status Flags
 // ============================================================================
 
-#define HEARTBEAT_FLAG_ENABLE_COMPLETE  0x01 // Node finished ENABLE, ready for ACTIVE
-#define HEARTBEAT_FLAG_AUTONOMY_REQUEST 0x02 // Planner requests/holds autonomy (enable gate + halt on drop)
+#define NODE_STATUS_FLAG_ENABLE_COMPLETE  0x01 // Node finished ENABLE, ready for ACTIVE
+#define NODE_STATUS_FLAG_AUTONOMY_REQUEST 0x02 // Planner requests/holds autonomy (enable gate + halt on drop)
 // 0x04 reserved
 
 // ============================================================================
@@ -140,21 +167,21 @@ typedef uint8_t heartbeat_seq_t;   // Rolling 0-255 heartbeat sequence counter
 // Sent by ALL nodes periodically (100ms) and immediately on state change.
 // byte 0: sequence counter (0-255, wraps)
 // byte 1: state (NODE_STATE_* — for Safety: system target state)
-// byte 2: fault_code (NODE_FAULT_* — for Safety: e-stop reason, 0 when advancing)
-// byte 3: flags (HEARTBEAT_FLAG_*)
-//         - HEARTBEAT_FLAG_ENABLE_COMPLETE: node finished ENABLE
-//         - HEARTBEAT_FLAG_AUTONOMY_REQUEST: Planner/Orin requests autonomy enable and
+// byte 2: fault_flags (NODE_FAULT_* — node-specific fault bitmask, 0 when clear)
+// byte 3: status_flags (NODE_STATUS_FLAG_*)
+//         - NODE_STATUS_FLAG_ENABLE_COMPLETE: node finished ENABLE
+//         - NODE_STATUS_FLAG_AUTONOMY_REQUEST: Planner/Orin requests autonomy enable and
 //           must stay asserted while autonomy should remain enabled
-// byte 4: fr_state (FR_STATE_* — Control only; Safety/Planner set to 0)
+// byte 4: stop_flags (NODE_STOP_* bitmask)
 // byte 5-7: reserved
 
 typedef struct
 {
-	heartbeat_seq_t sequence;
+	node_seq_t sequence;
 	node_state_t state;
-	node_fault_t fault_code;
-	heartbeat_flags_t flags;
-	uint8_t fr_state; // FR_STATE_* (Control heartbeat only, 0 for Safety/Planner)
+	node_fault_t fault_flags;
+	node_status_flags_t status_flags;
+	node_stop_t stop_flags;
 } node_heartbeat_t;
 
 // ============================================================================
@@ -162,7 +189,7 @@ typedef struct
 // ============================================================================
 // Sent by Planner when in ACTIVE state.
 // byte 0: sequence counter (0-255, wraps)
-// byte 1: throttle level (0-7)
+// byte 1: throttle level (0-255)
 // byte 2: steering high byte (MSB) for steering command (0-720)
 // byte 3: steering low byte (LSB) for steering command (0-720)
 // byte 4: braking value
@@ -172,7 +199,7 @@ typedef struct
 
 typedef struct
 {
-	heartbeat_seq_t sequence;
+	node_seq_t sequence;
 	uint8_t throttle;
 	uint16_t steering_position; // Planner command value (expected 0-720)
 	uint8_t braking_position;
@@ -244,8 +271,9 @@ static inline int16_t can_unpack_le16s(const uint8_t *buf)
 /**
  * @brief Encode a heartbeat struct into an 8-byte CAN data frame.
  *
- * Writes sequence, state, fault_code, and flags into bytes 0-3 and
- * zeroes the reserved bytes 4-7. Silently returns if either pointer
+ * Writes sequence, state, fault_flags, and status_flags into bytes 0-3,
+ * stop_flags into byte 4, and zeroes reserved bytes 5-7.
+ * Silently returns if either pointer
  * is NULL.
  *
  * @param data  Destination buffer (must have room for 8 bytes)
@@ -257,9 +285,9 @@ static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *h
 		return;
 	data[0] = hb->sequence;
 	data[1] = hb->state;
-	data[2] = hb->fault_code;
-	data[3] = hb->flags;
-	data[4] = hb->fr_state;
+	data[2] = hb->fault_flags;
+	data[3] = hb->status_flags;
+	data[4] = hb->stop_flags;
 	data[5] = 0;
 	data[6] = 0;
 	data[7] = 0;
@@ -268,23 +296,23 @@ static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *h
 /**
  * @brief Decode an 8-byte CAN data frame into a heartbeat struct.
  *
- * Reads sequence, state, fault_code, and flags from bytes 0-3.
- * Returns false if any pointer is NULL or the DLC is not exactly 8.
+ * Reads sequence, state, fault_flags, status_flags, and stop_flags from bytes 0-4.
+ * Returns false if any pointer is NULL or the DLC is less than 5.
  *
- * @param data  Source CAN data buffer (8 bytes)
- * @param dlc   Data length code (must be 8)
+ * @param data  Source CAN data buffer (at least 5 bytes)
+ * @param dlc   Data length code (must be >= 5)
  * @param hb    Destination heartbeat struct
  * @return true on success, false on invalid arguments
  */
 static inline bool can_decode_heartbeat(const uint8_t *data, uint8_t dlc, node_heartbeat_t *hb)
 {
-	if (!data || !hb || dlc != 8)
+	if (!data || !hb || dlc < 5)
 		return false;
 	hb->sequence = data[0];
 	hb->state = data[1];
-	hb->fault_code = data[2];
-	hb->flags = data[3];
-	hb->fr_state = data[4];
+	hb->fault_flags = data[2];
+	hb->status_flags = data[3];
+	hb->stop_flags = data[4];
 	return true;
 }
 
@@ -319,7 +347,7 @@ static inline void can_encode_planner_command(uint8_t *data, const planner_comma
 /**
  * @brief Decode CAN data into a planner command struct.
  *
- * Reads sequence (byte 0), throttle (byte 1, masked to 3 bits),
+ * Reads sequence (byte 0), throttle (byte 1),
  * steering bytes (byte 2 = MSB, byte 3 = LSB), and braking (byte 4).
  * Returns false if any pointer is NULL or the DLC is less than 5.
  *
@@ -333,7 +361,7 @@ static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, 
 	if (!data || !cmd || dlc < 5)
 		return false;
 	cmd->sequence = data[0];
-	cmd->throttle = (uint8_t)(data[1] & 0x07); // 3-bit field, max = 7
+	cmd->throttle = data[1];
 	cmd->steering_position = (uint16_t)(((uint16_t)data[2] << 8) | (uint16_t)data[3]);
 	cmd->braking_position = data[4];
 	return true;
@@ -429,34 +457,30 @@ static inline const char *node_state_to_string(node_state_t state)
 		return "ENABLE";
 	case NODE_STATE_ACTIVE:
 		return "ACTIVE";
-	case NODE_STATE_OVERRIDE:
-		return "OVERRIDE";
-	case NODE_STATE_FAULT:
-		return "FAULT";
 	default:
 		return "UNKNOWN";
 	}
 }
 
 /**
- * @brief Decode an e-stop bitmask into a human-readable string (re-entrant).
+ * @brief Decode non-fault stop flags into a human-readable string (re-entrant).
  *
  * Writes into a caller-provided buffer, making this variant safe for use
- * from multiple threads or ISRs. Multiple active e-stop sources are
+ * from multiple threads or ISRs. Multiple active stop sources are
  * separated by '+'. Returns "none" when no bits are set.
  *
- * Example: fault=0x05 produces "button+ultrasonic".
+ * Example: stop_flags=0x05 produces "push_button+ultrasonic_obstacle".
  *
- * @param fault    E-stop bitmask (NODE_FAULT_ESTOP_* flags)
+ * @param stop_flags  Stop bitmask (NODE_STOP_* flags)
  * @param buf      Destination buffer for the result string
  * @param buf_len  Size of @p buf in bytes
  * @return Pointer to @p buf containing the null-terminated result
  */
-static inline const char *node_estop_to_string_r(node_fault_t fault, char *buf, size_t buf_len)
+static inline const char *node_stop_to_string_r(node_stop_t stop_flags, char *buf, size_t buf_len)
 {
 	if (!buf || buf_len == 0)
 		return "";
-	if (fault == NODE_FAULT_NONE)
+	if (stop_flags == NODE_STOP_NONE)
 	{
 		snprintf(buf, buf_len, "none");
 		return buf;
@@ -465,7 +489,114 @@ static inline const char *node_estop_to_string_r(node_fault_t fault, char *buf, 
 	char *p = buf;
 	char *end = buf + buf_len;
 
-#define ESTOP_APPEND(flag, name)         \
+#define STOP_APPEND(flag, name)               \
+	do                                        \
+	{                                         \
+		if ((stop_flags & (flag)) && p < end) \
+		{                                     \
+			if (p != buf && p < end - 1)      \
+				*p++ = '+';                   \
+			const char *s = name;             \
+			while (*s && p < end - 1)         \
+				*p++ = *s++;                  \
+		}                                     \
+	} while (0)
+
+	STOP_APPEND(NODE_STOP_PUSH_BUTTON, "push_button");
+	STOP_APPEND(NODE_STOP_REMOTE, "remote");
+	STOP_APPEND(NODE_STOP_ULTRASONIC_OBSTACLE, "ultrasonic_obstacle");
+	STOP_APPEND(NODE_STOP_APP_REQUEST, "app_request");
+	STOP_APPEND(NODE_STOP_OPERATOR_REVERSE, "operator_reverse");
+	STOP_APPEND(NODE_STOP_OPERATOR_THROTTLE, "operator_throttle");
+	STOP_APPEND(NODE_STOP_OPERATOR_STEER, "operator_steer");
+	STOP_APPEND(NODE_STOP_OPERATOR_BRAKE, "operator_brake");
+
+#undef STOP_APPEND
+
+	if (p >= end)
+		buf[buf_len - 1] = '\0';
+	else
+		*p = '\0';
+	return buf;
+}
+
+/**
+ * @brief Decode non-fault stop flags into a human-readable string.
+ *
+ * Convenience wrapper around node_stop_to_string_r() that uses a
+ * thread-local buffer, so independent tasks/threads don't clobber
+ * each other. Not safe to call from ISRs; use the _r variant instead.
+ *
+ * @param stop_flags  Stop bitmask (NODE_STOP_* flags)
+ * @return Pointer to a thread-local string describing active stop causes
+ */
+static inline const char *node_stop_to_string(node_stop_t stop_flags)
+{
+	static thread_local char buf[80];
+	return node_stop_to_string_r(stop_flags, buf, sizeof(buf));
+}
+
+static inline const char *node_fault_to_string(node_fault_t fault);
+
+// Classification masks: isolate the prefix bits to identify which node a fault belongs to.
+// Planner: bits 4-6 must be exactly 0b010 (0x40 prefix, fault bits 0-3 only)
+// Control: bits 5-7 must be exactly 0b100 (0x80 prefix, fault bits 0-4 only)
+#define NODE_FAULT_PLANNER_MASK 0x70
+#define NODE_FAULT_CONTROL_MASK 0xE0
+
+/**
+ * @brief Return true if the code is a Planner fault (0x40-0x4F prefix range).
+ */
+static inline bool node_fault_is_planner(node_fault_t fault)
+{
+	return (fault & NODE_FAULT_PLANNER_MASK) == NODE_FAULT_PLANNER_PREFIX;
+}
+
+/**
+ * @brief Return true if the code is a Control fault (0x80-0x9F prefix range).
+ */
+static inline bool node_fault_is_control(node_fault_t fault)
+{
+	return (fault & NODE_FAULT_CONTROL_MASK) == NODE_FAULT_CONTROL_PREFIX;
+}
+
+/**
+ * @brief Return true if any operator intervention stop flag is asserted.
+ */
+static inline bool node_stop_has_operator_intervention(node_stop_t stop_flags)
+{
+	return (stop_flags & NODE_STOP_OPERATOR_ANY) != 0;
+}
+
+/**
+ * @brief Decode a fault code into a human-readable string (re-entrant).
+ *
+ * Handles all three bitmask ranges (Safety, Planner, Control) by writing
+ * a '+'-joined list of active flags into @p buf. For common codes (NONE,
+ * GENERAL) and unrecognized values, returns a static string literal.
+ *
+ * @param fault    Fault code (NODE_FAULT_*)
+ * @param buf      Destination buffer for bitmask decoding
+ * @param buf_len  Size of @p buf in bytes
+ * @return Pointer to a string describing the fault
+ */
+static inline const char *node_fault_to_string_r(node_fault_t fault, char *buf, size_t buf_len)
+{
+	if (fault == NODE_FAULT_NONE)
+		return "none";
+	if (fault == NODE_FAULT_GENERAL)
+		return "general";
+
+	if (!buf || buf_len == 0)
+		return "";
+
+	char *p = buf;
+	char *end = buf + buf_len;
+
+// For safety faults (no prefix), simple bit test works.
+// For planner/control faults (with prefix bits), use equality test
+// to avoid the shared prefix bit causing false matches.
+#define FAULT_BIT_APPEND(flag, name)     \
 	do                                   \
 	{                                    \
 		if ((fault & (flag)) && p < end) \
@@ -478,15 +609,56 @@ static inline const char *node_estop_to_string_r(node_fault_t fault, char *buf, 
 		}                                \
 	} while (0)
 
-	ESTOP_APPEND(NODE_FAULT_ESTOP_BUTTON, "button");
-	ESTOP_APPEND(NODE_FAULT_ESTOP_REMOTE, "remote");
-	ESTOP_APPEND(NODE_FAULT_ESTOP_ULTRASONIC, "ultrasonic");
-	ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER, "planner");
-	ESTOP_APPEND(NODE_FAULT_ESTOP_PLANNER_TIMEOUT, "planner_timeout");
-	ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL, "control");
-	ESTOP_APPEND(NODE_FAULT_ESTOP_CONTROL_TIMEOUT, "control_timeout");
+#define FAULT_FLAG_APPEND(flag, name)                                      \
+	do                                                                     \
+	{                                                                      \
+		if (((fault & (flag)) == (flag)) && ((flag) & ~prefix) && p < end) \
+		{                                                                  \
+			if (p != buf && p < end - 1)                                   \
+				*p++ = '+';                                                \
+			const char *s = name;                                          \
+			while (*s && p < end - 1)                                      \
+				*p++ = *s++;                                               \
+		}                                                                  \
+	} while (0)
 
-#undef ESTOP_APPEND
+	if (fault <= NODE_FAULT_SAFETY_ANY)
+	{
+		// Safety fault bitmask (0x01-0x3F, no prefix)
+		FAULT_BIT_APPEND(NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY, "ultrasonic_unhealthy");
+		FAULT_BIT_APPEND(NODE_FAULT_SAFETY_PLANNER_ISSUE, "planner_issue");
+		FAULT_BIT_APPEND(NODE_FAULT_SAFETY_PLANNER_TIMEOUT, "planner_timeout");
+		FAULT_BIT_APPEND(NODE_FAULT_SAFETY_CONTROL_ISSUE, "control_issue");
+		FAULT_BIT_APPEND(NODE_FAULT_SAFETY_CONTROL_TIMEOUT, "control_timeout");
+		FAULT_BIT_APPEND(NODE_FAULT_SAFETY_RELAY_UNAVAILABLE, "relay_unavailable");
+	}
+	else if (node_fault_is_planner(fault))
+	{
+		// Planner fault bitmask (0x40-0x4F, prefix = 0x40)
+		uint8_t prefix = NODE_FAULT_PLANNER_PREFIX;
+		FAULT_FLAG_APPEND(NODE_FAULT_PLANNER_PERCEPTION, "perception");
+		FAULT_FLAG_APPEND(NODE_FAULT_PLANNER_LOCALIZATION, "localization");
+		FAULT_FLAG_APPEND(NODE_FAULT_PLANNER_PLANNING, "planning");
+		FAULT_FLAG_APPEND(NODE_FAULT_PLANNER_HARDWARE, "planner_hardware");
+	}
+	else if (node_fault_is_control(fault))
+	{
+		// Control fault bitmask (0x80-0x9F, prefix = 0x80)
+		uint8_t prefix = NODE_FAULT_CONTROL_PREFIX;
+		FAULT_FLAG_APPEND(NODE_FAULT_CONTROL_THROTTLE_INIT, "throttle_init");
+		FAULT_FLAG_APPEND(NODE_FAULT_CONTROL_CAN_TX, "can_tx");
+		FAULT_FLAG_APPEND(NODE_FAULT_CONTROL_MOTOR_COMM, "motor_comm");
+		FAULT_FLAG_APPEND(NODE_FAULT_CONTROL_SENSOR_INVALID, "sensor_invalid");
+		FAULT_FLAG_APPEND(NODE_FAULT_CONTROL_RELAY_INIT, "relay_init");
+	}
+	else
+	{
+		snprintf(buf, buf_len, "unknown(0x%02X)", fault);
+		return buf;
+	}
+
+#undef FAULT_BIT_APPEND
+#undef FAULT_FLAG_APPEND
 
 	if (p >= end)
 		buf[buf_len - 1] = '\0';
@@ -496,88 +668,19 @@ static inline const char *node_estop_to_string_r(node_fault_t fault, char *buf, 
 }
 
 /**
- * @brief Decode an e-stop bitmask into a human-readable string.
- *
- * Convenience wrapper around node_estop_to_string_r() that uses a
- * thread-local buffer, so independent tasks/threads don't clobber
- * each other. Not safe to call from ISRs; use the _r variant instead.
- *
- * @param fault  E-stop bitmask (NODE_FAULT_ESTOP_* flags)
- * @return Pointer to a thread-local string describing the active e-stops
- */
-static inline const char *node_estop_to_string(node_fault_t fault)
-{
-	static thread_local char buf[80];
-	return node_estop_to_string_r(fault, buf, sizeof(buf));
-}
-
-/**
  * @brief Decode a fault code into a human-readable string.
  *
- * For e-stop bitmask values (0x01-0x7F), delegates to
- * node_estop_to_string(). For scalar planner/control faults (0x80+),
- * returns a fixed string literal. Uses a thread-local buffer for the
- * e-stop case; use node_fault_to_string_r() from ISRs.
+ * Convenience wrapper around node_fault_to_string_r() that uses a
+ * thread-local buffer for bitmask decoding. Not safe to call from ISRs;
+ * use the _r variant instead.
  *
  * @param fault  Fault code (NODE_FAULT_*)
  * @return Pointer to a string describing the fault
  */
 static inline const char *node_fault_to_string(node_fault_t fault)
 {
-	// Estop bitmask range (0x01-0x7F)
-	if (fault != NODE_FAULT_NONE && fault <= NODE_FAULT_ESTOP_ANY)
-		return node_estop_to_string(fault);
-
-	switch (fault)
-	{
-	case NODE_FAULT_NONE:
-		return "none";
-	// Planner faults
-	case NODE_FAULT_PERCEPTION:
-		return "perception";
-	case NODE_FAULT_LOCALIZATION:
-		return "localization";
-	case NODE_FAULT_PLANNING:
-		return "planning";
-	case NODE_FAULT_PLANNER_HARDWARE:
-		return "planner_hardware";
-	// Control faults
-	case NODE_FAULT_THROTTLE_INIT:
-		return "throttle_init";
-	case NODE_FAULT_CAN_TX:
-		return "can_tx";
-	case NODE_FAULT_MOTOR_COMM:
-		return "motor_comm";
-	case NODE_FAULT_SENSOR_INVALID:
-		return "sensor_invalid";
-	case NODE_FAULT_RELAY_INIT:
-		return "relay_init";
-	// General
-	case NODE_FAULT_GENERAL:
-		return "general";
-	default:
-		return "unknown";
-	}
-}
-
-/**
- * @brief Decode a fault code into a human-readable string (re-entrant).
- *
- * Re-entrant/thread-safe variant of node_fault_to_string(). For e-stop
- * bitmask values (0x01-0x7F), writes the decoded string into the
- * caller-provided buffer via node_estop_to_string_r(). For scalar
- * faults, returns a static string literal directly.
- *
- * @param fault    Fault code (NODE_FAULT_*)
- * @param buf      Destination buffer (used only for e-stop bitmask decoding)
- * @param buf_len  Size of @p buf in bytes
- * @return Pointer to a string describing the fault
- */
-static inline const char *node_fault_to_string_r(node_fault_t fault, char *buf, size_t buf_len)
-{
-	if (fault != NODE_FAULT_NONE && fault <= NODE_FAULT_ESTOP_ANY)
-		return node_estop_to_string_r(fault, buf, buf_len);
-	return node_fault_to_string(fault);
+	static thread_local char buf[96];
+	return node_fault_to_string_r(fault, buf, sizeof(buf));
 }
 
 #ifdef __cplusplus

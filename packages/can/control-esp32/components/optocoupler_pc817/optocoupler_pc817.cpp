@@ -24,8 +24,8 @@ bool s_debouncing = false;
  *
  * Reads the forward and reverse optocoupler GPIOs and maps the
  * combination to a gear state.  Based on 1999 Club Car DS 48V wiring:
- *   - forward_gpio (GPIO 22) = anti-arcing microswitch (ON in Forward AND Reverse)
- *   - reverse_gpio (GPIO 23) = reverse buzzer microswitch (ON in Reverse only)
+ *   - forward_gpio = anti-arcing microswitch (ON in Forward AND Reverse)
+ *   - reverse_gpio = reverse buzzer microswitch (ON in Reverse only)
  *
  * Truth table:
  *   - Both active  = Reverse (anti-arc + buzzer both ON)

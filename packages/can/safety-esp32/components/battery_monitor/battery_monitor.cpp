@@ -3,7 +3,7 @@
  * @brief Battery pack voltage, current, and SOC monitoring implementation.
  *
  * Reads two ADC1 channels (pack voltage via resistor divider, pack current
- * via ACS758LCB hall-effect sensor) and estimates state of charge using a
+ * via a hall-effect sensor) and estimates state of charge using a
  * voltage lookup table with coulomb-counting refinement.
  *
  * Design:
@@ -70,8 +70,8 @@ constexpr int32_t ZERO_CAL_TOLERANCE_MA = 2000; // ±2A
 
 struct soc_entry_t
 {
-	uint16_t mv;  // Pack voltage in mV
-	uint8_t pct;  // SOC percentage
+	uint16_t mv; // Pack voltage in mV
+	uint8_t pct; // SOC percentage
 };
 
 constexpr soc_entry_t SOC_TABLE[] = {
@@ -107,9 +107,9 @@ bool s_voltage_cali_ok = false;
 bool s_current_cali_ok = false;
 
 // Filtered readings
-float s_voltage_filtered_mv = 0.0f;  // Pack voltage in mV (after divider undo)
-float s_current_filtered_ma = 0.0f;  // Pack current in mA (positive = discharge)
-bool s_filters_primed = false;       // First sample initializes filters directly
+float s_voltage_filtered_mv = 0.0f; // Pack voltage in mV (after divider undo)
+float s_current_filtered_ma = 0.0f; // Pack current in mA (positive = discharge)
+bool s_filters_primed = false;      // First sample initializes filters directly
 
 // SOC state
 uint8_t s_soc_pct = 0;
@@ -242,6 +242,8 @@ esp_err_t battery_monitor_init(const battery_monitor_config_t *config)
 {
 	if (!config)
 		return ESP_ERR_INVALID_ARG;
+	if (config->current_output_scale <= 0.0f || config->current_sens_uv <= 0.0f)
+		return ESP_ERR_INVALID_ARG;
 
 	battery_monitor_deinit();
 
@@ -335,8 +337,8 @@ esp_err_t battery_monitor_init(const battery_monitor_config_t *config)
 	s_initialized = true;
 
 	ESP_LOGI(TAG, "Initialized: voltage_gpio=%d (ch%d) current_gpio=%d (ch%d) divider=%u capacity=%lumAh",
-	         config->voltage_gpio, s_voltage_channel, config->current_gpio, s_current_channel,
-	         config->divider_ratio, (unsigned long)config->capacity_mah);
+	         config->voltage_gpio, s_voltage_channel, config->current_gpio, s_current_channel, config->divider_ratio,
+	         (unsigned long)config->capacity_mah);
 
 	return ESP_OK;
 }
@@ -371,7 +373,7 @@ void battery_monitor_update(uint32_t now_ms)
 
 	// ── Compute dt ──────────────────────────────────────────────────────
 	float dt_s = 0.0f;
-	if (s_last_update_ms != 0 && now_ms > s_last_update_ms)
+	if (s_last_update_ms != 0 && (now_ms - s_last_update_ms) > 0)
 	{
 		dt_s = (float)(now_ms - s_last_update_ms) / 1000.0f;
 	}
@@ -419,8 +421,8 @@ void battery_monitor_update(uint32_t now_ms)
 		{
 			// Check if the reading is close to the expected zero
 			int32_t expected_zero = (int32_t)s_config.current_zero_mv;
-			int32_t deviation_ma =
-				(int32_t)((sensor_mv - (float)expected_zero) * 1000.0f) / (int32_t)s_config.current_sens_uv;
+			float deviation_ma_f = (sensor_mv - (float)expected_zero) * 1000.0f / s_config.current_sens_uv;
+			int32_t deviation_ma = (int32_t)deviation_ma_f;
 
 			if (deviation_ma > -ZERO_CAL_TOLERANCE_MA && deviation_ma < ZERO_CAL_TOLERANCE_MA)
 			{
@@ -442,7 +444,7 @@ void battery_monitor_update(uint32_t now_ms)
 		// Convert sensor voltage to current:
 		// current_ma = (sensor_mv - zero_mv) × 1000 / sensitivity_uv
 		// Positive = discharge (current flowing out of battery)
-		float current_ma = (sensor_mv - (float)s_current_zero_offset_mv) * 1000.0f / (float)s_config.current_sens_uv;
+		float current_ma = (sensor_mv - (float)s_current_zero_offset_mv) * 1000.0f / s_config.current_sens_uv;
 
 		if (!s_filters_primed)
 		{
@@ -470,8 +472,8 @@ void battery_monitor_update(uint32_t now_ms)
 		s_coulomb_mah_used = 0.0f;
 		s_idle_start_ms = now_ms;
 
-		ESP_LOGI(TAG, "Initial reading: voltage=%umV current=%dmA soc=%u%%",
-		         (unsigned)(s_voltage_filtered_mv + 0.5f), (int)(s_current_filtered_ma + 0.5f), s_soc_pct);
+		ESP_LOGI(TAG, "Initial reading: voltage=%umV current=%dmA soc=%u%%", (unsigned)(s_voltage_filtered_mv + 0.5f),
+		         (int)(s_current_filtered_ma + 0.5f), s_soc_pct);
 	}
 
 	if (!s_filters_primed)
@@ -510,8 +512,8 @@ void battery_monitor_update(uint32_t now_ms)
 			s_idle_start_ms = now_ms;
 
 #ifdef CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES
-			ESP_LOGI(TAG, "SOC recalibrated from voltage: %u%% (idle >%lus)",
-			         voltage_soc, (unsigned long)(IDLE_RECAL_MS / 1000));
+			ESP_LOGI(TAG, "SOC recalibrated from voltage: %u%% (idle >%lus)", voltage_soc,
+			         (unsigned long)(IDLE_RECAL_MS / 1000));
 #endif
 		}
 	}
@@ -536,18 +538,16 @@ void battery_monitor_update(uint32_t now_ms)
 #ifdef CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES
 	if (new_soc != s_soc_pct)
 	{
-		ESP_LOGI(TAG, "SOC: %u%% -> %u%% (voltage=%umV current=%dmA coulomb_used=%.1fmAh)",
-		         s_soc_pct, new_soc, (unsigned)(s_voltage_filtered_mv + 0.5f),
-		         (int)(s_current_filtered_ma + 0.5f), s_coulomb_mah_used);
+		ESP_LOGI(TAG, "SOC: %u%% -> %u%% (voltage=%umV current=%dmA coulomb_used=%.1fmAh)", s_soc_pct, new_soc,
+		         (unsigned)(s_voltage_filtered_mv + 0.5f), (int)(s_current_filtered_ma + 0.5f), s_coulomb_mah_used);
 	}
 #endif
 
 	s_soc_pct = new_soc;
 
 #ifdef CONFIG_LOG_INPUT_BATTERY_VOLTAGE
-	ESP_LOGI(TAG, "V=%umV I=%dmA SOC=%u%% idle=%d zero_cal=%ldmV",
-	         (unsigned)(s_voltage_filtered_mv + 0.5f), (int)(s_current_filtered_ma + 0.5f),
-	         s_soc_pct, s_is_idle, (long)s_current_zero_offset_mv);
+	ESP_LOGI(TAG, "V=%umV I=%dmA SOC=%u%% idle=%d zero_cal=%ldmV", (unsigned)(s_voltage_filtered_mv + 0.5f),
+	         (int)(s_current_filtered_ma + 0.5f), s_soc_pct, s_is_idle, (long)s_current_zero_offset_mv);
 #endif
 }
 
@@ -558,8 +558,9 @@ void battery_monitor_get_status(battery_status_t *out)
 
 	out->voltage_mv = s_filters_primed ? (uint16_t)(s_voltage_filtered_mv + 0.5f) : 0;
 
-	// Convert current mA to 10mA units
-	out->current_10ma = s_filters_primed ? (int16_t)(s_current_filtered_ma / 10.0f) : 0;
+	// Convert current mA to 10mA units (round toward nearest, matching voltage rounding)
+	out->current_10ma =
+		s_filters_primed ? (int16_t)(s_current_filtered_ma / 10.0f + (s_current_filtered_ma >= 0 ? 0.5f : -0.5f)) : 0;
 
 	out->soc_pct = s_soc_pct;
 

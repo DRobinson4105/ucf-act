@@ -2,7 +2,7 @@
  * @file stepper_protocol_uim2852.cpp
  * @brief UIM2852 stepper motor SimpleCAN3.0 protocol implementation.
  *
- * Frame data lengths and formats match the UIM342CA CAN Interface Reference.
+ * Frame data lengths and formats match the UIM2852CA SimpleCAN3.0 specification.
  */
 #include "stepper_protocol_uim2852.h"
 #include <string.h>
@@ -122,13 +122,13 @@ static uint8_t build_nodata(uint8_t *data)
  * (AC, DC, SD, SS, SP, JV, PA, PR, QP, QV, QT).
  *
  * @param data   [out] Frame data buffer (at least 8 bytes)
- * @param value  The 32-bit value to pack at d0-d3
+ * @param value  The 32-bit value to pack at d0-d3 (bit pattern preserved)
  * @return Data length (4)
  */
-static uint8_t build_val32(uint8_t *data, int32_t value)
+static uint8_t build_val32(uint8_t *data, uint32_t value)
 {
 	memset(data, 0, 8);
-	pack_le32(data, value);
+	pack_le32(data, (int32_t)value);
 	return 4;
 }
 
@@ -187,24 +187,6 @@ static uint8_t build_idx_s32(uint8_t *data, uint8_t index, int32_t value)
 	return 5;
 }
 
-/**
- * @brief Build a frame with two packed 32-bit values (DL=8, d0-d3 + d4-d7).
- *
- * Used for PT/QF commands that carry a position-time pair.
- *
- * @param data  [out] Frame data buffer (at least 8 bytes)
- * @param a     First 32-bit value (packed at d0-d3)
- * @param b     Second 32-bit value (packed at d4-d7)
- * @return Data length (8)
- */
-static uint8_t build_val32_pair(uint8_t *data, int32_t a, int32_t b)
-{
-	memset(data, 0, 8);
-	pack_le32(&data[0], a);
-	pack_le32(&data[4], b);
-	return 8;
-}
-
 // ============================================================================
 // Frame Building Functions
 // ============================================================================
@@ -228,42 +210,42 @@ uint8_t stepper_uim2852_build_st(uint8_t *data)
 
 uint8_t stepper_uim2852_build_sd(uint8_t *data, uint32_t decel_rate)
 {
-	return build_val32(data, (int32_t)decel_rate);
+	return build_val32(data, decel_rate);
 }
 
 uint8_t stepper_uim2852_build_ac(uint8_t *data, uint32_t accel_rate)
 {
-	return build_val32(data, (int32_t)accel_rate);
+	return build_val32(data, accel_rate);
 }
 
 uint8_t stepper_uim2852_build_dc(uint8_t *data, uint32_t decel_rate)
 {
-	return build_val32(data, (int32_t)decel_rate);
+	return build_val32(data, decel_rate);
 }
 
 uint8_t stepper_uim2852_build_ss(uint8_t *data, uint32_t speed_pps)
 {
-	return build_val32(data, (int32_t)speed_pps);
+	return build_val32(data, speed_pps);
 }
 
 uint8_t stepper_uim2852_build_sp(uint8_t *data, int32_t speed_pps)
 {
-	return build_val32(data, speed_pps);
+	return build_val32(data, (uint32_t)speed_pps);
 }
 
 uint8_t stepper_uim2852_build_jv(uint8_t *data, int32_t velocity_pps)
 {
-	return build_val32(data, velocity_pps);
+	return build_val32(data, (uint32_t)velocity_pps);
 }
 
 uint8_t stepper_uim2852_build_pa(uint8_t *data, int32_t position)
 {
-	return build_val32(data, position);
+	return build_val32(data, (uint32_t)position);
 }
 
 uint8_t stepper_uim2852_build_pr(uint8_t *data, int32_t displacement)
 {
-	return build_val32(data, displacement);
+	return build_val32(data, (uint32_t)displacement);
 }
 
 uint8_t stepper_uim2852_build_og(uint8_t *data)
@@ -341,7 +323,6 @@ uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t valu
 	return build_idx_u16(data, index, value);
 }
 
-
 uint8_t stepper_uim2852_build_ml(uint8_t *data)
 {
 	return build_nodata(data);
@@ -373,17 +354,17 @@ uint8_t stepper_uim2852_build_pt(uint8_t *data, uint16_t row, int32_t position)
 
 uint8_t stepper_uim2852_build_qp(uint8_t *data, int32_t position)
 {
-	return build_val32(data, position);
+	return build_val32(data, (uint32_t)position);
 }
 
 uint8_t stepper_uim2852_build_qv(uint8_t *data, int32_t velocity)
 {
-	return build_val32(data, velocity);
+	return build_val32(data, (uint32_t)velocity);
 }
 
 uint8_t stepper_uim2852_build_qt(uint8_t *data, uint32_t time_ms)
 {
-	return build_val32(data, (int32_t)time_ms);
+	return build_val32(data, time_ms);
 }
 
 uint8_t stepper_uim2852_build_qf(uint8_t *data, uint8_t time_ms, int32_t velocity, int32_t position)
@@ -441,7 +422,7 @@ bool stepper_uim2852_parse_ms0(const uint8_t *data, uint8_t dl, stepper_uim2852_
 
 bool stepper_uim2852_parse_ms1(const uint8_t *data, uint8_t dl, int32_t *speed_pps, int32_t *abs_position)
 {
-	if (!data || dl < 8)
+	if (!data || !speed_pps || !abs_position || dl < 8)
 		return false;
 
 	// Verify this is an MS[1] response (index must be 1)
@@ -449,12 +430,10 @@ bool stepper_uim2852_parse_ms1(const uint8_t *data, uint8_t dl, int32_t *speed_p
 		return false;
 
 	// d1-d3: current speed (24-bit signed, little-endian)
-	if (speed_pps)
-		*speed_pps = unpack_le24_signed(&data[1]);
+	*speed_pps = unpack_le24_signed(&data[1]);
 
 	// d4-d7: absolute position (32-bit signed, little-endian)
-	if (abs_position)
-		*abs_position = unpack_le32(&data[4]);
+	*abs_position = unpack_le32(&data[4]);
 
 	return true;
 }

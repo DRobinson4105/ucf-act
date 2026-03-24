@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "esp_err.h"
 #include "can_protocol.h"
@@ -23,8 +24,9 @@ extern "C"
 // Color mapping:
 //   - Green:  READY
 //   - Blue:   ACTIVE
-//   - Yellow: INIT, NOT_READY, ENABLE, OVERRIDE
-//   - Red:    FAULT
+//   - Yellow: INIT, ENABLE
+//   - Red:    NOT_READY
+//   - Red:    fault overlay (explicitly requested by caller)
 // ============================================================================
 
 /**
@@ -40,13 +42,26 @@ esp_err_t led_ws2812_init(void);
 /**
  * @brief Set the current node state and update the LED color.
  *
- * Maps the node state to an LED color (e.g., green = READY, red = FAULT)
- * and transmits it immediately when the state changes. Periodic
- * re-transmissions are rate-limited internally.
+ * Maps the node state to an LED color (green = READY, blue = ACTIVE,
+ * red = NOT_READY, yellow = INIT/ENABLE) and transmits it immediately
+ * when the state changes.
+ * If fault overlay is enabled via led_ws2812_set_fault_overlay(), red takes
+ * precedence over state colors.
+ * Periodic re-transmissions are rate-limited internally.
  *
  * @param node_state  Current node state to reflect on the LED
  */
 void led_ws2812_set_state(node_state_t node_state);
+
+/**
+ * @brief Enable or disable red fault overlay.
+ *
+ * When enabled, LED color is forced to red regardless of node state. This is
+ * used for local hardware failures that are not represented as node states.
+ *
+ * @param enabled  true to force red overlay, false to return to state colors
+ */
+void led_ws2812_set_fault_overlay(bool enabled);
 
 #ifdef __cplusplus
 }

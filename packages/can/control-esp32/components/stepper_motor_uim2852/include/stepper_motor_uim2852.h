@@ -54,12 +54,13 @@ extern "C"
 
 typedef struct
 {
-	uint8_t node_id;        // Motor's CAN node ID — used as consumer ID when sending commands
-	uint8_t producer_id;    // Motor's response producer ID — used to match incoming frames
-	uint32_t default_accel; // Default acceleration in pulses/sec^2
-	uint32_t default_decel; // Default deceleration in pulses/sec^2
-	uint32_t stop_decel;    // Emergency stop deceleration rate
-	bool request_ack;       // Request ACK for commands (recommended)
+	uint8_t node_id;          // Motor's CAN node ID — used as consumer ID when sending commands
+	uint8_t producer_id;      // Motor's response producer ID — used to match incoming frames
+	uint32_t default_accel;   // Default acceleration in pulses/sec^2
+	uint32_t default_decel;   // Default deceleration in pulses/sec^2
+	uint32_t stop_decel;      // Emergency stop deceleration rate
+	uint16_t working_current; // Working current in 0.1A units (e.g. 8 = 0.8A)
+	bool request_ack;         // Request ACK for commands (recommended)
 } stepper_motor_uim2852_config_t;
 
 // Default configuration
@@ -70,6 +71,7 @@ typedef struct
 		.default_accel = 5000,                 \
 		.default_decel = 5000,                 \
 		.stop_decel = 8000,                    \
+		.working_current = 8,                  \
 		.request_ack = true,                   \
 	}
 
@@ -108,10 +110,10 @@ typedef struct stepper_motor_uim2852
 	uint8_t last_cw_sent; // Last control word sent
 
 	// PT (Position-Time) interpolation mode state
-	bool pt_mode_active;   // true after PT FIFO mode is armed with PV=start_row
-	bool pt_motion_started; // true after BG has been sent for the current PT FIFO run
-	bool pt_fifo_empty;    // set by PVT FIFO empty notification (0x2A)
-	bool pt_fifo_low;      // set by PVT FIFO low warning notification (0x2B)
+	bool pt_mode_active;       // true after PT FIFO mode is armed with PV=start_row
+	bool pt_motion_started;    // true after BG has been sent for the current PT FIFO run
+	bool pt_fifo_empty;        // set by PVT FIFO empty notification (0x2A)
+	bool pt_fifo_low;          // set by PVT FIFO low warning notification (0x2B)
 	uint16_t pt_frame_time_ms; // fixed PT frame time configured via MP[4]
 	uint16_t pt_write_index;   // next PT table row to write (0-511)
 	uint8_t pt_prefill_count;  // number of PT rows queued before BG start

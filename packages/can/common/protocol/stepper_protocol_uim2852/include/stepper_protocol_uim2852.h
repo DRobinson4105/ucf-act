@@ -2,9 +2,9 @@
  * @file stepper_protocol_uim2852.h
  * @brief UIM2852 stepper motor SimpleCAN3.0 protocol frame encoding and parsing.
  *
- * All CW (Control Word) hex codes and data formats match the UIM342CA CAN
- * Interface Reference specification.  Byte ordering is little-endian (LSB
- * first) throughout.
+ * All CW (Control Word) hex codes and data formats match the UIM2852CA
+ * SimpleCAN3.0 protocol specification.  Byte ordering is little-endian
+ * (LSB first) throughout.
  */
 #pragma once
 
@@ -30,10 +30,14 @@ extern "C"
 // ============================================================================
 
 // Common node IDs used by this project.
-#define UIM2852_MASTER_ID     4 // Producer ID for host controller
 #define UIM2852_NODE_STEERING 7 // Steering motor node ID
 #define UIM2852_NODE_BRAKING  6 // Braking motor node ID
 #define UIM2852_GLOBAL_ID     0 // Broadcast to all motors
+
+// The ProducerID extracted from any host-encoded CAN ID is always 4,
+// regardless of the target ConsumerID. This is a property of the
+// SimpleCAN encoding formula, not a configurable host address.
+#define UIM2852_HOST_PRODUCER_ID 4
 
 /**
  * @brief Calculate the 29-bit extended CAN ID for sending an instruction to a motor.
@@ -292,10 +296,9 @@ typedef struct
 	int32_t relative_position;
 } stepper_uim2852_status_t;
 
-// Notification structure
+// Notification structure (payload only — node identity comes from the CAN ID)
 typedef struct
 {
-	uint8_t node_id;
 	bool is_alarm;    // true if alarm (d0==0x00), false if status
 	uint8_t type;     // notification type code (alarm code or status code)
 	int32_t position; // For PTP_COMPLETE, current position from d4-d7
@@ -625,7 +628,6 @@ uint8_t stepper_uim2852_build_qe_query(uint8_t *data, uint8_t index);
  * @return Data length (DL) for the CAN frame (3)
  */
 uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t value);
-
 
 // ============================================================================
 // PT/PVT Interpolated Motion Frame Builders

@@ -18,21 +18,19 @@
 #include <stdbool.h>
 
 #include "can_protocol.h"
-#include "control_domain_types.h"
+#include "control_types.h"
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-// Valid throttle level range for the DG408DJZ multiplexer (3-bit, 0-7).
-//
 // F/R state interpretation (pre-bypass vs post-bypass):
 //
 // The anti-arcing microswitch (forward_gpio) is in series after the throttle
-// microswitch in the cart's 48V circuit.  Before the pedal bypass relay
-// (JD-2912) is energized during the ENABLE sequence, the anti-arcing switch
-// cannot conduct — so FORWARD and NEUTRAL are indistinguishable (both read
+// microswitch in the cart's 48V circuit.  Before the DPDT relay (MY5NJ) is
+// energized during the ENABLE sequence, the anti-arcing switch cannot
+// conduct — so FORWARD and NEUTRAL are indistinguishable (both read
 // as NEUTRAL).  The buzzer microswitch (reverse_gpio) is independent and
 // always readable.
 //
@@ -42,22 +40,19 @@ extern "C"
 //   - Preconditions require "not in reverse": FORWARD and NEUTRAL both pass.
 //   - FR_STATE_INVALID is treated as "reverse" (blocks READY, no fault).
 //
-// Post-bypass (ENABLE after START_ENABLE / ACTIVE):
-//   - Full truth table is readable (bypass relay allows anti-arc current).
+// Post-bypass (ACTIVE after COMPLETE_ENABLE):
+//   - Full truth table is readable (DPDT relay allows anti-arc current).
 //   - FORWARD: normal throttle operation.
 //   - NEUTRAL: stay ACTIVE but zero throttle (cart can't drive in neutral).
 //   - REVERSE: override (disable all actuators).
-//   - INVALID: wiring fault → FAULT (anti-arc should be readable).
-#define THROTTLE_LEVEL_MIN 0
-#define THROTTLE_LEVEL_MAX 7
-
+//   - INVALID: wiring fault cause → retreat to NOT_READY (anti-arc should be readable).
 // ============================================================================
 // Enable Preconditions
 // ============================================================================
 
 typedef struct
 {
-	fr_state_t fr_state;     // FR_STATE_* from control_domain_types.h
+	fr_state_t fr_state;     // FR_STATE_* from control_types.h
 	bool pedal_pressed;      // true if pedal above threshold
 	bool pedal_rearmed;      // true if pedal below threshold for 500ms
 	node_fault_t fault_code; // NODE_FAULT_* from can_protocol.h
@@ -80,23 +75,25 @@ precondition_fail_t control_check_preconditions(const precondition_inputs_t *inp
 
 typedef struct
 {
-	int8_t current;            // current throttle level (0-7)
-	int8_t target;             // target throttle level (0-7)
+	int16_t current;           // current throttle level
+	int16_t target;            // target throttle level
 	uint32_t last_change_ms;   // timestamp of last level change
 	uint32_t now_ms;           // current time
 	uint32_t slew_interval_ms; // minimum ms between level changes
+	int16_t slew_step;         // max level delta per interval (<=0 defaults to 1)
 } throttle_slew_inputs_t;
 
 typedef struct
 {
-	int8_t new_level; // output: throttle level after slew
-	bool changed;     // true if level was changed this step
+	int16_t new_level; // output: throttle level after slew
+	bool changed;      // true if level was changed this step
 } throttle_slew_result_t;
 
 /**
  * @brief Compute the next throttle level with slew rate limiting.
  *
- * Moves current toward target by at most 1 step per slew_interval_ms.
+ * Moves current toward target by at most slew_step per slew_interval_ms.
+ * If slew_step is <= 0, a default step of 1 is used.
  *
  * @param inputs  Throttle state and timing
  * @return New throttle level and whether it changed
@@ -115,10 +112,11 @@ typedef struct
 	node_state_t target_state; // NODE_STATE_* from Safety's heartbeat
 
 	// Planner commands (valid when ACTIVE)
-	int8_t throttle_cmd;
+	int16_t throttle_cmd;
 	int32_t steering_cmd;
 	int16_t braking_cmd;
-	node_fault_t motor_fault_code; // one-shot from CAN RX (NODE_FAULT_*)
+	node_fault_t motor_fault_code; // one-shot issue cause from CAN RX (NODE_FAULT_*)
+	node_stop_t stop_flags;        // current latched non-fault stop causes (NODE_STOP_*)
 
 	// Sensor state
 	// NOTE: pedal/fr values are expected to be debounced by the caller.
@@ -141,9 +139,16 @@ typedef struct
 	bool enable_work_done;       // true after COMPLETE_ENABLE has fired once
 
 	// Throttle slew
-	int8_t throttle_current;
+	int16_t throttle_current;
 	uint32_t last_throttle_change_ms;
 	uint32_t throttle_slew_interval_ms;
+	int16_t throttle_slew_step;
+
+	// Throttle command envelope limits.
+	// If min == max == 0, the envelope is treated as unconfigured and the
+	// command is forced to neutral (0) for fail-safe behavior.
+	int16_t throttle_min; // minimum allowed throttle level
+	int16_t throttle_max; // maximum allowed throttle level
 
 	// Stepper dedup
 	int32_t last_steering_sent;
@@ -162,20 +167,21 @@ typedef struct
 {
 	// Updated state
 	node_state_t new_state;                // NODE_STATE_* from can_protocol.h
-	node_fault_t new_fault_code;           // NODE_FAULT_* (0 = none)
+	node_fault_t new_fault_flags;          // NODE_FAULT_* issue code (0 = none)
+	node_stop_t new_stop_flags;            // NODE_STOP_* bitmask (0 = none)
 	override_reason_t override_reason;     // OVERRIDE_REASON_* (set when triggering override)
 	disable_reason_t disable_reason;       // CONTROL_DISABLE_REASON_* (non-override disable)
 	abort_reason_t abort_reason;           // CONTROL_ABORT_REASON_* (set when aborting enable)
 	precondition_fail_t precondition_fail; // PRECONDITION_FAIL_* bitmask (set when READY blocked)
 
-	// Heartbeat flags to send
-	heartbeat_flags_t heartbeat_flags; // HEARTBEAT_FLAG_* to include in next heartbeat
+	// Heartbeat status_flags to send
+	node_status_flags_t status_flags; // NODE_STATUS_FLAG_* to include in next heartbeat
 
 	// Actions for the caller to execute
 	control_actions_t actions; // bitmask of CONTROL_ACTION_*
 
 	// Throttle output
-	int8_t throttle_level;       // new throttle level (valid when APPLY_THROTTLE set)
+	int16_t throttle_level;      // new throttle level (valid when APPLY_THROTTLE set)
 	uint32_t throttle_change_ms; // updated last_throttle_change_ms
 
 	// Stepper outputs (valid when state is ACTIVE and no override triggered)
@@ -202,9 +208,8 @@ typedef struct
  *
  * Live-state behavior:
  *   - INIT -> NOT_READY <-> READY -> ENABLE -> ACTIVE
- *   - ACTIVE -> OVERRIDE -> NOT_READY/READY
- *   - Any live state can enter FAULT
- *   - FAULT returns to NOT_READY/READY when the active fault condition clears
+ *   - ACTIVE operator stop or issue triggers retreat directly to NOT_READY
+ *   - Operator stops are reported in stop_flags; issues are reported in fault_code
  *
  * @param current_state  Current NODE_STATE_* value
  * @param current_fault  Current fault code
@@ -219,10 +224,10 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 // ============================================================================
 
 /**
- * @brief Clamp a signed 16-bit command value to [min, max].
+ * @brief Clamp a signed 32-bit command value to [min, max].
  *
- * Used to enforce safe steering and braking position envelopes before
- * forwarding planner commands to stepper motors.
+ * Used to enforce safe throttle, steering, and braking position envelopes
+ * before forwarding planner commands to actuators.
  *
  * @param value  Raw command value from planner
  * @param min    Minimum allowed value (inclusive)
