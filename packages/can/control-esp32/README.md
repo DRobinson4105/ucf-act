@@ -100,7 +100,7 @@ See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | GPIO | Function     | Direction | Notes                                                  |
 | ---- | ------------ | --------- | ------------------------------------------------------ |
 | 0    | Pedal ADC    | Analog In | ADC1_CH0, voltage divider (220k/100k), threshold 500mV |
-| 2    | Digipot MOSI | Output    | MCP41HVX1 SPI data                                     |
+| 2    | Digipot SDI  | Output    | MCP41HVX1 SPI data in                                  |
 | 3    | Digipot SCK  | Output    | MCP41HVX1 SPI clock                                    |
 | 4    | CAN TX       | Output    | TWAI peripheral (SN65HVD230 transceiver)               |
 | 5    | CAN RX       | Input     | TWAI peripheral (SN65HVD230 transceiver)               |
@@ -154,12 +154,12 @@ All throttle-related components (MCP41HVX1 digipot, MY5NJ DPDT relay, 2N5551, PC
 
 | Label  | Connector    | Pin 1                           | Pin 2                       | Pin 3                     | Pin 4 |
 | ------ | ------------ | ------------------------------- | --------------------------- | ------------------------- | ----- |
-| **J1** | 3-pin JST-PH | Digipot MOSI (GPIO 2) WHITE     | Digipot SCK (GPIO 3) YELLOW | Digipot CS (GPIO 6) GREEN |       |
+| **J1** | 3-pin JST-PH | Digipot SDI (GPIO 2) WHITE      | Digipot SCK (GPIO 3) YELLOW | Digipot CS (GPIO 6) GREEN |       |
 | **J2** | 2-pin JST-PH | DPDT Relay Base (GPIO 10) WHITE | Pedal ADC (GPIO 0) YELLOW   |                           |       |
 | **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE         | F/R Rev (GPIO 23) GREEN     |                           |       |
-| **J9** | Single wire  | ESP32 GND BLACK                 |                             |                           |       |
+| **J9** | 2-pin JST-PH | ESP32 GND BLACK                 | ESP32 3.3V (Digipot VL) RED |                           |       |
 
-J9 is a single black wire connecting an ESP32 GND pin to the throttle box GND bus rail. Required for signal reference between the ESP32 and the throttle box.
+J9 carries ESP32 GND (signal reference for the throttle box GND bus) and ESP32 3.3V (digipot VL logic supply). Place a 100nF (0.1µF) ceramic bypass cap between VL and GND at the digipot on the perfboard.
 
 **Cart-side connectors (on the throttle box):**
 
@@ -171,7 +171,7 @@ J9 is a single black wire connecting an ESP32 GND pin to the throttle box GND bu
 | **J7** | 2-pin JST-PH       | Anti-arc signal YELLOW | Anti-arc return GREEN |                |                       |
 | **J8** | 2-pin JST-PH       | Buzzer supply BLUE     | Buzzer signal WHITE   |                |                       |
 
-**Important:** J5 pin 3 (Curtis B-, blue wire) connects to the digipot Terminal B — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
+**Important:** J5 pin 3 (Curtis B-, blue wire) connects to digipot P0B — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
 
 **J5 internal throttle box connections:**
 
@@ -179,9 +179,9 @@ The MY5NJ DPDT relay Pole 1 on the throttle box perfboard switches the Curtis th
 
 | J5 Pin | Cart-Side Signal                     | Throttle Box Internal Connection |
 | ------ | ------------------------------------ | -------------------------------- |
-| Pin 1  | Curtis Pin 2 (pot high ref) RED      | Digipot Terminal A               |
+| Pin 1  | Curtis Pin 2 (pot high ref) RED      | Digipot P0A                      |
 | Pin 2  | Curtis Pin 3 (throttle input) YELLOW | DPDT Relay Pole 1 COM (output)   |
-| Pin 3  | Curtis B- BLUE                       | Digipot Terminal B               |
+| Pin 3  | Curtis B- BLUE                       | Digipot P0B                      |
 | Pin 4  | Pedal pot wiper GREEN                | DPDT Relay Pole 1 NC (input)     |
 
 The relay switches Curtis Pin 3 between manual pedal pot (NC, de-energized) and digipot wiper (NO, energized). In manual mode, the pot wiper signal passes through NC → COM → Curtis Pin 3. In autonomous mode, the digipot wiper output passes through NO → COM → Curtis Pin 3.
@@ -204,20 +204,20 @@ The original cart wiring connects the pedal pot wiper directly to Curtis Pin 3. 
     - Pedal pot wiper side of the cut → J5 Pin 4 (GREEN)
 2. **SPLICE** (do not cut) the Curtis Pin 2 wire:
     - Original connection to pedal pot high terminal stays intact
-    - New branch → J5 Pin 1 (RED) for the digipot Terminal A
+    - New branch → J5 Pin 1 (RED) for digipot P0A
 3. **SPLICE** (do not cut) the Curtis B- wire:
     - Original connection stays intact
-    - New branch → J5 Pin 3 (BLUE) for the digipot Terminal B
+    - New branch → J5 Pin 3 (BLUE) for digipot P0B
 
 Curtis Pin 2 must remain connected to the pedal pot high terminal so the pot retains its reference voltage for manual mode.
 
 ### Throttle System (MCP41HVX1 Digipot + MY5NJ Relay)
 
-MCP41HVX1 high-voltage digital potentiometer provides 256 wiper positions (0-255) for continuous throttle level control. Terminal A connects to Curtis Pin 2 (8.5V reference), Terminal B to Curtis B- (ground reference), wiper output to the MY5NJ DPDT relay Pole 1 NO terminal.
+MCP41HVX1 high-voltage digital potentiometer provides 256 wiper positions (0-255) for continuous throttle level control. P0A connects to Curtis Pin 2 (8.5V reference), P0B to Curtis B- (ground reference), P0W (wiper) output to the MY5NJ DPDT relay Pole 1 NO terminal.
 
-**Power supply:** V+ powered from 24V rail (max 36V). VL (digital logic) powered from ESP32 3.3V. SPI interface: MOSI (GPIO 2), SCK (GPIO 3), CS (GPIO 6). SPI clock: 1 MHz, mode 0.
+**Power supply:** V+ powered from 24V rail (max 36V). V- and DGND both tied to throttle box GND bus. VL (digital logic) powered from ESP32 3.3V via J9 Pin 2. SPI interface: SDI (GPIO 2), SCK (GPIO 3), CS (GPIO 6). SPI clock: 1 MHz, mode 0.
 
-**Safe state:** Wiper position 0 (minimum throttle, near Terminal B). At wiper 0 the output voltage is approximately 0V — well within the Curtis controller's deadband, producing no movement.
+**Safe state:** Wiper position 0 (minimum throttle, near P0B). At wiper 0 the output voltage is approximately 0V — well within the Curtis controller's deadband, producing no movement.
 
 **MY5NJ DPDT relay** (24V coil, driven via 2N5551 NPN transistor on GPIO 10):
 
@@ -225,6 +225,7 @@ MCP41HVX1 high-voltage digital potentiometer provides 256 wiper positions (0-255
 - Pole 2 bypasses the pedal microswitch (NC = normal pedal operation, NO = bypassed)
 - Both poles switch simultaneously (DPDT)
 - De-energized = safe state (manual pedal control, no bypass)
+- 1N4007 flyback diode soldered across the relay coil terminals — cathode (striped end) toward 24V, anode toward the 2N5551 collector. Clamps back-EMF when the coil de-energizes to protect the transistor.
 
 **Production:** Digipot wiper feeds into the Curtis motor controller throttle input through the DPDT relay. The 256 wiper positions span the Curtis controller's full throttle range with fine granularity.
 
@@ -335,9 +336,9 @@ Not all components can detect physical absence at init or runtime. Components th
 
 The throttle system uses an MCP41HVX1 digital potentiometer to provide 256 wiper positions (0-255) for continuous throttle level control:
 
-- Wiper 0: Off (near Terminal B, in Curtis deadband, no movement)
+- Wiper 0: Off (near P0B, in Curtis deadband, no movement)
 - Low wiper values: Fine low-speed control
-- Wiper 255: Maximum throttle (near Terminal A, full reference voltage)
+- Wiper 255: Maximum throttle (near P0A, full reference voltage)
 - Slew rate limited: max 12 wiper steps per 100ms
 
 Enable sequence (READY -> ACTIVE):

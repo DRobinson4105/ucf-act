@@ -24,12 +24,12 @@ extern "C"
 // microswitch bypass are handled separately by relay_dpdt_my5nj.
 //
 // Hardware:
-//   - Terminal A connects to Curtis Pin 2 (8.5V reference)
-//   - Terminal B connects to Curtis B- (ground reference)
-//   - Wiper output connects to DPDT relay
-//   - V+ powered from 24V rail, VL from ESP32 3.3V
+//   - P0A connects to Curtis Pin 2 (8.5V reference)
+//   - P0B connects to Curtis B- (ground reference)
+//   - P0W (wiper) output connects to DPDT relay
+//   - V+ powered from 24V rail, V- and DGND to GND bus, VL from ESP32 3.3V
 //   - 256 wiper positions (0 = minimum throttle, 255 = maximum throttle)
-//   - SPI interface (MOSI, SCK, CS)
+//   - SPI interface (SDI, SCK, CS)
 //
 // Safe state: wiper position 0 (minimum throttle)
 // ============================================================================
@@ -40,13 +40,13 @@ extern "C"
 
 // digipot_mcp41hvx1_config_t - SPI pin assignments
 //   spi_host: SPI host device (SPI2_HOST on ESP32-C6)
-//   mosi:     Master Out Slave In data line
+//   sdi:      Serial Data In (host → device)
 //   sck:      Serial Clock line
 //   cs:       Chip Select line (active low)
 typedef struct
 {
 	spi_host_device_t spi_host;
-	gpio_num_t mosi;
+	gpio_num_t sdi;
 	gpio_num_t sck;
 	gpio_num_t cs;
 } digipot_mcp41hvx1_config_t;
@@ -62,7 +62,7 @@ typedef struct
  * as an SPI device (1 MHz clock, mode 0), and drives the wiper to position 0
  * (minimum throttle) so the output is at its safe state on startup.
  *
- * @param config  SPI pin assignments for MOSI, SCK, and CS
+ * @param config  SPI pin assignments for SDI, SCK, and CS
  * @return ESP_OK on success, or an error code on failure
  */
 esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config);

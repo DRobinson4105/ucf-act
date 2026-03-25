@@ -171,7 +171,7 @@ constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
 // MCP41HVX1 digital potentiometer (throttle level selection via SPI)
-constexpr gpio_num_t DIGIPOT_MOSI_GPIO = GPIO_NUM_2;
+constexpr gpio_num_t DIGIPOT_SDI_GPIO = GPIO_NUM_2;
 constexpr gpio_num_t DIGIPOT_SCK_GPIO = GPIO_NUM_3;
 constexpr gpio_num_t DIGIPOT_CS_GPIO = GPIO_NUM_6;
 
@@ -191,7 +191,7 @@ constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23; // reverse contact optocoupl
 
 digipot_mcp41hvx1_config_t g_digipot_cfg = {
 	.spi_host = SPI2_HOST,
-	.mosi = DIGIPOT_MOSI_GPIO,
+	.sdi = DIGIPOT_SDI_GPIO,
 	.sck = DIGIPOT_SCK_GPIO,
 	.cs = DIGIPOT_CS_GPIO,
 };
@@ -570,18 +570,18 @@ void log_startup_device_status(bool twai_ready, bool digipot_ready, bool dpdt_re
 		ESP_LOGE(TAG_INIT, "TWAI: FAILED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
 
 #ifdef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	ESP_LOGW(TAG_INIT, "DIGIPOT: BYPASSED: disabled (mosi=%d sck=%d cs=%d)", g_digipot_cfg.mosi, g_digipot_cfg.sck,
+	ESP_LOGW(TAG_INIT, "DIGIPOT: BYPASSED: disabled (sdi=%d sck=%d cs=%d)", g_digipot_cfg.sdi, g_digipot_cfg.sck,
 	         g_digipot_cfg.cs);
 	ESP_LOGW(TAG_INIT, "DPDT_RELAY: BYPASSED: disabled (gpio=%d)", g_dpdt_relay_cfg.gpio);
 #else
 	if (digipot_ready)
 	{
-		ESP_LOGI(TAG_INIT, "DIGIPOT: CONFIGURED: mosi=%d sck=%d cs=%d start=WIPER_0", g_digipot_cfg.mosi,
+		ESP_LOGI(TAG_INIT, "DIGIPOT: CONFIGURED: sdi=%d sck=%d cs=%d start=WIPER_0", g_digipot_cfg.sdi,
 		         g_digipot_cfg.sck, g_digipot_cfg.cs);
 	}
 	else
 	{
-		ESP_LOGE(TAG_INIT, "DIGIPOT: FAILED: mosi=%d sck=%d cs=%d", g_digipot_cfg.mosi, g_digipot_cfg.sck,
+		ESP_LOGE(TAG_INIT, "DIGIPOT: FAILED: sdi=%d sck=%d cs=%d", g_digipot_cfg.sdi, g_digipot_cfg.sck,
 		         g_digipot_cfg.cs);
 	}
 
@@ -2813,7 +2813,7 @@ void main_task(void *param)
 #endif
 
 	ESP_LOGI(TAG_INIT, "--- THROTTLE TEST MODE ---");
-	ESP_LOGI(TAG_INIT, "DIGIPOT: %s (mosi=%d sck=%d cs=%d)", g_digipot_ready ? "OK" : "FAILED", g_digipot_cfg.mosi,
+	ESP_LOGI(TAG_INIT, "DIGIPOT: %s (sdi=%d sck=%d cs=%d)", g_digipot_ready ? "OK" : "FAILED", g_digipot_cfg.sdi,
 	         g_digipot_cfg.sck, g_digipot_cfg.cs);
 	ESP_LOGI(TAG_INIT, "DPDT_RELAY: %s (gpio=%d)", g_dpdt_relay_ready ? "OK" : "FAILED", g_dpdt_relay_cfg.gpio);
 #ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC

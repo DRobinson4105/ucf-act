@@ -93,8 +93,8 @@ esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config)
 
 	// Initialize SPI bus
 	spi_bus_config_t bus_cfg = {};
-	bus_cfg.mosi_io_num = config->mosi;
-	bus_cfg.miso_io_num = -1; // Not used - write-only
+	bus_cfg.mosi_io_num = config->sdi;  // SDI on MCP41HVX1 datasheet
+	bus_cfg.miso_io_num = -1;           // SDO not used (write-only)
 	bus_cfg.sclk_io_num = config->sck;
 	bus_cfg.quadwp_io_num = -1;
 	bus_cfg.quadhd_io_num = -1;
