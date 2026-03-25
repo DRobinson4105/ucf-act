@@ -951,12 +951,193 @@ static void test_override_applies_safe_outputs(void)
 // NULL inputs guard
 // ============================================================================
 
-static void test_null_inputs_returns_safe_defaults(void)
+static void test_null_inputs_preserves_current_state(void)
 {
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, NULL);
-	// Should return the zero-init struct with current_state/fault carried forward
+	// NULL inputs returns zero-init struct with current_state/fault carried forward
 	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 	assert(r.actions == CONTROL_ACTION_NONE);
+}
+
+// ============================================================================
+// Simultaneous faults and multi-step slew
+// ============================================================================
+
+static void test_active_simultaneous_steering_braking_errors(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.steering_position_error = true;
+	in.braking_position_error = true;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
+	// At least one override reason should be set
+	assert(r.override_reason != OVERRIDE_REASON_NONE);
+	assert(r.throttle_level == 0); // safe outputs
+}
+
+static void test_enable_motor_fault_before_timer_expires(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ENABLE;
+	in.enable_start_ms = 900;
+	in.enable_sequence_ms = 200;
+	in.now_ms = 1000; // timer NOT expired (elapsed=100 < 200)
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
+	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
+	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) != 0);
+	assert(r.abort_reason == CONTROL_ABORT_REASON_MOTOR_FAULT);
+}
+
+static void test_slew_multi_step(void)
+{
+	throttle_slew_inputs_t slew = {
+		.current = 0,
+		.target = 50,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = 12, // max 12 steps per interval (production value)
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 12); // steps by 12 (not 1)
+	assert(r.changed == true);
+}
+
+static void test_slew_step_defaults_when_zero(void)
+{
+	throttle_slew_inputs_t slew = {
+		.current = 0,
+		.target = 10,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = 0, // should default to 1
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 1);
+	assert(r.changed == true);
+}
+
+static void test_slew_step_defaults_when_negative(void)
+{
+	throttle_slew_inputs_t slew = {
+		.current = 5,
+		.target = 10,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = -5, // should default to 1
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 6);
+	assert(r.changed == true);
+}
+
+static void test_slew_multi_step_clamps_to_target(void)
+{
+	// When step > distance to target, should clamp to target
+	throttle_slew_inputs_t slew = {
+		.current = 5,
+		.target = 8,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = 12,
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 8); // clamped to target, not 5+12=17
+	assert(r.changed == true);
+}
+
+static void test_active_fr_neutral_while_slewing_up(void)
+{
+	// FR goes NEUTRAL while throttle is slewing up — throttle should target 0
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.fr_state = FR_STATE_NEUTRAL;
+	in.throttle_cmd = 100;
+	in.throttle_current = 50;
+	in.last_throttle_change_ms = 0;
+	in.now_ms = 1000;
+	in.throttle_slew_step = 1;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) != 0);
+	assert(r.throttle_level == 49); // slewing toward 0, not toward 100
+}
+
+static void test_enable_to_active_skips_complete_when_already_done(void)
+{
+	// enable_work_done=true + target=ACTIVE: transition to ACTIVE without
+	// re-firing COMPLETE_ENABLE (work was already done in a prior tick)
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.enable_start_ms = 100;
+	in.enable_sequence_ms = 200;
+	in.now_ms = 400;            // timer expired
+	in.enable_work_done = true; // already fired
+	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_COMPLETE_ENABLE) == 0); // must NOT re-fire
+}
+
+static void test_active_braking_envelope_unconfigured_forces_neutral(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.braking_cmd = 5000;
+	in.braking_min = 0;
+	in.braking_max = 0; // unconfigured
+	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.send_braking == true);
+	assert(r.braking_position == 0); // forced neutral
+}
+
+static void test_override_steering_stop_clears_when_error_resolves(void)
+{
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_FORWARD;
+	in.pedal_rearmed = true;
+	in.steering_position_error = false; // error resolved
+	in.stop_flags = NODE_STOP_OPERATOR_STEER;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_READY);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_STEER) == 0); // cleared
+}
+
+static void test_override_braking_stop_clears_when_error_resolves(void)
+{
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_FORWARD;
+	in.pedal_rearmed = true;
+	in.braking_position_error = false; // error resolved
+	in.stop_flags = NODE_STOP_OPERATOR_BRAKE;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_READY);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_BRAKE) == 0); // cleared
+}
+
+static void test_override_steering_stop_stays_when_error_persists(void)
+{
+	control_inputs_t in = default_inputs();
+	in.steering_position_error = true; // still errored
+	in.stop_flags = NODE_STOP_OPERATOR_STEER;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_STEER) != 0); // NOT cleared
+}
+
+static void test_clamp_negative_range_values(void)
+{
+	assert(control_clamp_command(-100, -200, -50) == -100); // in range
+	assert(control_clamp_command(-300, -200, -50) == -200); // below min
+	assert(control_clamp_command(0, -200, -50) == -50);     // above max
 }
 
 // ============================================================================
@@ -1084,7 +1265,23 @@ int main(void)
 
 	// NULL inputs (1)
 	printf("\n  --- NULL inputs ---\n");
-	TEST(test_null_inputs_returns_safe_defaults);
+	TEST(test_null_inputs_preserves_current_state);
+
+	// Simultaneous faults and multi-step slew
+	printf("\n  --- simultaneous faults + multi-step slew ---\n");
+	TEST(test_active_simultaneous_steering_braking_errors);
+	TEST(test_enable_motor_fault_before_timer_expires);
+	TEST(test_slew_multi_step);
+	TEST(test_slew_step_defaults_when_zero);
+	TEST(test_slew_step_defaults_when_negative);
+	TEST(test_slew_multi_step_clamps_to_target);
+	TEST(test_active_fr_neutral_while_slewing_up);
+	TEST(test_clamp_negative_range_values);
+	TEST(test_enable_to_active_skips_complete_when_already_done);
+	TEST(test_active_braking_envelope_unconfigured_forces_neutral);
+	TEST(test_override_steering_stop_clears_when_error_resolves);
+	TEST(test_override_braking_stop_clears_when_error_resolves);
+	TEST(test_override_steering_stop_stays_when_error_persists);
 
 	TEST_REPORT();
 	TEST_EXIT();

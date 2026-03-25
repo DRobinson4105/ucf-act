@@ -226,6 +226,57 @@ void test_timeout_handles_tick_wrap(void)
 	assert(!heartbeat_monitor_is_alive(&mon, n0));
 }
 
+void test_zero_timeout_times_out_immediately(void)
+{
+	mock_reset_all();
+
+	heartbeat_monitor_t mon = {};
+	heartbeat_monitor_config_t cfg = {.name = "TEST"};
+	heartbeat_monitor_init(&mon, &cfg);
+
+	int n0 = heartbeat_monitor_register(&mon, "Node", 0); // zero timeout
+	assert(n0 == 0);
+
+	mock_tick_count = 10;
+	heartbeat_monitor_update(&mon, n0, 1, 0);
+	assert(heartbeat_monitor_is_alive(&mon, n0));
+
+	// Any subsequent tick should time it out (elapsed > 0 timeout)
+	mock_tick_count = 11;
+	heartbeat_monitor_check_timeouts(&mon);
+	assert(!heartbeat_monitor_is_alive(&mon, n0));
+}
+
+void test_out_of_bounds_node_id_returns_not_alive(void)
+{
+	mock_reset_all();
+
+	heartbeat_monitor_t mon = {};
+	heartbeat_monitor_config_t cfg = {.name = "TEST"};
+	heartbeat_monitor_init(&mon, &cfg);
+
+	// Query node IDs that were never registered
+	assert(!heartbeat_monitor_is_alive(&mon, 0));
+	assert(!heartbeat_monitor_is_alive(&mon, -1));
+	assert(!heartbeat_monitor_is_alive(&mon, HEARTBEAT_MONITOR_MAX_NODES));
+	assert(!heartbeat_monitor_is_alive(&mon, 999));
+}
+
+void test_update_unregistered_node_does_not_crash(void)
+{
+	mock_reset_all();
+
+	heartbeat_monitor_t mon = {};
+	heartbeat_monitor_config_t cfg = {.name = "TEST"};
+	heartbeat_monitor_init(&mon, &cfg);
+
+	// Updating a node that was never registered should not crash
+	heartbeat_monitor_update(&mon, 0, 1, 0);
+	heartbeat_monitor_update(&mon, -1, 1, 0);
+	heartbeat_monitor_update(&mon, HEARTBEAT_MONITOR_MAX_NODES, 1, 0);
+	// If we get here without crashing, the test passes
+}
+
 } // namespace
 
 int main(void)
@@ -245,6 +296,11 @@ int main(void)
 
 	printf("\n  --- tick wrap ---\n");
 	TEST(test_timeout_handles_tick_wrap);
+
+	printf("\n  --- additional edge cases ---\n");
+	TEST(test_zero_timeout_times_out_immediately);
+	TEST(test_out_of_bounds_node_id_returns_not_alive);
+	TEST(test_update_unregistered_node_does_not_crash);
 
 	TEST_REPORT();
 	TEST_EXIT();

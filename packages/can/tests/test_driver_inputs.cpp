@@ -269,6 +269,38 @@ void test_fr_debounce_resets_on_different_state(void)
 	assert(optocoupler_pc817_get_state() == FR_STATE_NEUTRAL);
 }
 
+// ============================================================================
+// Additional ADC edge cases
+// ============================================================================
+
+void test_adc_channel_config_failure(void)
+{
+	mock_reset_all();
+	mock_adc_config_channel_result = ESP_FAIL;
+
+	adc_12bitsar_config_t cfg = default_pedal_cfg();
+	assert(adc_12bitsar_init(&cfg) == ESP_FAIL);
+}
+
+void test_adc_read_failure(void)
+{
+	mock_reset_all();
+	mock_adc_cali_create_result = ESP_FAIL;
+	mock_adc_read_raw_value = 1000;
+
+	adc_12bitsar_config_t cfg = default_pedal_cfg();
+	assert(adc_12bitsar_init(&cfg) == ESP_OK);
+
+	// Now make reads fail
+	mock_adc_read_result = ESP_FAIL;
+	assert(adc_12bitsar_read_mv() == 0); // should return 0 on failure
+	adc_12bitsar_deinit();
+}
+
+// ============================================================================
+// Additional FR debounce edge cases
+// ============================================================================
+
 } // namespace
 
 int main(void)
@@ -288,6 +320,10 @@ int main(void)
 	TEST(test_fr_debounce_resets_on_bounce_back);
 	TEST(test_fr_debounce_resets_on_different_state);
 	TEST(test_fr_init_fails_when_gpio_setup_fails);
+
+	printf("\n  --- additional edge cases ---\n");
+	TEST(test_adc_channel_config_failure);
+	TEST(test_adc_read_failure);
 
 	TEST_REPORT();
 	TEST_EXIT();

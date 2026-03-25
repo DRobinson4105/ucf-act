@@ -1,8 +1,8 @@
 /**
- * @file digipot_mcp41hvx1.cpp
- * @brief MCP41HVX1 digital potentiometer throttle control implementation.
+ * @file digipot_mcp41hv51.cpp
+ * @brief MCP41HV51 digital potentiometer throttle control implementation.
  */
-#include "digipot_mcp41hvx1.h"
+#include "digipot_mcp41hv51.h"
 
 #include "esp_log.h"
 
@@ -15,14 +15,14 @@ const char *TAG = "DIGIPOT";
 // SPI Constants
 // ============================================================================
 
-constexpr uint8_t CMD_WRITE_VOLATILE_WIPER = 0x00; // MCP41HVX1 write volatile wiper command
+constexpr uint8_t CMD_WRITE_VOLATILE_WIPER = 0x00; // MCP41HV51 write volatile wiper command
 constexpr int SPI_CLOCK_HZ = 1000000;              // 1 MHz SPI clock
 
 // ============================================================================
 // Module State
 // ============================================================================
 
-digipot_mcp41hvx1_config_t s_config = {};
+digipot_mcp41hv51_config_t s_config = {};
 bool s_initialized = false;
 uint8_t s_current_wiper = 0; // 0 = disabled/idle
 bool s_autonomous = false;   // true = autonomous mode active (digipot output to Curtis)
@@ -50,7 +50,7 @@ void release_resources()
 }
 
 /**
- * @brief Write wiper position to the MCP41HVX1 via SPI.
+ * @brief Write wiper position to the MCP41HV51 via SPI.
  *
  * Sends a 2-byte SPI transaction: command byte (0x00 = write volatile wiper)
  * followed by the 8-bit wiper position.
@@ -78,7 +78,7 @@ esp_err_t write_wiper(uint8_t position)
 // Initialization
 // ============================================================================
 
-esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config)
+esp_err_t digipot_mcp41hv51_init(const digipot_mcp41hv51_config_t *config)
 {
 	if (!config)
 		return ESP_ERR_INVALID_ARG;
@@ -93,8 +93,8 @@ esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config)
 
 	// Initialize SPI bus
 	spi_bus_config_t bus_cfg = {};
-	bus_cfg.mosi_io_num = config->sdi;  // SDI on MCP41HVX1 datasheet
-	bus_cfg.miso_io_num = -1;           // SDO not used (write-only)
+	bus_cfg.mosi_io_num = config->sdi; // SDI on MCP41HV51 datasheet
+	bus_cfg.miso_io_num = -1;          // SDO not used (write-only)
 	bus_cfg.sclk_io_num = config->sck;
 	bus_cfg.quadwp_io_num = -1;
 	bus_cfg.quadhd_io_num = -1;
@@ -114,7 +114,7 @@ esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config)
 		return err;
 	s_bus_initialized = true;
 
-	// Add MCP41HVX1 as SPI device
+	// Add MCP41HV51 as SPI device
 	spi_device_interface_config_t dev_cfg = {};
 	dev_cfg.clock_speed_hz = SPI_CLOCK_HZ;
 	dev_cfg.mode = 0; // SPI mode 0 (CPOL=0, CPHA=0)
@@ -147,7 +147,7 @@ esp_err_t digipot_mcp41hvx1_init(const digipot_mcp41hvx1_config_t *config)
 // Wiper Control
 // ============================================================================
 
-esp_err_t digipot_mcp41hvx1_set_wiper(uint8_t position)
+esp_err_t digipot_mcp41hv51_set_wiper(uint8_t position)
 {
 	if (!s_initialized)
 	{
@@ -167,7 +167,7 @@ esp_err_t digipot_mcp41hvx1_set_wiper(uint8_t position)
 	return ESP_OK;
 }
 
-esp_err_t digipot_mcp41hvx1_disable(void)
+esp_err_t digipot_mcp41hv51_disable(void)
 {
 	if (!s_initialized)
 		return ESP_ERR_INVALID_STATE;
@@ -184,7 +184,7 @@ esp_err_t digipot_mcp41hvx1_disable(void)
 	return ESP_OK;
 }
 
-uint8_t digipot_mcp41hvx1_get_wiper(void)
+uint8_t digipot_mcp41hv51_get_wiper(void)
 {
 	return s_current_wiper;
 }
@@ -193,7 +193,7 @@ uint8_t digipot_mcp41hvx1_get_wiper(void)
 // Autonomous Mode Control
 // ============================================================================
 
-esp_err_t digipot_mcp41hvx1_enable_autonomous(void)
+esp_err_t digipot_mcp41hv51_enable_autonomous(void)
 {
 	if (!s_initialized)
 	{
@@ -219,7 +219,7 @@ esp_err_t digipot_mcp41hvx1_enable_autonomous(void)
 	return ESP_OK;
 }
 
-esp_err_t digipot_mcp41hvx1_emergency_stop(void)
+esp_err_t digipot_mcp41hv51_emergency_stop(void)
 {
 	if (!s_initialized)
 		return ESP_ERR_INVALID_STATE;
@@ -238,7 +238,7 @@ esp_err_t digipot_mcp41hvx1_emergency_stop(void)
 	return ESP_OK;
 }
 
-bool digipot_mcp41hvx1_is_autonomous(void)
+bool digipot_mcp41hv51_is_autonomous(void)
 {
 	return s_autonomous;
 }

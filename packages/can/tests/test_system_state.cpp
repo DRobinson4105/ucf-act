@@ -239,6 +239,90 @@ static void test_unknown_target_retreats_to_not_ready(void)
 	assert(r.target_changed == true);
 }
 
+// ============================================================================
+// Additional edge cases
+// ============================================================================
+
+static void test_ready_retreats_when_node_drops_despite_request(void)
+{
+	// Autonomy request asserted, but control is NOT_READY — retreat wins over request
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_READY;
+	in.autonomy_request = true;
+	in.control_state = NODE_STATE_NOT_READY;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_init_dwell_exact_boundary(void)
+{
+	// At exactly the dwell boundary (elapsed == dwell), should transition to READY
+	// (both nodes READY, no stops, both alive per default_inputs)
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_INIT;
+	in.boot_start_ms = 1000;
+	in.init_dwell_ms = 500;
+	in.now_ms = 1500; // elapsed = 500 == 500
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_planner_alive_control_dead_retreats(void)
+{
+	// Planner alive but control timed out — must retreat
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ACTIVE;
+	in.planner_state = NODE_STATE_ACTIVE;
+	in.control_state = NODE_STATE_ACTIVE;
+	in.planner_alive = true;
+	in.control_alive = false;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_enable_retreats_on_stop_active(void)
+{
+	// stop_active during ENABLE should retreat to NOT_READY
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ENABLE;
+	in.planner_state = NODE_STATE_ENABLE;
+	in.control_state = NODE_STATE_ENABLE;
+	in.stop_active = true;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_null_inputs_returns_not_ready(void)
+{
+	system_state_result_t r = system_state_step(NULL);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+}
+
+static void test_planner_not_ready_blocks_ready_transition(void)
+{
+	// Planner NOT_READY, control READY — should stay NOT_READY
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_NOT_READY;
+	in.planner_state = NODE_STATE_NOT_READY;
+	in.control_state = NODE_STATE_READY;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == false);
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+
 int main(void)
 {
 	printf("=== system_state tests ===\n\n");
@@ -259,6 +343,14 @@ int main(void)
 	TEST(test_active_retreats_when_node_not_active);
 	TEST(test_active_grace_allows_enable_handoff);
 	TEST(test_unknown_target_retreats_to_not_ready);
+
+	printf("\n  --- additional edge cases ---\n");
+	TEST(test_ready_retreats_when_node_drops_despite_request);
+	TEST(test_init_dwell_exact_boundary);
+	TEST(test_planner_alive_control_dead_retreats);
+	TEST(test_enable_retreats_on_stop_active);
+	TEST(test_null_inputs_returns_not_ready);
+	TEST(test_planner_not_ready_blocks_ready_transition);
 
 	TEST_REPORT();
 	TEST_EXIT();

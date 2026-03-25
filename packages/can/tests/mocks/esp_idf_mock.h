@@ -41,8 +41,9 @@ typedef int adc_channel_t;
 #define ADC_ATTEN_DB_12          0
 #define ADC_BITWIDTH_12          12
 
-#define GPIO_MODE_INPUT       0
-#define GPIO_MODE_OUTPUT      1
+#define GPIO_MODE_INPUT        0
+#define GPIO_MODE_OUTPUT       1
+#define GPIO_MODE_INPUT_OUTPUT 2
 #define GPIO_PULLUP_DISABLE   0
 #define GPIO_PULLUP_ENABLE    1
 #define GPIO_PULLDOWN_DISABLE 0
@@ -122,6 +123,16 @@ extern int mock_adc_read_raw_value;
 extern esp_err_t mock_adc_cali_create_result;
 extern esp_err_t mock_adc_cali_raw_to_voltage_result;
 extern int mock_adc_cali_voltage_mv;
+extern esp_err_t mock_gpio_set_level_result;
+
+// SPI mock state
+extern esp_err_t mock_spi_bus_init_results[4];
+extern int mock_spi_bus_init_call_idx;
+extern esp_err_t mock_spi_add_device_result;
+extern esp_err_t mock_spi_transmit_result;
+extern int mock_spi_transmit_count;
+extern uint8_t mock_spi_last_tx_data[8];
+extern int mock_spi_last_tx_len;
 
 // Mock control: fail the Nth call to can_twai_send_extended (0 = don't fail)
 extern int g_mock_send_ext_fail_after;
@@ -148,6 +159,49 @@ typedef struct
 esp_err_t gpio_config(const gpio_config_t *cfg);
 int gpio_get_level(gpio_num_t gpio);
 esp_err_t gpio_set_level(gpio_num_t gpio, int level);
+
+// ============================================================================
+// SPI mock types/functions
+// ============================================================================
+
+typedef int spi_host_device_t;
+typedef void *spi_device_handle_t;
+
+#define SPI_DMA_DISABLED 0
+#define SPI2_HOST        1
+
+typedef struct
+{
+	int mosi_io_num;
+	int miso_io_num;
+	int sclk_io_num;
+	int quadwp_io_num;
+	int quadhd_io_num;
+	int max_transfer_sz;
+} spi_bus_config_t;
+
+typedef struct
+{
+	int clock_speed_hz;
+	int mode;
+	int spics_io_num;
+	int queue_size;
+} spi_device_interface_config_t;
+
+typedef struct
+{
+	size_t length;         // Total data length in bits
+	const void *tx_buffer; // Pointer to transmit data
+	void *rx_buffer;       // Pointer to receive buffer
+	size_t rxlength;       // Receive length in bits
+} spi_transaction_t;
+
+esp_err_t spi_bus_initialize(spi_host_device_t host, const spi_bus_config_t *cfg, int dma_chan);
+esp_err_t spi_bus_add_device(spi_host_device_t host, const spi_device_interface_config_t *cfg,
+                             spi_device_handle_t *handle);
+esp_err_t spi_device_transmit(spi_device_handle_t handle, spi_transaction_t *txn);
+esp_err_t spi_bus_remove_device(spi_device_handle_t handle);
+esp_err_t spi_bus_free(spi_host_device_t host);
 
 // ============================================================================
 // ADC oneshot mock types/functions

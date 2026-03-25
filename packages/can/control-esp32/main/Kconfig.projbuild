@@ -18,7 +18,7 @@ config THROTTLE_TEST_MODE
         Safety/Planner dependencies entirely.
 
         Useful for validating throttle hardware wiring on the cart
-        (MCP41HVX1 digipot, MY5NJ DPDT relay, F/R optocouplers,
+        (MCP41HV51 digipot, MY5NJ DPDT relay, F/R optocouplers,
         pedal ADC) without the full system operational.
 
         Controls (via idf.py monitor or serial terminal):
@@ -103,7 +103,7 @@ menu "Test Bypasses"
             bool "Bypass throttle actuator (digipot + DPDT relay)"
             default n
             help
-                Skip MCP41HVX1 digital potentiometer and MY5NJ DPDT relay control.
+                Skip MCP41HV51 digital potentiometer and MY5NJ DPDT relay control.
 
         config BYPASS_ACTUATOR_STEPPER_STEERING
             bool "Bypass steering stepper actuator"
@@ -211,7 +211,7 @@ menu "Debug Logging"
             bool "Log digipot retry attempts"
             default n
             help
-                Log each failed MCP41HVX1 digipot re-initialization attempt.
+                Log each failed MCP41HV51 digipot re-initialization attempt.
                 Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_DPDT_RELAY
@@ -356,7 +356,7 @@ menu "Debug Logging"
             bool "Log digipot wiper changes"
             default n
             help
-                Log each MCP41HVX1 digipot wiper position change.
+                Log each MCP41HV51 digipot wiper position change.
 
         config LOG_ACTUATOR_DPDT_RELAY
             bool "Log DPDT relay state changes"
