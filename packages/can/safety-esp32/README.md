@@ -104,8 +104,8 @@ The `fault_flags` byte in Safety heartbeat is a bitmask. Multiple fault bits may
 
 | GPIO | Function              | Direction | Notes                                              |
 | ---- | --------------------- | --------- | -------------------------------------------------- |
-| 0    | Battery Voltage       | Input     | ADC1_CH0, 180kΩ/10kΩ divider (pack voltage)       |
-| 1    | Battery Current       | Input     | ADC1_CH1, HTFS-200-P via 10kΩ/15kΩ divider        |
+| 0    | Battery Voltage       | Input     | ADC1_CH0, 220kΩ/10kΩ divider (pack voltage)       |
+| 1    | Battery Current       | Input     | ADC1_CH1, HTFS-200-P via 6.8kΩ/10kΩ divider       |
 | 2    | Power Relay           | Output    | Active HIGH, SRD-05VDC-SL-C module                  |
 | 4    | CAN TX                | Output    | TWAI peripheral (SN65HVD230 transceiver)           |
 | 5    | CAN RX                | Input     | TWAI peripheral (SN65HVD230 transceiver)           |
@@ -247,11 +247,11 @@ GPIO 0 and GPIO 1 read pack voltage and current via ADC1. Non-safety-critical �
 
 | Wire Color | From                     | To                          |
 | ---------- | ------------------------ | --------------------------- |
-| Red        | Pack positive (+48V)     | 180kΩ resistor (high-side)  |
-| Yellow     | 180kΩ/10kΩ junction      | ESP32 GPIO 0 (ADC1_CH0)    |
+| Red        | Rear +48V distribution bus bar | 220kΩ resistor (high-side)  |
+| Yellow     | 220kΩ/10kΩ junction            | ESP32 GPIO 0 (ADC1_CH0)    |
 | Black      | 10kΩ resistor (low-side) | GND (clean-input branch)    |
 
-180kΩ (high-side) and 10kΩ (low-side) form a 1:19 divider, scaling 42–51.2V pack voltage to ~2.2–2.7V for the 12-bit ADC (3.3V reference).
+220kΩ (high-side) and 10kΩ (low-side) form a 1:23 divider, scaling 42–51.2V pack voltage to ~1.8–2.2V for the 12-bit ADC (3.3V reference). Voltage is measured from the rear distribution bus bars near the batteries for the most accurate open-circuit voltage reading during SOC recalibration.
 
 **Current sensing (5-wire):**
 
@@ -260,10 +260,10 @@ GPIO 0 and GPIO 1 read pack voltage and current via ADC1. Non-safety-critical �
 | Red        | ESP32 5V                 | HTFS `+5V`                                    |
 | Black      | GND (clean-input branch) | HTFS `0V`                                     |
 | —          | Pack main power cable    | Through HTFS 22mm aperture (primary conductor) |
-| Orange     | HTFS `OUT`               | 10kΩ resistor (high-side)                     |
-| Yellow     | 10kΩ/15kΩ junction       | ESP32 GPIO 1 (ADC1_CH1)                       |
+| Blue       | HTFS `OUT`               | 6.8kΩ resistor (high-side)                    |
+| Yellow     | 6.8kΩ/10kΩ junction      | ESP32 GPIO 1 (ADC1_CH1)                       |
 
-The HTFS-200-P is a hall-effect sensor — the pack power cable passes through the 22mm aperture with no electrical contact to the sense circuit. Output is VCC/2 (2.5V) at 0A with 6.25 mV/A sensitivity (200A nominal, 300A measuring range). The 10kΩ/15kΩ output divider scales the sensor output by 0.6x before it reaches the ESP32 ADC input. 15kΩ low-side to GND (clean-input branch).
+The HTFS-200-P is a hall-effect sensor — the pack power cable passes through the 22mm aperture with no electrical contact to the sense circuit. Output is VCC/2 (2.5V) at 0A with 6.25 mV/A sensitivity (200A nominal, 300A measuring range). The 6.8kΩ/10kΩ output divider scales the sensor output by ~0.595x before it reaches the ESP32 ADC input. 10kΩ low-side to GND (clean-input branch).
 
 **Same wiring for bench and production.** On the bench, use `CONFIG_BYPASS_INPUT_BATTERY_MONITOR` to skip ADC init and force 50% SOC if no sensors are connected.
 

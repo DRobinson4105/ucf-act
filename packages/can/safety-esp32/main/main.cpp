@@ -194,8 +194,8 @@ constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
 // Battery monitor ADC inputs
-constexpr int BATTERY_VOLTAGE_GPIO = 0; // ADC1_CH0: pack voltage via 180k/10k divider
-constexpr int BATTERY_CURRENT_GPIO = 1; // ADC1_CH1: HTFS-200-P via 10k/15k divider
+constexpr int BATTERY_VOLTAGE_GPIO = 0; // ADC1_CH0: pack voltage via 220k/10k divider
+constexpr int BATTERY_CURRENT_GPIO = 1; // ADC1_CH1: HTFS-200-P via 6.8k/10k divider
 
 // Ultrasonic sensor (A02YYUW)
 constexpr uart_port_t ULTRASONIC_A02YYUW_UART = UART_NUM_1;
@@ -1724,18 +1724,18 @@ void main_task(void *param)
 #endif
 
 	// Initialize battery monitor (voltage + current sensing)
-	//   - Pack voltage: 180kΩ/10kΩ resistor divider → GPIO 0 (ADC1_CH0)
+	//   - Pack voltage: 220kΩ/10kΩ resistor divider → GPIO 0 (ADC1_CH0)
 	//   - Pack current: LEM HTFS-200-P (5V supply, 6.25mV/A) with
-	//     10kΩ/15kΩ output divider → GPIO 1 (ADC1_CH1)
+	//     6.8kΩ/10kΩ output divider → GPIO 1 (ADC1_CH1)
 	//   - Non-safety-critical: failure does NOT trigger e-stop
 	g_battery_cfg = {
 		.voltage_gpio = BATTERY_VOLTAGE_GPIO,
 		.current_gpio = BATTERY_CURRENT_GPIO,
-		.divider_ratio = 19,          // 180kΩ / 10kΩ → ratio 1:19
-		.current_zero_mv = 2500,      // HTFS at 5V: VCC/2 = 2.5V at 0A
-		.current_sens_uv = 6.25f,     // HTFS-200-P: 6.25mV/A = 6.25µV/mA
-		.current_output_scale = 0.6f, // 15k/(10k+15k) output divider
-		.capacity_mah = 150000,       // 150Ah nominal (adjust for your batteries)
+		.divider_ratio = 23,              // 220kΩ / 10kΩ → ratio 1:23
+		.current_zero_mv = 2500,          // HTFS at 5V: VCC/2 = 2.5V at 0A
+		.current_sens_uv = 6.25f,         // HTFS-200-P: 6.25mV/A = 6.25µV/mA
+		.current_output_scale = 0.5952f,  // 10k/(6.8k+10k) output divider
+		.capacity_mah = 150000,           // 150Ah nominal (adjust for your batteries)
 	};
 
 #ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR

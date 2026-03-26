@@ -9,7 +9,7 @@
  *
  * Hardware assumptions:
  *   - 6 × 8V lead-acid batteries in series (48V nominal, 24 cells)
- *   - Voltage divider (e.g. 180kΩ / 10kΩ) scales pack voltage to 0-3.3V
+ *   - Voltage divider (e.g. 220kΩ / 10kΩ) scales pack voltage to 0-3.3V
  *   - Hall-effect current sensor (e.g. LEM HTFS-200-P) with output divider
  *   - Both sensor outputs connected to ADC1 channels on the ESP32-C6
  */
@@ -31,10 +31,10 @@ typedef struct
 {
 	int voltage_gpio;           // GPIO for pack voltage divider (must be on ADC1)
 	int current_gpio;           // GPIO for current sensor output (must be on ADC1)
-	uint16_t divider_ratio;     // Voltage divider multiplier (e.g. 19 for 180k/10k)
+	uint16_t divider_ratio;     // Voltage divider multiplier (e.g. 23 for 220k/10k)
 	uint16_t current_zero_mv;   // Sensor output at 0A in mV (e.g. 2500 for 5V supply)
 	float current_sens_uv;      // Sensor sensitivity in µV/mA (e.g. 6.25 for 6.25mV/A)
-	float current_output_scale; // Output divider ratio applied to sensor (e.g. 0.6)
+	float current_output_scale; // Output divider ratio applied to sensor (e.g. 0.5952)
 	uint32_t capacity_mah;      // Nominal battery capacity in mAh (e.g. 150000)
 } battery_monitor_config_t;
 
