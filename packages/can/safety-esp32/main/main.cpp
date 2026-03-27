@@ -89,6 +89,22 @@
 namespace
 {
 
+// Heartbeat mirror snapshot: populated under g_hb_mirror_lock once per
+// safety_task iteration, then used as read-only locals for the rest of
+// the loop.  Using a named struct (instead of loose locals) prevents
+// accidental use of the g_* globals after the critical section.
+typedef struct
+{
+	node_state_t planner_state;
+	node_fault_t planner_fault_flags;
+	node_status_flags_t planner_status_flags;
+	node_stop_t planner_stop_flags;
+	node_state_t control_state;
+	node_fault_t control_fault_flags;
+	node_status_flags_t control_status_flags;
+	node_stop_t control_stop_flags;
+} hb_mirror_snapshot_t;
+
 typedef struct
 {
 	gpio_num_t gpio;
@@ -146,6 +162,7 @@ constexpr TickType_t SAFETY_LOOP_INTERVAL = pdMS_TO_TICKS(50);
 constexpr TickType_t HEARTBEAT_SEND_INTERVAL = pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS);
 constexpr uint32_t INIT_DWELL_MS = 500;         // minimum dwell in INIT before READY
 constexpr uint32_t ACTIVE_ENTRY_GRACE_MS = 250; // allow one-way handoff from ENABLE to ACTIVE
+constexpr uint32_t ENABLE_TIMEOUT_MS = 5000;    // max time in ENABLE before retreat to NOT_READY
 
 // ============================================================================
 // Recovery Constants
@@ -194,8 +211,9 @@ constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
 // Battery monitor ADC inputs
-constexpr int BATTERY_VOLTAGE_GPIO = 0; // ADC1_CH0: pack voltage via 220k/10k divider
-constexpr int BATTERY_CURRENT_GPIO = 1; // ADC1_CH1: HTFS-200-P via 6.8k/10k divider
+constexpr int BATTERY_VOLTAGE_GPIO = 0;        // ADC1_CH0: pack voltage via 220k/10k divider
+constexpr int BATTERY_CURRENT_GPIO = 1;        // ADC1_CH1: HTFS-200-P via 6.8k/10k divider
+constexpr uint32_t BATTERY_CAPACITY_MAH = 170000; // 170Ah — typical 8V deep-cycle golf cart battery
 
 // Ultrasonic sensor (A02YYUW)
 constexpr uart_port_t ULTRASONIC_A02YYUW_UART = UART_NUM_1;
@@ -997,6 +1015,7 @@ void safety_task(void *param)
 	bool request_level_prev = false;
 	bool request_latched = false;
 	uint32_t active_target_entered_ms = 0;
+	uint32_t enable_target_entered_ms = 0;
 #ifdef CONFIG_LOG_SAFETY_FAULT_CHANGES
 	node_fault_t prev_fault_flags = NODE_FAULT_NONE;
 	node_stop_t prev_stop_flags = NODE_STOP_NONE;
@@ -1142,28 +1161,21 @@ void safety_task(void *param)
 			.control_stop_flags = NODE_STOP_NONE,   // updated from grouped snapshot below
 		};
 
-		node_state_t planner_state = NODE_STATE_INIT;
-		node_fault_t planner_fault_flags = NODE_FAULT_NONE;
-		node_status_flags_t planner_status_flags = 0;
-		node_state_t control_state = NODE_STATE_INIT;
-		node_fault_t control_fault_flags = NODE_FAULT_NONE;
-		node_status_flags_t control_status_flags = 0;
-		node_stop_t planner_stop_flags = NODE_STOP_NONE;
-		node_stop_t control_stop_flags = NODE_STOP_NONE;
+		hb_mirror_snapshot_t snap = {};
 		taskENTER_CRITICAL(&g_hb_mirror_lock);
-		planner_state = g_planner_state;
-		planner_fault_flags = g_planner_fault_flags;
-		planner_status_flags = g_planner_status_flags;
-		planner_stop_flags = g_planner_stop_flags;
-		control_state = g_control_state;
-		control_fault_flags = g_control_fault_flags;
-		control_status_flags = g_control_status_flags;
-		control_stop_flags = g_control_stop_flags;
+		snap.planner_state = g_planner_state;
+		snap.planner_fault_flags = g_planner_fault_flags;
+		snap.planner_status_flags = g_planner_status_flags;
+		snap.planner_stop_flags = g_planner_stop_flags;
+		snap.control_state = g_control_state;
+		snap.control_fault_flags = g_control_fault_flags;
+		snap.control_status_flags = g_control_status_flags;
+		snap.control_stop_flags = g_control_stop_flags;
 		taskEXIT_CRITICAL(&g_hb_mirror_lock);
-		inputs.planner_fault_flags = planner_fault_flags;
-		inputs.control_fault_flags = control_fault_flags;
-		inputs.planner_stop_flags = planner_stop_flags;
-		inputs.control_stop_flags = control_stop_flags;
+		inputs.planner_fault_flags = snap.planner_fault_flags;
+		inputs.control_fault_flags = snap.control_fault_flags;
+		inputs.planner_stop_flags = snap.planner_stop_flags;
+		inputs.control_stop_flags = snap.control_stop_flags;
 
 		// Check heartbeat timeouts
 		heartbeat_monitor_check_timeouts(&g_hb_monitor);
@@ -1241,8 +1253,8 @@ void safety_task(void *param)
 		ESP_LOGI(TAG, "button=%d remote=%d ultra_close=%d ultra_healthy=%d planner=%s(%s) control=%s(%s)",
 		         inputs.push_button_active, inputs.rf_remote_active, inputs.ultrasonic_too_close,
 		         inputs.ultrasonic_healthy, inputs.planner_alive ? "alive" : "DEAD",
-		         node_state_to_string(planner_state), inputs.control_alive ? "alive" : "DEAD",
-		         node_state_to_string(control_state));
+		         node_state_to_string(snap.planner_state), inputs.control_alive ? "alive" : "DEAD",
+		         node_state_to_string(snap.control_state));
 #endif
 
 		// Update battery monitor (non-safety-critical, informational only)
@@ -1275,16 +1287,20 @@ void safety_task(void *param)
 			.boot_start_ms = g_boot_start_ms,
 			.init_dwell_ms = INIT_DWELL_MS,
 			.stop_active = decision.stop_active,
-			.planner_state = planner_state,
-			.control_state = control_state,
+			.planner_state = snap.planner_state,
+			.control_state = snap.control_state,
 			.planner_alive = inputs.planner_alive,
 			.control_alive = inputs.control_alive,
-			.planner_enable_complete = (planner_status_flags & NODE_STATUS_FLAG_ENABLE_COMPLETE) != 0,
-			.control_enable_complete = (control_status_flags & NODE_STATUS_FLAG_ENABLE_COMPLETE) != 0,
+			.planner_enable_complete = (snap.planner_status_flags & NODE_STATUS_FLAG_ENABLE_COMPLETE) != 0,
+			.control_enable_complete = (snap.control_status_flags & NODE_STATUS_FLAG_ENABLE_COMPLETE) != 0,
 			.autonomy_request = false,
 			.autonomy_hold = false,
 			.active_entry_grace =
 				(current_target == NODE_STATE_ACTIVE && (now_ms - active_target_entered_ms) < ACTIVE_ENTRY_GRACE_MS),
+			.enable_elapsed_ms =
+				(current_target == NODE_STATE_ENABLE && enable_target_entered_ms > 0)
+					? (now_ms - enable_target_entered_ms) : 0,
+			.enable_timeout_ms = ENABLE_TIMEOUT_MS,
 		};
 
 		// Planner bypass: simulate a cooperative Planner for bench bring-up.
@@ -1309,7 +1325,7 @@ void safety_task(void *param)
 		ss_in.control_enable_complete = true;
 #endif
 
-		bool planner_request_level = (planner_status_flags & NODE_STATUS_FLAG_AUTONOMY_REQUEST) != 0;
+		bool planner_request_level = (snap.planner_status_flags & NODE_STATUS_FLAG_AUTONOMY_REQUEST) != 0;
 		bool request_accept_window =
 			(ss_in.current_target == NODE_STATE_READY && !ss_in.stop_active && ss_in.planner_alive &&
 		     ss_in.control_alive && ss_in.planner_state == NODE_STATE_READY && ss_in.control_state == NODE_STATE_READY);
@@ -1362,6 +1378,16 @@ void safety_task(void *param)
 #endif
 
 		system_state_result_t ss_out = system_state_step(&ss_in);
+
+		if (ss_out.new_target == NODE_STATE_ENABLE)
+		{
+			if (current_target != NODE_STATE_ENABLE)
+				enable_target_entered_ms = now_ms;
+		}
+		else
+		{
+			enable_target_entered_ms = 0;
+		}
 
 		if (ss_out.new_target == NODE_STATE_ACTIVE)
 		{
@@ -1426,13 +1452,13 @@ void safety_task(void *param)
 			    (decision.fault_flags != NODE_FAULT_NONE || decision.stop_flags != NODE_STOP_NONE))
 			{
 				if (decision.fault_flags & NODE_FAULT_SAFETY_CONTROL_ISSUE)
-					ESP_LOGI(TAG, "  Control issue: %s", node_fault_to_string(control_fault_flags));
+					ESP_LOGI(TAG, "  Control issue: %s", node_fault_to_string(snap.control_fault_flags));
 				if (decision.fault_flags & NODE_FAULT_SAFETY_PLANNER_ISSUE)
-					ESP_LOGI(TAG, "  Planner issue: %s", node_fault_to_string(planner_fault_flags));
+					ESP_LOGI(TAG, "  Planner issue: %s", node_fault_to_string(snap.planner_fault_flags));
 				if ((decision.stop_flags & NODE_STOP_OPERATOR_ANY) != 0)
-					ESP_LOGI(TAG, "  Control stop: %s", node_stop_to_string(control_stop_flags));
+					ESP_LOGI(TAG, "  Control stop: %s", node_stop_to_string(snap.control_stop_flags));
 				if (decision.stop_flags & NODE_STOP_APP_REQUEST)
-					ESP_LOGI(TAG, "  Planner stop: %s", node_stop_to_string(planner_stop_flags));
+					ESP_LOGI(TAG, "  Planner stop: %s", node_stop_to_string(snap.planner_stop_flags));
 			}
 		}
 #endif
@@ -1735,7 +1761,7 @@ void main_task(void *param)
 		.current_zero_mv = 2500,          // HTFS at 5V: VCC/2 = 2.5V at 0A
 		.current_sens_uv = 6.25f,         // HTFS-200-P: 6.25mV/A = 6.25µV/mA
 		.current_output_scale = 0.5952f,  // 10k/(6.8k+10k) output divider
-		.capacity_mah = 150000,           // 150Ah nominal (adjust for your batteries)
+		.capacity_mah = BATTERY_CAPACITY_MAH,
 	};
 
 #ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR

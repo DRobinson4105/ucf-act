@@ -60,6 +60,11 @@ typedef struct
 	// During this grace period, nodes are allowed to still report ENABLE
 	// while they consume the new ACTIVE target and switch their live state.
 	bool active_entry_grace;
+
+	// ENABLE timeout: if nonzero, Safety retreats from ENABLE to NOT_READY
+	// when enable_elapsed_ms >= enable_timeout_ms (nodes failed to complete).
+	uint32_t enable_elapsed_ms;
+	uint32_t enable_timeout_ms;
 } system_state_inputs_t;
 
 // ============================================================================

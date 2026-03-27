@@ -33,7 +33,7 @@ DRIVER_INPUTS_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 DIGIPOT_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 RELAY_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 
-all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_digipot test_relay
+all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_digipot test_relay test_integration_state_machine
 	@set -eu; \
 	tmp_summary=$$(mktemp); \
 	tmp_out=$$(mktemp); \
@@ -81,6 +81,7 @@ all: test_stepper_protocol test_can_protocol test_motor_component test_safety_lo
 	run_suite "driver_inputs" ./test_driver_inputs; \
 	run_suite "digipot" ./test_digipot; \
 	run_suite "relay" ./test_relay; \
+	run_suite "integration_state_machine" ./test_integration_state_machine; \
 	if [ $$total_pass -ne $$total_tests ]; then \
 		overall_fail=1; \
 	fi; \
@@ -138,7 +139,10 @@ test_digipot: test_digipot.cpp $(DIGIPOT_SRC) esp_idf_mock.o
 test_relay: test_relay.cpp $(RELAY_SRC) esp_idf_mock.o
 	@$(CXX) $(RELAY_CXXFLAGS) -Imocks -I../control-esp32/components/relay_dpdt_my5nj/include $(INCLUDES) -o $@ test_relay.cpp $(RELAY_SRC) esp_idf_mock.o
 
+test_integration_state_machine: test_integration_state_machine.cpp $(SYSTEM_STATE_SRC) $(CONTROL_SRC)
+	@$(CXX) $(CXXFLAGS) -I../common/logic/system_state/include -I../common/logic/control_logic/include $(INCLUDES) -o $@ $^
+
 clean:
-	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_digipot test_relay esp_idf_mock.o
+	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_digipot test_relay test_integration_state_machine esp_idf_mock.o
 
 .PHONY: all clean

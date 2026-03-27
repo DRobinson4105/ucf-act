@@ -65,7 +65,9 @@ constexpr int32_t ZERO_CAL_TOLERANCE_MA = 2000; // ±2A
 // ============================================================================
 // Voltage-to-SOC Lookup Table (48V lead-acid, 24 cells)
 // ============================================================================
-// Resting (open-circuit) voltages for a generic 48V lead-acid battery pack.
+// Open-circuit voltages for a generic 6 × 8V deep-cycle lead-acid golf cart
+// battery pack (24 cells in series, 48V nominal).  Based on standard flooded
+// lead-acid OCV curve at ~2.00 V/cell = 50% SOC, ~2.13 V/cell = 100% SOC.
 // These are approximate and may need tuning for specific battery brands.
 
 struct soc_entry_t
@@ -75,17 +77,17 @@ struct soc_entry_t
 };
 
 constexpr soc_entry_t SOC_TABLE[] = {
-	{42000, 0},   // Dead
-	{44800, 10},  //
-	{45600, 20},  //
-	{46400, 30},  //
-	{47000, 40},  //
-	{47500, 50},  //
-	{48000, 60},  //
-	{48700, 70},  //
-	{49600, 80},  //
-	{50400, 90},  //
-	{51200, 100}, // Fully charged (resting)
+	{42000, 0},   // 1.75 V/cell — dead
+	{44900, 10},  // 1.87 V/cell
+	{45800, 20},  // 1.91 V/cell
+	{46600, 30},  // 1.94 V/cell
+	{47300, 40},  // 1.97 V/cell
+	{48000, 50},  // 2.00 V/cell — nominal
+	{48700, 60},  // 2.03 V/cell
+	{49400, 70},  // 2.06 V/cell
+	{49900, 80},  // 2.08 V/cell
+	{50400, 90},  // 2.10 V/cell
+	{51200, 100}, // 2.13 V/cell — fully charged (resting)
 };
 
 constexpr size_t SOC_TABLE_LEN = sizeof(SOC_TABLE) / sizeof(SOC_TABLE[0]);

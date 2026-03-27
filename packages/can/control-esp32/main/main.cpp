@@ -1962,7 +1962,11 @@ void control_task(void *param)
 				planner_cmd_stale = true;
 			}
 			// Stale sequence: same sequence seen PLANNER_CMD_STALE_COUNT times
-			else if (cmd_local.planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT)
+			// AND command is also past half the timeout window. This prevents
+			// false stale detection when Planner legitimately retransmits the
+			// same command rapidly within the timeout.
+			else if (cmd_local.planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT &&
+			         planner_age > (PLANNER_CMD_TIMEOUT / 2))
 			{
 				planner_cmd_stale = true;
 			}

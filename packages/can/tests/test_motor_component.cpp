@@ -1128,9 +1128,8 @@ static void test_liveness_no_response_yet(void)
 	init_default_motor(&motor);
 	motor.driver_enabled = true;
 	motor.last_response_tick = 0; // never received a response
-	// Should not flag timeout if we've never received a response
-	// (motor may still be initializing)
-	assert(stepper_motor_uim2852_check_liveness(&motor, 1000, 500) == false);
+	// Driver enabled but never responded — motor is unresponsive
+	assert(stepper_motor_uim2852_check_liveness(&motor, 1000, 500) == true);
 }
 
 static void test_liveness_exact_boundary(void)

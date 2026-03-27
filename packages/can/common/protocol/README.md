@@ -176,12 +176,15 @@ Control tracks the Planner command sequence number. If the same sequence is seen
 
 ## Timing
 
-| Parameter              | Value           | Description                                                 |
-| ---------------------- | --------------- | ----------------------------------------------------------- |
-| Heartbeat interval     | 100ms           | All nodes send heartbeat every 100ms                        |
-| Immediate heartbeat    | On state change | Both Safety and Control send immediately when state changes |
-| Heartbeat timeout      | 500ms           | Node considered dead after 500ms silence                    |
-| Enable sequence settle | 200ms           | Delay before completing autonomous enable                   |
-| Throttle slew rate     | 12 steps/100ms  | Max 12 wiper steps per 100ms interval (0-255 range)         |
-| Pedal re-arm time      | 500ms           | Pedal must be released 500ms to re-arm                      |
-| F/R debounce           | 20ms            | Switch debounce time                                        |
+| Parameter               | Value           | Description                                                 |
+| ----------------------- | --------------- | ----------------------------------------------------------- |
+| Heartbeat interval      | 100ms           | All nodes send heartbeat every 100ms                        |
+| Immediate heartbeat     | On state change | Both Safety and Control send immediately when state changes |
+| Heartbeat timeout       | 500ms           | Node considered dead after 500ms silence                    |
+| Enable sequence settle  | 200ms           | Delay before completing autonomous enable                   |
+| Throttle slew rate      | 12 steps/100ms  | Max 12 wiper steps per 100ms interval (0-255 range)         |
+| Pedal re-arm time       | 500ms           | Pedal must be released 500ms to re-arm                      |
+| F/R debounce            | 20ms            | Switch debounce time                                        |
+| Planner command timeout | 500ms           | Control zeros throttle if no command within window          |
+| Planner stale count     | 10              | Same sequence 10 times + past half timeout = stale          |
+| Enable timeout          | 5000ms          | Safety retreats from ENABLE if nodes don't complete         |

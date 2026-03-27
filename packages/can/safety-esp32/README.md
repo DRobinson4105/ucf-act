@@ -11,17 +11,17 @@ Safety owns the system target state and broadcasts it as `state` in heartbeat `0
 Safety evaluates transitions in this order:
 
 1. **INIT dwell gate**
-   - Stay `INIT` until dwell expires.
-   - On dwell expiry, go to `READY` when both nodes are alive and `READY` with no stop/fault active; otherwise `NOT_READY`.
+    - Stay `INIT` until dwell expires.
+    - On dwell expiry, go to `READY` when both nodes are alive and `READY` with no stop/fault active; otherwise `NOT_READY`.
 2. **Problem retreat**
-   - From any non-INIT target, retreat to `NOT_READY` on problems (stop/fault active or node timeout/liveness loss).
+    - From any non-INIT target, retreat to `NOT_READY` on problems (stop/fault active or node timeout/liveness loss).
 3. **Autonomy hold drop behavior (ENABLE/ACTIVE only)**
-   - If Planner/Orin drops autonomy hold (`NODE_STATUS_FLAG_AUTONOMY_REQUEST`), retreat to `READY` when both nodes are still `READY`; otherwise `NOT_READY`.
+    - If Planner/Orin drops autonomy hold (`NODE_STATUS_FLAG_AUTONOMY_REQUEST`), retreat to `READY` when both nodes are still `READY`; otherwise `NOT_READY`.
 4. **Forward path**
-   - `NOT_READY -> READY`: both nodes report `READY`, both alive, no stop/fault active.
-   - `READY -> ENABLE`: Planner/Orin request edge is latched in the accept window.
-   - `ENABLE -> ACTIVE`: both nodes report `ENABLE` and set `NODE_STATUS_FLAG_ENABLE_COMPLETE`, no stop/fault active.
-   - `ACTIVE` stays active only while both nodes report `ACTIVE` (a short active-entry grace allows transient `ENABLE`).
+    - `NOT_READY -> READY`: both nodes report `READY`, both alive, no stop/fault active.
+    - `READY -> ENABLE`: Planner/Orin request edge is latched in the accept window.
+    - `ENABLE -> ACTIVE`: both nodes report `ENABLE` and set `NODE_STATUS_FLAG_ENABLE_COMPLETE`, no stop/fault active.
+    - `ACTIVE` stays active only while both nodes report `ACTIVE` (a short active-entry grace allows transient `ENABLE`).
 
 Note: During `INIT` dwell, Safety intentionally holds target state at `INIT` for deterministic startup sequencing.
 
@@ -40,8 +40,8 @@ The Safety ESP32 continuously monitors:
 2. **Obstacle detection**: Ultrasonic sensor A02YYUW (threshold: 2000mm ~6.6ft)
 3. **Node liveness**: Planner and Control heartbeats (timeout: 500ms)
 4. **Node causes**: Planner and Control heartbeat cause channels
-   - `fault_flags`: unexpected issues (hardware/software faults)
-   - `stop_flags`: operator/manual stop inputs (throttle/reverse/steering/braking, app request)
+    - `fault_flags`: unexpected issues (hardware/software faults)
+    - `stop_flags`: operator/manual stop inputs (throttle/reverse/steering/braking, app request)
 
 **Power relay behavior:**
 
@@ -65,24 +65,24 @@ The Safety ESP32 continuously monitors:
 
 ### Receives
 
-| ID    | Name              | Description                                   |
-| ----- | ----------------- | --------------------------------------------- |
+| ID    | Name              | Description                                                       |
+| ----- | ----------------- | ----------------------------------------------------------------- |
 | 0x110 | PLANNER_HEARTBEAT | Planner alive (seq, state, fault_flags, stop_flags, status_flags) |
 | 0x120 | CONTROL_HEARTBEAT | Control alive (seq, state, fault_flags, stop_flags, status_flags) |
 
 ### Sends
 
-| ID    | Name             | Rate                              | Description                                                                           |
-| ----- | ---------------- | --------------------------------- | ------------------------------------------------------------------------------------- |
-| 0x100 | SAFETY_HEARTBEAT        | 100ms + immediate on state change | System target state + Safety `fault_flags`/`stop_flags` (same `node_heartbeat_t` format as all nodes) |
-| 0x101 | SAFETY_BATTERY_STATUS   | 1 Hz (every 10th heartbeat tick)  | Pack voltage, current, SOC, and battery flags (`battery_status_t`)                    |
+| ID    | Name                  | Rate                              | Description                                                                                           |
+| ----- | --------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| 0x100 | SAFETY_HEARTBEAT      | 100ms + immediate on state change | System target state + Safety `fault_flags`/`stop_flags` (same `node_heartbeat_t` format as all nodes) |
+| 0x101 | SAFETY_BATTERY_STATUS | 1 Hz (every 10th heartbeat tick)  | Pack voltage, current, SOC, and battery flags (`battery_status_t`)                                    |
 
 Safety's heartbeat `state` field = system target state (`NODE_STATE_*`). Its `fault_flags` field = Safety fault bitmask (`NODE_FAULT_SAFETY_*`), and `stop_flags` field = non-fault stop bitmask (`NODE_STOP_*`).
 
 ### Heartbeat Monitoring
 
-| Node    | Timeout | Tracked Fields                          |
-| ------- | ------- | --------------------------------------- |
+| Node    | Timeout | Tracked Fields                                         |
+| ------- | ------- | ------------------------------------------------------ |
 | Planner | 500ms   | sequence, state, fault_flags, stop_flags, status_flags |
 | Control | 500ms   | sequence, state, fault_flags, stop_flags, status_flags |
 
@@ -90,23 +90,23 @@ Safety's heartbeat `state` field = system target state (`NODE_STATE_*`). Its `fa
 
 The `fault_flags` byte in Safety heartbeat is a bitmask. Multiple fault bits may be set at once.
 
-| Bit | Code | Constant                    | Trigger                                              |
-| --- | ---- | --------------------------- | ---------------------------------------------------- |
-| -   | 0x00 | NONE                        | No fault                                             |
-| 0   | 0x01 | SAFETY_ULTRASONIC_UNHEALTHY | Ultrasonic sensor unhealthy / timeout                |
-| 1   | 0x02 | SAFETY_PLANNER_ISSUE        | Planner `fault_flags` in planner fault range         |
-| 2   | 0x04 | SAFETY_PLANNER_TIMEOUT      | No Planner heartbeat for 500ms                       |
-| 3   | 0x08 | SAFETY_CONTROL_ISSUE        | Control `fault_flags` in control fault range         |
-| 4   | 0x10 | SAFETY_CONTROL_TIMEOUT      | No Control heartbeat for 500ms                       |
-| 5   | 0x20 | SAFETY_RELAY_UNAVAILABLE    | Safety relay path unavailable                        |
+| Bit | Code | Constant                    | Trigger                                      |
+| --- | ---- | --------------------------- | -------------------------------------------- |
+| -   | 0x00 | NONE                        | No fault                                     |
+| 0   | 0x01 | SAFETY_ULTRASONIC_UNHEALTHY | Ultrasonic sensor unhealthy / timeout        |
+| 1   | 0x02 | SAFETY_PLANNER_ISSUE        | Planner `fault_flags` in planner fault range |
+| 2   | 0x04 | SAFETY_PLANNER_TIMEOUT      | No Planner heartbeat for 500ms               |
+| 3   | 0x08 | SAFETY_CONTROL_ISSUE        | Control `fault_flags` in control fault range |
+| 4   | 0x10 | SAFETY_CONTROL_TIMEOUT      | No Control heartbeat for 500ms               |
+| 5   | 0x20 | SAFETY_RELAY_UNAVAILABLE    | Safety relay path unavailable                |
 
 ## Pin Configuration
 
 | GPIO | Function              | Direction | Notes                                              |
 | ---- | --------------------- | --------- | -------------------------------------------------- |
-| 0    | Battery Voltage       | Input     | ADC1_CH0, 220kΩ/10kΩ divider (pack voltage)       |
-| 1    | Battery Current       | Input     | ADC1_CH1, HTFS-200-P via 6.8kΩ/10kΩ divider       |
-| 2    | Power Relay           | Output    | Active HIGH, SRD-05VDC-SL-C module                  |
+| 0    | Battery Voltage       | Input     | ADC1_CH0, 220kΩ/10kΩ divider (pack voltage)        |
+| 1    | Battery Current       | Input     | ADC1_CH1, HTFS-200-P via 6.8kΩ/10kΩ divider        |
+| 2    | Power Relay           | Output    | Active HIGH, SRD-05VDC-SL-C module                 |
 | 4    | CAN TX                | Output    | TWAI peripheral (SN65HVD230 transceiver)           |
 | 5    | CAN RX                | Input     | TWAI peripheral (SN65HVD230 transceiver)           |
 | 6    | Push Button HB2-ES544 | Input     | Pull-up, active HIGH (NC switch opens on press)    |
@@ -117,11 +117,11 @@ The `fault_flags` byte in Safety heartbeat is a bitmask. Multiple fault bits may
 
 ### LED Behavior
 
-| Color        | State                                        |
-| ------------ | -------------------------------------------- |
-| Solid green  | Target state READY (no stop/fault active)    |
-| Solid orange | Target state ENABLE                          |
-| Solid blue   | Target state ACTIVE                          |
+| Color        | State                                         |
+| ------------ | --------------------------------------------- |
+| Solid green  | Target state READY (no stop/fault active)     |
+| Solid orange | Target state ENABLE                           |
+| Solid blue   | Target state ACTIVE                           |
 | Solid red    | Target state NOT_READY or local fault overlay |
 
 ## Wiring
@@ -130,23 +130,30 @@ Each subsection covers production (on-cart) and bench wiring for Safety ESP32 in
 
 ### Wiring Summary
 
-| Interface               | Bench vs Production                                         |
-| ----------------------- | ----------------------------------------------------------- |
-| CAN bus (SN65HVD230)    | Same — see [root README](../README.md#can-bus-wiring)       |
-| Push button (HB2-ES544) | Same                                                        |
-| RF remote (EV1527)      | **Different** — receiver needs separate 12V supply on bench |
-| Ultrasonic (A02YYUW)    | Same                                                        |
-| Power relay (SRD-05VDC) | Same hardware — bench relay switches with no 24V load       |
+| Interface                    | Bench vs Production                                         |
+| ---------------------------- | ----------------------------------------------------------- |
+| CAN bus (SN65HVD230)         | Same — see [root README](../README.md#can-bus-wiring)       |
+| Push button (HB2-ES544)      | Same                                                        |
+| RF remote (EV1527)           | **Different** — receiver needs separate 12V supply on bench |
+| Ultrasonic (A02YYUW)         | Same                                                        |
+| Power relay (SRD-05VDC)      | Same hardware — bench relay switches with no 24V load       |
 | Battery monitor (HTFS-200-P) | Same — voltage divider and current sensor wired identically |
-| Status LED (WS2812)     | Same                                                        |
+| Status LED (WS2812)          | Same                                                        |
 
 ### Ground Distribution (Safety ESP32)
 
-Safety wiring uses all three ESP32 GND pins:
+Safety wiring uses all three ESP32 GND pins, grouped by noise profile:
 
-- **GND pin A (dedicated):** Main 5V I/O rail return only
-- **GND pin B (clean inputs):** CAN transceiver, push button, ultrasonic, battery monitor (voltage divider and current sensor)
-- **GND pin C (relay/noisy):** Power relay module and RF receiver relay return
+- **GND pin A (analog/battery monitor):** HTFS `0V`, voltage divider 10kΩ low-side, current output divider 10kΩ low-side — keeping the sensor and ADC divider grounds on the same pin cancels common-mode offset
+- **GND pin B (digital/power return):** ESP32 5V supply return, CAN transceiver, push button, ultrasonic
+- **GND pin C (noisy/relay):** Power relay module and RF receiver relay return
+
+Power rail distribution across ESP32 pins:
+
+- **5V pin 1:** ESP32 power supply input (from 5V fuse block)
+- **5V pin 2:** Power relay VCC + HTFS U_C (splice)
+- **3.3V pin 1:** CAN transceiver VCC
+- **3.3V pin 2:** Ultrasonic VCC
 
 Use a small harness splice/star point for each branch (or a small terminal block), then run one wire per ESP32 GND pin. Do not stack multiple wires into a single ESP32 header hole.
 
@@ -156,12 +163,12 @@ GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver mo
 
 **ESP32-to-transceiver connector (4-pin JST-PH):**
 
-| Wire Color | Signal                   |
-| ---------- | ------------------------ |
-| Black      | GND (clean-input branch) |
-| Red        | VCC (3.3V)               |
-| Yellow     | TXD (GPIO 4)             |
-| Green      | RXD (GPIO 5)             |
+| Wire Color | Signal                      |
+| ---------- | --------------------------- |
+| Black      | GND (digital branch, pin B) |
+| Red        | VCC (3.3V)                  |
+| Yellow     | TXD (GPIO 4)                |
+| Green      | RXD (GPIO 5)                |
 
 ### Push Button Stop (HB2-ES544)
 
@@ -169,10 +176,10 @@ GPIO 6 reads a normally-closed (NC) mxuteek HB2-ES544 22mm emergency stop push b
 
 **Wiring (2-pin):**
 
-| Wire Color | ESP32 Pin                | Button Terminal |
-| ---------- | ------------------------ | --------------- |
-| Black      | GND (clean-input branch) | COM terminal    |
-| White      | GPIO 6                   | NC terminal     |
+| Wire Color | ESP32 Pin                   | Button Terminal |
+| ---------- | --------------------------- | --------------- |
+| Black      | GND (digital branch, pin B) | COM terminal    |
+| White      | GPIO 6                      | NC terminal     |
 
 **Same wiring for bench and production.** On the bench, use the same HB2-ES544 switch or any NC momentary button wired between GPIO 6 and GND (pull-up keeps it HIGH when open).
 
@@ -191,12 +198,12 @@ Use two 2-pin connectors instead of one mixed 4-pin harness:
 
 **Connector B (RF stop signal, 2-pin):**
 
-| Wire Color | From                           | To                    |
-| ---------- | ------------------------------ | --------------------- |
-| Black      | ESP32 GND (relay/noisy branch) | Receiver COM terminal |
-| White      | ESP32 GPIO 7                   | Receiver NC terminal  |
+| Wire Color | From                            | To                    |
+| ---------- | ------------------------------- | --------------------- |
+| Black      | GND (noisy/relay branch, pin C) | Receiver COM terminal |
+| White      | ESP32 GPIO 7                    | Receiver NC terminal  |
 
-Receiver power GND and ESP32 signal GND are spliced together in the relay/noisy ground branch so NC/COM has a valid reference.
+Receiver power GND and ESP32 signal GND are spliced together in the noisy/relay ground branch (pin C) so NC/COM has a valid reference.
 
 **Production:** The receiver module is powered from 12V on the cart and mounted near the Safety ESP32.
 
@@ -208,12 +215,12 @@ UART1: GPIO 10 (TX to sensor RX/mode select), GPIO 11 (RX from sensor TX). 9600 
 
 **Wiring (4-pin):**
 
-| Wire Color | ESP32 Pin                | Sensor Wire             |
-| ---------- | ------------------------ | ----------------------- |
-| Red        | 3.3V                     | VCC (red wire)          |
-| Black      | GND (clean-input branch) | GND (black wire)        |
-| Blue       | GPIO 10 (TX)             | Sensor RX (mode select) |
-| Green      | GPIO 11 (RX)             | Sensor TX (data output) |
+| Wire Color | ESP32 Pin                   | Sensor Wire             |
+| ---------- | --------------------------- | ----------------------- |
+| Red        | 3.3V                        | VCC (red wire)          |
+| Black      | GND (digital branch, pin B) | GND (black wire)        |
+| Blue       | GPIO 10 (TX)                | Sensor RX (mode select) |
+| Green      | GPIO 11 (RX)                | Sensor TX (data output) |
 
 Note the TX/RX crossover: ESP32 TX -> Sensor RX, ESP32 RX -> Sensor TX.
 
@@ -225,11 +232,11 @@ GPIO 2 drives an AEDIKO 1-channel 5V relay module (SRD-05VDC-SL-C, optocoupler-i
 
 **Wiring (3-pin):**
 
-| Wire Color | From                           | To                        |
-| ---------- | ------------------------------ | ------------------------- |
-| White      | ESP32 GPIO 2                   | Relay module IN (trigger) |
-| Red        | ESP32 5V                       | Relay module VCC          |
-| Black      | ESP32 GND (relay/noisy branch) | Relay module GND          |
+| Wire Color | From                            | To                        |
+| ---------- | ------------------------------- | ------------------------- |
+| White      | ESP32 GPIO 2                    | Relay module IN (trigger) |
+| Red        | ESP32 5V pin 2 (splice)         | Relay module VCC          |
+| Black      | GND (noisy/relay branch, pin C) | Relay module GND          |
 
 **Production:** Relay NO terminal connects the 24V power rail to the stepper motor drivers. Energized = 24V flows to motors (vehicle can move). De-energized = 24V cut (fail-safe stop).
 
@@ -243,43 +250,45 @@ GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status L
 
 GPIO 0 and GPIO 1 read pack voltage and current via ADC1. Non-safety-critical — failure does not trigger stop; it only affects SOC reporting on CAN (`0x101 SAFETY_BATTERY_STATUS`). The battery monitor retries initialization in the background if the ADC fails at startup.
 
-**Voltage sensing (3-wire):**
+**Voltage sensing (3-wire, divider split across run):**
 
-| Wire Color | From                     | To                          |
-| ---------- | ------------------------ | --------------------------- |
-| Red        | Rear +48V distribution bus bar | 220kΩ resistor (high-side)  |
-| Yellow     | 220kΩ/10kΩ junction            | ESP32 GPIO 0 (ADC1_CH0)    |
-| Black      | 10kΩ resistor (low-side) | GND (clean-input branch)    |
+The 220kΩ resistor sits at the rear bus bar end; the 10kΩ resistor sits at the ESP32 end. This way the ~7ft yellow wire carries only the divided junction voltage (~2.2V at 0.22mA) rather than the full 48V, eliminating fault/fire risk on the long run.
 
-220kΩ (high-side) and 10kΩ (low-side) form a 1:23 divider, scaling 42–51.2V pack voltage to ~1.8–2.2V for the 12-bit ADC (3.3V reference). Voltage is measured from the rear distribution bus bars near the batteries for the most accurate open-circuit voltage reading during SOC recalibration.
+| Wire Color | From                           | To                                 |
+| ---------- | ------------------------------ | ---------------------------------- |
+| Red        | Rear +48V distribution bus bar | 220kΩ resistor (rear, high-side)   |
+| Yellow     | 220kΩ output (rear)            | 10kΩ resistor (ESP32 end) + GPIO 0 |
+| Black      | 10kΩ resistor (low-side)       | GND (analog branch, pin A)         |
+
+220kΩ (high-side, rear) and 10kΩ (low-side, ESP32 end) form a 1:23 divider, scaling 42–51.2V pack voltage to ~1.8–2.2V for the 12-bit ADC (3.3V reference). Voltage is measured from the rear distribution bus bars near the batteries for the most accurate open-circuit voltage reading during SOC recalibration.
 
 **Current sensing (5-wire):**
 
-| Wire Color | From                     | To                                            |
-| ---------- | ------------------------ | --------------------------------------------- |
-| Red        | ESP32 5V                 | HTFS `+5V`                                    |
-| Black      | GND (clean-input branch) | HTFS `0V`                                     |
-| —          | Pack main power cable    | Through HTFS 22mm aperture (primary conductor) |
-| Blue       | HTFS `OUT`               | 6.8kΩ resistor (high-side)                    |
-| Yellow     | 6.8kΩ/10kΩ junction      | ESP32 GPIO 1 (ADC1_CH1)                       |
+| Wire Color | From                       | To                                             |
+| ---------- | -------------------------- | ---------------------------------------------- |
+| Red        | ESP32 5V pin 2 (splice)    | HTFS `U_C` (supply)                            |
+| Black      | GND (analog branch, pin A) | HTFS `0V`                                      |
+| —          | Pack main power cable      | Through HTFS 22mm aperture (primary conductor) |
+| Blue       | HTFS `U_out`               | 6.8kΩ resistor (high-side)                     |
+| Yellow     | 6.8kΩ/10kΩ junction        | ESP32 GPIO 1 (ADC1_CH1)                        |
 
-The HTFS-200-P is a hall-effect sensor — the pack power cable passes through the 22mm aperture with no electrical contact to the sense circuit. Output is VCC/2 (2.5V) at 0A with 6.25 mV/A sensitivity (200A nominal, 300A measuring range). The 6.8kΩ/10kΩ output divider scales the sensor output by ~0.595x before it reaches the ESP32 ADC input. 10kΩ low-side to GND (clean-input branch).
+The HTFS-200-P is a hall-effect sensor — the pack power cable passes through the 22mm aperture with no electrical contact to the sense circuit. Output is VCC/2 (2.5V) at 0A with 6.25 mV/A sensitivity (200A nominal, 300A measuring range). The 6.8kΩ/10kΩ output divider scales the sensor output by ~0.595x before it reaches the ESP32 ADC input. The divider resistors sit at the ESP32 end; 10kΩ low-side to ESP32 GND pin A (analog branch). HTFS 0V also connects to pin A, so the sensor and ADC divider grounds share the same reference, cancelling common-mode offset. HTFS U_C is spliced into the ESP32 5V pin 2 (shared with power relay VCC).
 
 **Same wiring for bench and production.** On the bench, use `CONFIG_BYPASS_INPUT_BATTERY_MONITOR` to skip ADC init and force 50% SOC if no sensors are connected.
 
 ## Components
 
-| Component            | Description                                                         |
-| -------------------- | ------------------------------------------------------------------- |
-| `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor                           |
-| `relay_srd05vdc`     | AEDIKO SRD-05VDC-SL-C 5V relay module for 24V autonomous power rail |
-| `can_twai`           | CAN bus driver wrapper (shared)                                     |
-| `can_protocol`       | Message definitions (shared)                                        |
-| `led_ws2812`         | WS2812 status LED driver (shared)                                   |
-| `heartbeat_monitor`  | CAN node liveness tracking (shared)                                 |
+| Component            | Description                                                          |
+| -------------------- | -------------------------------------------------------------------- |
+| `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor                            |
+| `relay_srd05vdc`     | AEDIKO SRD-05VDC-SL-C 5V relay module for 24V autonomous power rail  |
+| `can_twai`           | CAN bus driver wrapper (shared)                                      |
+| `can_protocol`       | Message definitions (shared)                                         |
+| `led_ws2812`         | WS2812 status LED driver (shared)                                    |
+| `heartbeat_monitor`  | CAN node liveness tracking (shared)                                  |
 | `battery_monitor`    | Pack voltage/current ADC sensing and SOC estimation (LEM HTFS-200-P) |
-| `safety_logic`       | Extracted stop/fault evaluation logic (shared, tested)              |
-| `system_state`       | System state machine — target state advancement (shared, tested)    |
+| `safety_logic`       | Extracted stop/fault evaluation logic (shared, tested)               |
+| `system_state`       | System state machine — target state advancement (shared, tested)     |
 
 ## Ultrasonic Sensor
 
@@ -297,18 +306,18 @@ The HTFS-200-P is a hall-effect sensor — the pack power cable passes through t
 
 Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under **Test Bypasses** (top-level), or add to `sdkconfig.defaults`:
 
-| Flag                                    | Effect                                                            |
-| --------------------------------------- | ----------------------------------------------------------------- |
-| `CONFIG_BYPASS_PLANNER_AUTONOMY_GATE`   | Force autonomy request true (bench mode without Orin)             |
-| `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner fault checks           |
+| Flag                                    | Effect                                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `CONFIG_BYPASS_PLANNER_AUTONOMY_GATE`   | Force autonomy request true (bench mode without Orin)                                                 |
+| `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner fault checks                                               |
 | `CONFIG_BYPASS_PLANNER_STATE_MIRROR`    | Simulate Planner state: force READY in NOT_READY/READY, force ENABLE+enable_complete in ENABLE/ACTIVE |
-| `CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS` | Ignore Control heartbeat timeout + Control fault checks           |
+| `CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS` | Ignore Control heartbeat timeout + Control fault checks                                               |
 | `CONFIG_BYPASS_CONTROL_STATE_MIRROR`    | Simulate Control state: force READY in NOT_READY/READY, force ENABLE+enable_complete in ENABLE/ACTIVE |
-| `CONFIG_BYPASS_CAN_TWAI`                | Disable CAN/TWAI entirely (skip TWAI init/recovery and heartbeat TX/RX) |
-| `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button stop to inactive (not pressed)                  |
-| `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote stop to inactive (not engaged)                    |
-| `CONFIG_BYPASS_INPUT_ULTRASONIC`        | Force ultrasonic clear and healthy (skip sensor)                  |
-| `CONFIG_BYPASS_INPUT_BATTERY_MONITOR`   | Skip battery ADC init, force 50% SOC (bench without sensors)     |
+| `CONFIG_BYPASS_CAN_TWAI`                | Disable CAN/TWAI entirely (skip TWAI init/recovery and heartbeat TX/RX)                               |
+| `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button stop to inactive (not pressed)                                                      |
+| `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote stop to inactive (not engaged)                                                        |
+| `CONFIG_BYPASS_INPUT_ULTRASONIC`        | Force ultrasonic clear and healthy (skip sensor)                                                      |
+| `CONFIG_BYPASS_INPUT_BATTERY_MONITOR`   | Skip battery ADC init, force 50% SOC (bench without sensors)                                          |
 
 ## Debug Logging
 
@@ -316,15 +325,15 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 
 ### CAN Traffic
 
-| Flag                                          | Default | Effect                                               |
-| --------------------------------------------- | ------- | ---------------------------------------------------- |
-| `CONFIG_LOG_CAN_FRAMES`                       | off     | Log raw CAN frames (TX and RX) at TWAI driver layer  |
-| `CONFIG_LOG_CAN_FRAMES_MOTORS_ONLY`           | off     | Log stepper motor frames only (suppress standard)    |
-| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB`    | off     | Suppress Safety heartbeat from raw frame log         |
-| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB`   | off     | Suppress Planner heartbeat from raw frame log        |
-| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB`   | off     | Suppress Control heartbeat from raw frame log        |
-| `CONFIG_LOG_CAN_HEARTBEAT_TX`                 | off     | Log every periodic heartbeat TX (very verbose)       |
-| `CONFIG_LOG_CAN_HEARTBEAT_RX`                 | off     | Log every received heartbeat, not just state changes |
+| Flag                                        | Default | Effect                                               |
+| ------------------------------------------- | ------- | ---------------------------------------------------- |
+| `CONFIG_LOG_CAN_FRAMES`                     | off     | Log raw CAN frames (TX and RX) at TWAI driver layer  |
+| `CONFIG_LOG_CAN_FRAMES_MOTORS_ONLY`         | off     | Log stepper motor frames only (suppress standard)    |
+| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB`  | off     | Suppress Safety heartbeat from raw frame log         |
+| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB` | off     | Suppress Planner heartbeat from raw frame log        |
+| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB` | off     | Suppress Control heartbeat from raw frame log        |
+| `CONFIG_LOG_CAN_HEARTBEAT_TX`               | off     | Log every periodic heartbeat TX (very verbose)       |
+| `CONFIG_LOG_CAN_HEARTBEAT_RX`               | off     | Log every received heartbeat, not just state changes |
 
 ### Component Health & Recovery
 
@@ -344,22 +353,22 @@ HEARTBEAT_LED is non-critical and initialized once at startup.
 
 ### Safety Logic
 
-| Flag                              | Default | Effect                                                        |
-| --------------------------------- | ------- | ------------------------------------------------------------- |
+| Flag                              | Default | Effect                                                         |
+| --------------------------------- | ------- | -------------------------------------------------------------- |
 | `CONFIG_LOG_SAFETY_ESTOP_INPUTS`  | off     | Log safety input snapshot every 50ms cycle (extremely verbose) |
-| `CONFIG_LOG_SAFETY_STATE_CHANGES` | on      | Log target-state transitions and autonomy-request gate events |
+| `CONFIG_LOG_SAFETY_STATE_CHANGES` | on      | Log target-state transitions and autonomy-request gate events  |
 | `CONFIG_LOG_SAFETY_FAULT_CHANGES` | on      | Log Safety fault/stop channel transitions                      |
-| `CONFIG_LOG_SAFETY_STATE_TICK`    | off     | Log state-machine evaluation every 50ms cycle (very verbose)  |
+| `CONFIG_LOG_SAFETY_STATE_TICK`    | off     | Log state-machine evaluation every 50ms cycle (very verbose)   |
 
 ### Inputs
 
-| Flag                                       | Default | Effect                                                  |
-| ------------------------------------------ | ------- | ------------------------------------------------------- |
-| `CONFIG_LOG_INPUT_PUSH_BUTTON`             | off     | Log push-button state changes (pressed/released)        |
-| `CONFIG_LOG_INPUT_RF_REMOTE`               | off     | Log RF remote state changes (engaged/disengaged)        |
-| `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE`     | off     | Log every valid ultrasonic distance reading (~5-10/sec) |
-| `CONFIG_LOG_INPUT_ULTRASONIC_RX`           | off     | Log raw ultrasonic UART RX bytes (extremely verbose)    |
-| `CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS` | off     | Log ultrasonic UART parse failures                      |
+| Flag                                       | Default | Effect                                                                   |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------ |
+| `CONFIG_LOG_INPUT_PUSH_BUTTON`             | off     | Log push-button state changes (pressed/released)                         |
+| `CONFIG_LOG_INPUT_RF_REMOTE`               | off     | Log RF remote state changes (engaged/disengaged)                         |
+| `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE`     | off     | Log every valid ultrasonic distance reading (~5-10/sec)                  |
+| `CONFIG_LOG_INPUT_ULTRASONIC_RX`           | off     | Log raw ultrasonic UART RX bytes (extremely verbose)                     |
+| `CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS` | off     | Log ultrasonic UART parse failures                                       |
 | `CONFIG_LOG_INPUT_BATTERY_VOLTAGE`         | off     | Log battery voltage, current, and SOC every update (very verbose, 20 Hz) |
 | `CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES`     | on      | Log SOC percentage changes (>=1%) and voltage-based recalibration events |
 

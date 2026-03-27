@@ -100,6 +100,14 @@ system_state_result_t system_state_step(const system_state_inputs_t *inputs)
 		break;
 
 	case NODE_STATE_ENABLE:
+		// ENABLE timeout: nodes must complete within the allowed window.
+		// If they don't, retreat to NOT_READY as a safety measure.
+		if (inputs->enable_timeout_ms > 0 && inputs->enable_elapsed_ms >= inputs->enable_timeout_ms)
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = true;
+			break;
+		}
 		// Advance to ACTIVE when both nodes are ENABLE and
 		// both have signaled enable_complete
 		if (inputs->planner_state == NODE_STATE_ENABLE && inputs->control_state == NODE_STATE_ENABLE &&

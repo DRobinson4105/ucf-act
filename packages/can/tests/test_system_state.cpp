@@ -27,6 +27,8 @@ static system_state_inputs_t default_inputs(void)
 		.autonomy_request = false,
 		.autonomy_hold = true,
 		.active_entry_grace = false,
+		.enable_elapsed_ms = 0,
+		.enable_timeout_ms = 0,
 	};
 	return in;
 }
@@ -320,6 +322,75 @@ static void test_planner_not_ready_blocks_ready_transition(void)
 }
 
 // ============================================================================
+// ENABLE timeout tests
+// ============================================================================
+
+static void test_enable_timeout_retreats_to_not_ready(void)
+{
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ENABLE;
+	in.planner_state = NODE_STATE_ENABLE;
+	in.control_state = NODE_STATE_ENABLE;
+	in.planner_enable_complete = false;
+	in.control_enable_complete = false;
+	in.enable_elapsed_ms = 5000;
+	in.enable_timeout_ms = 5000;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_NOT_READY);
+	assert(r.target_changed == true);
+}
+
+static void test_enable_no_timeout_when_within_window(void)
+{
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ENABLE;
+	in.planner_state = NODE_STATE_ENABLE;
+	in.control_state = NODE_STATE_ENABLE;
+	in.planner_enable_complete = false;
+	in.control_enable_complete = false;
+	in.enable_elapsed_ms = 4999;
+	in.enable_timeout_ms = 5000;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_ENABLE);
+	assert(r.target_changed == false);
+}
+
+static void test_enable_timeout_zero_disables_watchdog(void)
+{
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ENABLE;
+	in.planner_state = NODE_STATE_ENABLE;
+	in.control_state = NODE_STATE_ENABLE;
+	in.planner_enable_complete = false;
+	in.control_enable_complete = false;
+	in.enable_elapsed_ms = 999999;
+	in.enable_timeout_ms = 0; // disabled
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_ENABLE);
+	assert(r.target_changed == false);
+}
+
+static void test_enable_timeout_does_not_block_normal_advance(void)
+{
+	// Both nodes complete before timeout — should advance to ACTIVE
+	system_state_inputs_t in = default_inputs();
+	in.current_target = NODE_STATE_ENABLE;
+	in.planner_state = NODE_STATE_ENABLE;
+	in.control_state = NODE_STATE_ENABLE;
+	in.planner_enable_complete = true;
+	in.control_enable_complete = true;
+	in.enable_elapsed_ms = 200;
+	in.enable_timeout_ms = 5000;
+
+	system_state_result_t r = system_state_step(&in);
+	assert(r.new_target == NODE_STATE_ACTIVE);
+	assert(r.target_changed == true);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 
@@ -351,6 +422,12 @@ int main(void)
 	TEST(test_enable_retreats_on_stop_active);
 	TEST(test_null_inputs_returns_not_ready);
 	TEST(test_planner_not_ready_blocks_ready_transition);
+
+	printf("\n  --- enable timeout ---\n");
+	TEST(test_enable_timeout_retreats_to_not_ready);
+	TEST(test_enable_no_timeout_when_within_window);
+	TEST(test_enable_timeout_zero_disables_watchdog);
+	TEST(test_enable_timeout_does_not_block_normal_advance);
 
 	TEST_REPORT();
 	TEST_EXIT();

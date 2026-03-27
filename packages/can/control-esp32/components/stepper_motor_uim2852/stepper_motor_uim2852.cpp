@@ -22,6 +22,15 @@ static const uint8_t PT_FIFO_PREFILL_FRAMES = 2;
 static const uint16_t PT_START_ROW = 0;
 static const uint16_t PT_TABLE_ROWS = 512;
 
+// MP (motion parameter) register indices for PT/PVT FIFO configuration.
+// See UIM2852CA CAN protocol manual, CW=0x22 (MP) instruction.
+static const uint8_t MP_IDX_RESET = 0x00;     // Reset PT/PVT queue
+static const uint8_t MP_IDX_FIRST_ROW = 0x01; // First row pointer
+static const uint8_t MP_IDX_LAST_ROW = 0x02;  // Last row pointer
+static const uint8_t MP_IDX_MODE = 0x03;      // PT/PVT mode select
+static const uint8_t MP_IDX_FRAME_TIME = 0x04; // Frame time (ms, 16-bit LE)
+static const uint8_t MP_IDX_LOW_WATER = 0x05; // FIFO low-water mark
+
 // (Notification callback is now per-motor, stored in stepper_motor_uim2852_t)
 
 // ============================================================================
@@ -342,34 +351,34 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 
 	// Reset the PT/PVT queue and select PT FIFO mode per the manual:
 	// MP[0]=0, MP[1]=0, MP[2]=0, MP[3]=0, MP[4]=frame_time, MP[5]=queue-low.
-	const uint8_t cw22_mp0_data[3] = {0x00, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_mp0_data, 3);
+	const uint8_t mp_reset[3] = {MP_IDX_RESET, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_reset, 3);
 	if (err != ESP_OK)
 		return err;
 
-	const uint8_t cw22_first_row_data[3] = {0x01, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_first_row_data, 3);
+	const uint8_t mp_first_row[3] = {MP_IDX_FIRST_ROW, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_first_row, 3);
 	if (err != ESP_OK)
 		return err;
 
-	const uint8_t cw22_last_row_data[3] = {0x02, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_last_row_data, 3);
+	const uint8_t mp_last_row[3] = {MP_IDX_LAST_ROW, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_last_row, 3);
 	if (err != ESP_OK)
 		return err;
 
-	const uint8_t cw22_data[3] = {0x03, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_data, 3);
+	const uint8_t mp_mode[3] = {MP_IDX_MODE, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_mode, 3);
 	if (err != ESP_OK)
 		return err;
 
-	data[0] = 0x04;
+	data[0] = MP_IDX_FRAME_TIME;
 	data[1] = (uint8_t)(motor->pt_frame_time_ms & 0xFF);
 	data[2] = (uint8_t)(motor->pt_frame_time_ms >> 8);
 	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
 	if (err != ESP_OK)
 		return err;
 
-	data[0] = 0x05;
+	data[0] = MP_IDX_LOW_WATER;
 	data[1] = motor->pt_low_water_mark;
 	data[2] = 0x00;
 	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
@@ -750,12 +759,13 @@ bool stepper_motor_uim2852_check_liveness(const stepper_motor_uim2852_t *motor, 
 	TickType_t last_response_tick = m->last_response_tick;
 	taskEXIT_CRITICAL(&m->lock);
 
-	// Only flag timeout if the driver has been enabled (we expect responses)
-	// and at least one response has been received (last_response_tick != 0).
+	// Only flag timeout if the driver has been enabled (we expect responses).
 	if (!driver_enabled)
 		return false;
+
+	// Motor never responded since being enabled — treat as unresponsive.
 	if (last_response_tick == 0)
-		return false;
+		return true;
 
 	TickType_t elapsed = now_tick - last_response_tick;
 	return (elapsed > timeout_ticks);

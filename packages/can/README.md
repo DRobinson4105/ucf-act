@@ -4,22 +4,22 @@ CAN bus communication system for the autonomous golf cart, consisting of a Jetso
 
 The Planner, Control, and Safety nodes share a unified heartbeat format, state enum, and cause channels over 1 Mbps CAN. Safety commands target states with NOT_READY/READY/ENABLE/ACTIVE. Non-fault stop inputs are carried in `stop_flags`; issues/timeouts are carried in `fault_flags`.
 
-| Node                           | Role                                                         | Heartbeat ID |
-|--------------------------------|--------------------------------------------------------------|--------------|
-| **Safety** (ESP32-C6-WROOM-1)  | System state authority, stop/fault monitoring, power relay   | 0x100        |
-| **Planner** (Jetson AGX Orin)  | Path planning, sends throttle/steering/braking commands      | 0x110        |
+| Node                           | Role                                                           | Heartbeat ID |
+| ------------------------------ | -------------------------------------------------------------- | ------------ |
+| **Safety** (ESP32-C6-WROOM-1)  | System state authority, stop/fault monitoring, power relay     | 0x100        |
+| **Planner** (Jetson AGX Orin)  | Path planning, sends throttle/steering/braking commands        | 0x110        |
 | **Control** (ESP32-C6-WROOM-1) | Executes actuator commands (throttle, steering/braking motors) | 0x120        |
 
 Two UIM2852CA stepper motors (steering node 7, braking node 6) also share the bus using extended 29-bit CAN frames but do not participate in the heartbeat protocol.
 
 ## Documentation
 
-| Topic                                                     | Location                                               |
-|-----------------------------------------------------------|--------------------------------------------------------|
-| Frame layouts, state codes, fault flags, stop/status flags | [common/protocol/README.md](common/protocol/README.md) |
-| Control messages, pins, wiring, components                | [control-esp32/README.md](control-esp32/README.md)     |
+| Topic                                                         | Location                                               |
+| ------------------------------------------------------------- | ------------------------------------------------------ |
+| Frame layouts, state codes, fault flags, stop/status flags    | [common/protocol/README.md](common/protocol/README.md) |
+| Control messages, pins, wiring, components                    | [control-esp32/README.md](control-esp32/README.md)     |
 | Safety system state authority, stop/fault logic, pins, wiring | [safety-esp32/README.md](safety-esp32/README.md)       |
-| Host-native unit tests                                    | [tests/README.md](tests/README.md)                     |
+| Host-native unit tests                                        | [tests/README.md](tests/README.md)                     |
 
 ## CAN Bus Wiring
 
@@ -27,8 +27,8 @@ Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Pl
 
 Each CAN node connects to the bus with two signal wires:
 
-| Wire  | Wire Color | Description      |
-|-------|------------|------------------|
+| Wire  | Wire Color | Description     |
+| ----- | ---------- | --------------- |
 | CAN-H | Yellow     | CAN high signal |
 | CAN-L | Green      | CAN low signal  |
 
@@ -45,7 +45,7 @@ Each CAN node connects to the bus with two signal wires:
 ### Message Traffic
 
 | ID       | Name              | Sender           | Frame Type      |
-|----------|-------------------|------------------|-----------------|
+| -------- | ----------------- | ---------------- | --------------- |
 | 0x100    | SAFETY_HEARTBEAT  | Safety           | Standard 11-bit |
 | 0x110    | PLANNER_HEARTBEAT | Planner          | Standard 11-bit |
 | 0x111    | PLANNER_COMMAND   | Planner          | Standard 11-bit |
@@ -132,7 +132,7 @@ The serial port varies by OS and connection order. Find your ports first:
 ### Finding Ports
 
 | OS                | Command                                | Common Ports                              |
-|-------------------|----------------------------------------|-------------------------------------------|
+| ----------------- | -------------------------------------- | ----------------------------------------- |
 | **Linux**         | `ls /dev/ttyACM*` or `ls /dev/ttyUSB*` | `/dev/ttyACM0`, `/dev/ttyACM1`            |
 | **macOS**         | `ls /dev/cu.usb*`                      | `/dev/cu.usbmodem*`, `/dev/cu.usbserial*` |
 | **Windows (WSL)** | `ls /dev/ttyACM*` (with usbipd)        | `/dev/ttyACM0`, `/dev/ttyACM1`            |
