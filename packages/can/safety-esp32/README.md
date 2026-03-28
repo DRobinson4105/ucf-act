@@ -151,9 +151,8 @@ Safety wiring uses all three ESP32 GND pins, grouped by noise profile:
 Power rail distribution across ESP32 pins:
 
 - **5V pin 1:** ESP32 power supply input (from 5V fuse block)
-- **5V pin 2:** Power relay VCC + HTFS U_C (splice)
+- **5V pin 2 (splice):** Power relay VCC + HTFS U_C + Ultrasonic VCC
 - **3.3V pin 1:** CAN transceiver VCC
-- **3.3V pin 2:** Ultrasonic VCC
 
 Use a small harness splice/star point for each branch (or a small terminal block), then run one wire per ESP32 GND pin. Do not stack multiple wires into a single ESP32 header hole.
 
@@ -211,13 +210,13 @@ Receiver power GND and ESP32 signal GND are spliced together in the noisy/relay 
 
 ### Ultrasonic Sensor (A02YYUW)
 
-UART1: GPIO 10 (TX to sensor RX/mode select), GPIO 11 (RX from sensor TX). 9600 baud, 4-byte frames. The A02YYUW is a waterproof ultrasonic rangefinder operating at 3.3-5V with a direct UART output — no level shifting or isolation needed.
+UART1: GPIO 10 (TX to sensor RX/mode select), GPIO 11 (RX from sensor TX). 9600 baud, 4-byte frames. The A02YYUW is a waterproof ultrasonic rangefinder powered from 5V (pin 2 splice) with a direct 3.3V-compatible UART output — no level shifting or isolation needed.
 
 **Wiring (4-pin):**
 
 | Wire Color | ESP32 Pin                   | Sensor Wire             |
 | ---------- | --------------------------- | ----------------------- |
-| Red        | 3.3V                        | VCC (red wire)          |
+| Red        | 5V (pin 2 splice)           | VCC (red wire)          |
 | Black      | GND (digital branch, pin B) | GND (black wire)        |
 | Blue       | GPIO 10 (TX)                | Sensor RX (mode select) |
 | Green      | GPIO 11 (RX)                | Sensor TX (data output) |

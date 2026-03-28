@@ -171,9 +171,9 @@ constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
 // MCP41HV51 digital potentiometer (throttle level selection via SPI)
-constexpr gpio_num_t DIGIPOT_SDI_GPIO = GPIO_NUM_2;
-constexpr gpio_num_t DIGIPOT_SCK_GPIO = GPIO_NUM_3;
-constexpr gpio_num_t DIGIPOT_CS_GPIO = GPIO_NUM_6;
+constexpr gpio_num_t DIGIPOT_SDI_GPIO = GPIO_NUM_18;
+constexpr gpio_num_t DIGIPOT_SCK_GPIO = GPIO_NUM_19;
+constexpr gpio_num_t DIGIPOT_CS_GPIO = GPIO_NUM_20;
 
 // DPDT relay (MY5NJ — throttle source switching + pedal bypass)
 constexpr gpio_num_t DPDT_RELAY_GPIO = GPIO_NUM_10; // 2N5551 base (via 680R) for MY5NJ
@@ -2423,7 +2423,7 @@ void throttle_test_task(void *param)
 
 	ESP_LOGI(TAG_TEST, "========================================");
 	ESP_LOGI(TAG_TEST, "  THROTTLE TEST MODE");
-	ESP_LOGI(TAG_TEST, "  0-7: set throttle wiper (mapped)");
+	ESP_LOGI(TAG_TEST, "  0-255: set wiper (type digits + space/enter)");
 	ESP_LOGI(TAG_TEST, "  r:   toggle DPDT relay (MY5NJ)");
 	ESP_LOGI(TAG_TEST, "  q:   quit (shutdown all)");
 	ESP_LOGI(TAG_TEST, "  pedal: manual override (auto re-arms)");

@@ -28,6 +28,7 @@ extern "C"
 //   - P0B connects to Curtis B- (ground reference)
 //   - P0W (wiper) output connects to DPDT relay
 //   - V+ powered from 24V rail, V- and DGND to GND bus, VL from ESP32 3.3V
+//   - SHDN (pin 7) tied to VL (3.3V), WLAT (pin 6) tied to GND
 //   - 256 wiper positions (0 = minimum throttle, 255 = maximum throttle)
 //   - SPI interface (SDI, SCK, CS)
 //
