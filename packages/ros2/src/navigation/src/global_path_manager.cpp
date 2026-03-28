@@ -562,9 +562,9 @@ struct Config {
   bool publishPoints;
 };
 
-class ActGlobalPathManager : public rclcpp::Node {
+class GlobalPathManager : public rclcpp::Node {
 public:
-  ActGlobalPathManager() : rclcpp::Node("act_global_path_manager") {
+  GlobalPathManager() : rclcpp::Node("global_path_manager") {
     Config cfg;
 
     cfg.mapFrame = this->declare_parameter<std::string>("map_frame", "map");
@@ -641,21 +641,21 @@ public:
 
     const auto inQos = buildQosFromParams(cfg.inputReliability, cfg.inputDurability, cfg.inputDepth);
     routeSub_ =
-        this->create_subscription<std_msgs::msg::String>(cfg.inputTopic, inQos, std::bind(&ActGlobalPathManager::onRouteJson, this, std::placeholders::_1));
+        this->create_subscription<std_msgs::msg::String>(cfg.inputTopic, inQos, std::bind(&GlobalPathManager::onRouteJson, this, std::placeholders::_1));
 
-    paramsCb_ = this->add_on_set_parameters_callback(std::bind(&ActGlobalPathManager::onSetParameters, this, std::placeholders::_1));
+    paramsCb_ = this->add_on_set_parameters_callback(std::bind(&GlobalPathManager::onSetParameters, this, std::placeholders::_1));
 
     workerRunning_ = true;
     worker_ = std::thread([this]() { workerLoop(); });
 
-    RCLCPP_INFO(this->get_logger(), "act_global_path_manager ready");
+    RCLCPP_INFO(this->get_logger(), "global_path_manager ready");
     RCLCPP_INFO(this->get_logger(), "datum lat=%.9f lon=%.9f alt=%.3f", cfg.datumLat, cfg.datumLon, cfg.datumAlt);
     RCLCPP_INFO(this->get_logger(), "input=%s raw=%s clean=%s profile=%s meta=%s points_raw=%s points_clean=%s frame=%s", cfg.inputTopic.c_str(),
                 cfg.outputTopicRaw.c_str(), cfg.outputTopicClean.c_str(), cfg.outputTopicProfile.c_str(), cfg.outputTopicMeta.c_str(),
                 cfg.outputTopicPointsRaw.c_str(), cfg.outputTopicPointsClean.c_str(), cfg.mapFrame.c_str());
   }
 
-  ~ActGlobalPathManager() override {
+  ~GlobalPathManager() override {
     {
       std::lock_guard<std::mutex> lk(queueMutex_);
       workerRunning_ = false;
@@ -1129,7 +1129,7 @@ private:
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<ActGlobalPathManager>());
+  rclcpp::spin(std::make_shared<GlobalPathManager>());
   rclcpp::shutdown();
   return 0;
 }

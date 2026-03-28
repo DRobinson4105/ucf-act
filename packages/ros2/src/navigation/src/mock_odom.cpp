@@ -10,10 +10,10 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/transform_broadcaster.h>
 
-class FakeOdomIntegrator : public rclcpp::Node {
+class MockOdom : public rclcpp::Node {
 public:
-  FakeOdomIntegrator()
-      : rclcpp::Node("fake_odom_integrator"),
+  MockOdom()
+      : rclcpp::Node("mock_odom"),
         tf_broadcaster_(std::make_unique<tf2_ros::TransformBroadcaster>(*this)) {
 
     odom_topic_ = this->declare_parameter<std::string>("odom_topic", "/odometry/local");
@@ -35,7 +35,7 @@ public:
 
     odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
     cmd_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-        cmd_vel_topic_, 10, std::bind(&FakeOdomIntegrator::onCmd, this, std::placeholders::_1));
+        cmd_vel_topic_, 10, std::bind(&MockOdom::onCmd, this, std::placeholders::_1));
 
     last_cmd_.linear.x = 0.0;
     last_cmd_.linear.y = 0.0;
@@ -50,7 +50,7 @@ public:
 
     const double hz = std::max(1e-3, publish_hz_);
     const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / hz));
-    timer_ = this->create_wall_timer(period, std::bind(&FakeOdomIntegrator::onTimer, this));
+    timer_ = this->create_wall_timer(period, std::bind(&MockOdom::onTimer, this));
   }
 
 private:
@@ -180,7 +180,7 @@ private:
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<FakeOdomIntegrator>());
+  rclcpp::spin(std::make_shared<MockOdom>());
   rclcpp::shutdown();
   return 0;
 }

@@ -28,12 +28,12 @@ def generate_launch_description():
         include("bringup", "localization.launch.py"),
         #include("perception", "seg_all.launch.py"),
         include("perception", "lidar_filter.launch.py"),
-        include("bringup", "nav2_no_map.launch.py"),
+        include("bringup", "navigation.launch.py"),
 
         Node(
             package="navigation",
-            executable="act_global_path_manager",
-            name="act_global_path_manager",
+            executable="global_path_manager",
+            name="global_path_manager",
             output="screen",
             parameters=[{
                 "map_frame": "odom",
@@ -49,8 +49,8 @@ def generate_launch_description():
         ),
         # Node(
         #     package="navigation",
-        #     executable="clicked_point_path_publisher",
-        #     name="clicked_point_path_publisher",
+        #     executable="clicked_point_to_path",
+        #     name="clicked_point_to_path",
         #     output="screen",
         #     parameters=[{
         #         "global_frame": "odom",

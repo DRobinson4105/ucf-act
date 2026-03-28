@@ -6,7 +6,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    params = osp.join(get_package_share_directory("bringup"), "config", "nav2_no_map.yaml")
+    params = osp.join(get_package_share_directory("bringup"), "config", "navigation.yaml")
 
     return LaunchDescription([
         Node(
