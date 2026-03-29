@@ -1,13 +1,5 @@
-build/
 sdkconfig
 sdkconfig.old
-.env
-.direnv/
-
-.DS_Store
-*.dSYM/
-
-.cache/
 
 tests/**
 !tests/Makefile

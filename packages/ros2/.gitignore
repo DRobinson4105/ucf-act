@@ -1,11 +1,5 @@
-build
-install
-log
 src/livox_ros_driver2
 src/FAST_LIO_ROS2
-.env
+
 *.onnx
 *.engine
-.clang-format
-act@act-desktop:~$ chromium
-
