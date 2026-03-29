@@ -21,6 +21,8 @@ Configure via `idf.py menuconfig` → SC3 Sender.
 
 ## Usage
 
+> **Note:** Before running, disconnect any other motors from the CAN bus. Only the motor being targeted should be connected.
+
 ```
 idf.py menuconfig   # set MOTOR_TARGET, TX/RX GPIO pins
 idf.py build flash monitor
