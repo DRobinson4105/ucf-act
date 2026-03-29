@@ -1,38 +1,24 @@
-menu "Motor Configuration"
+menu "SC3 Sender"
 
-    config MOTOR_CURRENT_NODE_ID
-        int "Current motor node ID (address to send commands to)"
-        default 6
-        range 0 126
+    config CAN_TX_GPIO
+        int "TWAI TX GPIO number"
+        range 0 48
+        default 4
         help
-            The CAN node ID the motor is currently configured with.
-            Factory default is 5. Set this to the motor's current ID
-            so the utility can communicate with it.
+            GPIO pin connected to the CAN transceiver TX line.
 
-    config MOTOR_TARGET_NODE_ID
-        int "Target node ID to assign"
-        default 7
-        range 5 126
+    config CAN_RX_GPIO
+        int "TWAI RX GPIO number"
+        range 0 48
+        default 5
         help
-            The new CAN node ID to write to the motor.
-            Steering motor should be 7, braking motor should be 6.
-            Takes effect after power cycle.
+            GPIO pin connected to the CAN transceiver RX line.
 
-    config MOTOR_SET_BAUD_1MBPS
-        bool "Set baud rate to 1 Mbps"
-        default y
+    config MOTOR_TARGET
+        int "Motor target (1 = braking, 2 = steering)"
+        range 1 2
+        default 1
         help
-            Write PP[5]=0 to set the motor's CAN baud rate to 1 Mbps.
-            Factory default is 500 Kbps (PP[5]=2). Disable this if the
-            motor is already at 1 Mbps and you only want to change the
-            node ID.
-
-    config MOTOR_BUS_BAUD_1MBPS
-        bool "Connect to bus at 1 Mbps (otherwise 500 Kbps)"
-        default y
-        help
-            Select the baud rate to use when connecting to the motor.
-            Enable (1 Mbps) if the motor has already been configured.
-            Disable (500 Kbps) if the motor is at factory default.
+            1 = braking motor, 2 = steering motor.
 
 endmenu

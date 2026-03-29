@@ -1,6 +1,5 @@
 idf_component_register(
-    SRCS "main.cpp"
+    SRCS "main.c"
     INCLUDE_DIRS "."
-    REQUIRES stepper_protocol_uim2852
-    PRIV_REQUIRES driver
+    REQUIRES driver esp_log
 )
