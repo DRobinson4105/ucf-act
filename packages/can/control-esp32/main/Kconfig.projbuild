@@ -13,24 +13,22 @@ config THROTTLE_TEST_MODE
     default n
     help
         Replace the normal CAN-based control loop with a standalone
-        throttle test task. Reads throttle levels 0-7 from USB serial
-        keypress (no enter required). Skips CAN, steppers, and
+        throttle test task. Type a wiper value 0-255 and press
+        space or enter to commit. Skips CAN, steppers, and
         Safety/Planner dependencies entirely.
 
         Useful for validating throttle hardware wiring on the cart
-        (DG408DJZ mux, SRD-05VDC throttle relay, JD-2912 pedal
-        bypass relay, F/R optocouplers, pedal ADC) without the full
-        system operational.
+        (MCP41HV51 digipot, MY5NJ DPDT relay, F/R optocouplers,
+        pedal ADC) without the full system operational.
 
         Controls (via idf.py monitor or serial terminal):
-          0-7  Set throttle level
-          b    Toggle bypass relay (JD-2912)
-          t    Toggle throttle relay (SRD-05VDC)
-          q    Quit (shutdown all actuators)
+          0-255 + space/enter  Set throttle wiper position
+          r                    Toggle DPDT relay (MY5NJ)
+          q                    Quit (shutdown all actuators)
 
         Safety behavior: requires F/R not in Reverse to arm.
-        Disables throttle relay if F/R moves to Reverse or pedal
-        is pressed. Zeros throttle level if F/R is in Neutral.
+        Disables DPDT relay if F/R moves to Reverse or pedal
+        is pressed. Zeros throttle wiper if F/R is in Neutral.
         Auto-recovers when pedal is rearmed and F/R is not in
         Reverse.
 
@@ -47,10 +45,11 @@ menu "Test Bypasses"
                 Safety ESP32 heartbeat.
 
         config BYPASS_SAFETY_ESTOP_MIRROR
-            bool "Bypass Safety e-stop mirror: force clear"
+            bool "Bypass Safety stop/fault mirror: force clear"
             default n
             help
-                Ignore Safety e-stop fault code and force estop_fault_code=NONE
+                Ignore Safety stop/fault channels and force
+                safety_fault_flags=NONE, safety_stop_flags=NONE
                 in Control task inputs and logs.
 
         config BYPASS_SAFETY_LIVENESS_CHECKS
@@ -100,23 +99,17 @@ menu "Test Bypasses"
 
     menu "Actuators"
 
-        config BYPASS_ACTUATOR_MULTIPLEXER
-            bool "Bypass multiplexer actuator"
+        config BYPASS_ACTUATOR_THROTTLE
+            bool "Bypass throttle actuator (digipot + DPDT relay)"
             default n
             help
-                Skip analog multiplexer and throttle relay control.
-
-        config BYPASS_ACTUATOR_PEDAL_RELAY
-            bool "Bypass pedal relay actuator"
-            default n
-            help
-                Skip pedal bypass relay control.
+                Skip MCP41HV51 digital potentiometer and MY5NJ DPDT relay control.
 
         config BYPASS_ACTUATOR_STEPPER_STEERING
             bool "Bypass steering stepper actuator"
             default n
             help
-                Skip steering stepper motor (node 5) initialization,
+                Skip steering stepper motor (node 7) initialization,
                 configuration, and CAN commands.
 
         config BYPASS_ACTUATOR_STEPPER_BRAKING
@@ -214,18 +207,18 @@ menu "Debug Logging"
                 Log each failed TWAI retry while TWAI is unavailable.
                 Rate-limited: first attempt + every 20th.
 
-        config LOG_RETRY_MULTIPLEXER
-            bool "Log multiplexer retry attempts"
+        config LOG_RETRY_DIGIPOT
+            bool "Log digipot retry attempts"
             default n
             help
-                Log each failed multiplexer re-initialization attempt.
+                Log each failed MCP41HV51 digipot re-initialization attempt.
                 Rate-limited: first attempt + every 20th.
 
-        config LOG_RETRY_PEDAL_RELAY
-            bool "Log pedal relay retry attempts"
+        config LOG_RETRY_DPDT_RELAY
+            bool "Log DPDT relay retry attempts"
             default n
             help
-                Log each failed pedal-relay re-initialization attempt.
+                Log each failed MY5NJ DPDT relay re-initialization attempt.
                 Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_PEDAL_INPUT
@@ -295,14 +288,14 @@ menu "Debug Logging"
             default n
             help
                 Log when a driver override is triggered with the reason
-                (pedal, F/R change, steering/braking position error).
+                (reverse, throttle, steering, braking).
 
         config LOG_CONTROL_SAFETY_TARGET_CHANGES
             bool "Log received Safety target/fault changes"
             default y
             help
                 Log edge-triggered changes in the Safety target state and
-                estop fault code as received by Control. These reflect what
+                stop/fault flags as received by Control. These reflect what
                 Safety is broadcasting, not Control's own state.
 
         config LOG_CONTROL_STATE_TICK
@@ -359,28 +352,21 @@ menu "Debug Logging"
 
     menu "Actuators"
 
-        config LOG_ACTUATOR_MUX_LEVEL
-            bool "Log multiplexer level changes"
+        config LOG_ACTUATOR_DIGIPOT_WIPER
+            bool "Log digipot wiper changes"
             default n
             help
-                Log each DG408DJZ multiplexer level change.
+                Log each MCP41HV51 digipot wiper position change.
 
-        config LOG_ACTUATOR_PEDAL_RELAY
-            bool "Log pedal relay state changes"
+        config LOG_ACTUATOR_DPDT_RELAY
+            bool "Log DPDT relay state changes"
             default n
             help
-                Log pedal bypass relay energize/de-energize transitions.
+                Log MY5NJ DPDT relay energize/de-energize transitions.
 
     endmenu
 
     menu "Heartbeat LED"
-
-        config LOG_HEARTBEAT_LED_STATE_CHANGES
-            bool "Log heartbeat LED color/reason changes"
-            default n
-            help
-                Log when the WS2812 heartbeat LED changes color or blink
-                pattern due to a state change.
 
         config LOG_HEARTBEAT_LED_COLOR_UPDATES
             bool "Log heartbeat LED color updates"

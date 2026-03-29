@@ -65,15 +65,12 @@ int heartbeat_monitor_register(heartbeat_monitor_t *mon, const char *name, uint3
 // Runtime Updates
 // ============================================================================
 
-void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, heartbeat_seq_t sequence, node_state_t state)
+void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, node_seq_t sequence, node_state_t state)
 {
 	if (!mon || node_id < 0)
 		return;
 
 	TickType_t now = xTaskGetTickCount();
-	bool was_alive;
-	bool had_seen_heartbeat;
-	char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN] = {};
 
 	taskENTER_CRITICAL(&mon->lock);
 	if (node_id >= mon->node_count)
@@ -87,28 +84,24 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, heartbeat_s
 		return;
 	}
 
-	was_alive = mon->nodes[node_id].alive;
-	had_seen_heartbeat = mon->nodes[node_id].seen_heartbeat;
+#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
+	bool was_alive = mon->nodes[node_id].alive;
+	bool had_seen_heartbeat = mon->nodes[node_id].seen_heartbeat;
+	char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN] = {};
+	strncpy(name, mon->nodes[node_id].name, sizeof(name) - 1);
+	name[sizeof(name) - 1] = '\0';
+#endif
+
 	mon->nodes[node_id].last_seen = now;
 	mon->nodes[node_id].seen_heartbeat = true;
 	mon->nodes[node_id].last_sequence = sequence;
 	mon->nodes[node_id].last_state = state;
 	mon->nodes[node_id].alive = true;
-	strncpy(name, mon->nodes[node_id].name, sizeof(name) - 1);
-	name[sizeof(name) - 1] = '\0';
 	taskEXIT_CRITICAL(&mon->lock);
 
-	// Log lost/regained transitions independently from frame RX logs.
 #ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
-	if (!was_alive)
-	{
-		if (had_seen_heartbeat)
-			ESP_LOGI(mon->tag, "%s regained", name);
-	}
-#else
-	(void)was_alive;
-	(void)had_seen_heartbeat;
-	(void)name;
+	if (!was_alive && had_seen_heartbeat)
+		ESP_LOGI(mon->tag, "%s regained", name);
 #endif
 }
 
@@ -183,123 +176,4 @@ bool heartbeat_monitor_is_alive(heartbeat_monitor_t *mon, int node_id)
 	alive = mon->nodes[node_id].active && mon->nodes[node_id].alive;
 	taskEXIT_CRITICAL(&mon->lock);
 	return alive;
-}
-
-bool heartbeat_monitor_all_alive(heartbeat_monitor_t *mon)
-{
-	if (!mon)
-		return false;
-
-	bool all_alive = true;
-	taskENTER_CRITICAL(&mon->lock);
-	for (int i = 0; i < mon->node_count; i++)
-	{
-		if (mon->nodes[i].active && !mon->nodes[i].alive)
-		{
-			all_alive = false;
-			break;
-		}
-	}
-	taskEXIT_CRITICAL(&mon->lock);
-	return all_alive;
-}
-
-bool heartbeat_monitor_get_status(heartbeat_monitor_t *mon, int node_id, heartbeat_monitor_node_t *out_status)
-{
-	if (!mon || node_id < 0 || !out_status)
-		return false;
-
-	taskENTER_CRITICAL(&mon->lock);
-	if (node_id >= mon->node_count)
-	{
-		taskEXIT_CRITICAL(&mon->lock);
-		return false;
-	}
-	if (!mon->nodes[node_id].active)
-	{
-		taskEXIT_CRITICAL(&mon->lock);
-		return false;
-	}
-	*out_status = mon->nodes[node_id];
-	taskEXIT_CRITICAL(&mon->lock);
-	return true;
-}
-
-uint8_t heartbeat_monitor_get_timeout_mask(heartbeat_monitor_t *mon)
-{
-	if (!mon)
-		return 0;
-
-	uint8_t mask = 0;
-	taskENTER_CRITICAL(&mon->lock);
-	for (int i = 0; i < mon->node_count && i < 8; i++)
-		if (mon->nodes[i].active && mon->nodes[i].seen_heartbeat && !mon->nodes[i].alive)
-			mask |= (1 << i);
-
-	taskEXIT_CRITICAL(&mon->lock);
-	return mask;
-}
-
-// ============================================================================
-// Debugging
-// ============================================================================
-
-void heartbeat_monitor_log_status(heartbeat_monitor_t *mon)
-{
-	if (!mon)
-		return;
-
-#ifdef CONFIG_LOG_CAN_HEARTBEAT_RX
-	ESP_LOGI(mon->tag, "--- Node Status ---");
-
-	// Snapshot all node data inside a single critical section, log outside.
-	struct
-	{
-		char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN];
-		bool alive;
-		bool seen_heartbeat;
-		TickType_t last_seen;
-	} snaps[HEARTBEAT_MONITOR_MAX_NODES];
-	int snap_count = 0;
-
-	taskENTER_CRITICAL(&mon->lock);
-	for (int i = 0; i < mon->node_count && i < HEARTBEAT_MONITOR_MAX_NODES; i++)
-	{
-		if (!mon->nodes[i].active)
-			continue;
-		strncpy(snaps[snap_count].name, mon->nodes[i].name, sizeof(snaps[snap_count].name) - 1);
-		snaps[snap_count].name[sizeof(snaps[snap_count].name) - 1] = '\0';
-		snaps[snap_count].alive = mon->nodes[i].alive;
-		snaps[snap_count].seen_heartbeat = mon->nodes[i].seen_heartbeat;
-		snaps[snap_count].last_seen = mon->nodes[i].last_seen;
-		snap_count++;
-	}
-	taskEXIT_CRITICAL(&mon->lock);
-
-	int alive_count = 0, dead_count = 0, never_seen_count = 0;
-	TickType_t now = xTaskGetTickCount();
-
-	for (int i = 0; i < snap_count; i++)
-	{
-		if (snaps[i].alive)
-		{
-			ESP_LOGI(mon->tag, "  [OK]  %s", snaps[i].name);
-			alive_count++;
-		}
-		else if (!snaps[i].seen_heartbeat)
-		{
-			ESP_LOGI(mon->tag, "  [--]  %s (never seen)", snaps[i].name);
-			never_seen_count++;
-		}
-		else
-		{
-			TickType_t elapsed = now - snaps[i].last_seen;
-			ESP_LOGI(mon->tag, "  [!!]  %s (dead, last seen %lu ms ago)", snaps[i].name,
-			         (unsigned long)(elapsed * portTICK_PERIOD_MS));
-			dead_count++;
-		}
-	}
-
-	ESP_LOGI(mon->tag, "Summary: %d alive, %d dead, %d never seen", alive_count, dead_count, never_seen_count);
-#endif
 }

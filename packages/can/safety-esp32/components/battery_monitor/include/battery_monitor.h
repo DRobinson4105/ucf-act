@@ -2,15 +2,15 @@
  * @file battery_monitor.h
  * @brief Battery pack voltage, current, and SOC monitoring for 48V lead-acid.
  *
- * Reads pack voltage via a resistor divider and pack current via an
- * ACS758LCB hall-effect current sensor, both through ESP32-C6 ADC1
+ * Reads pack voltage via a resistor divider and pack current via a
+ * Hall-effect current sensor, both through ESP32-C6 ADC1
  * channels.  Estimates state of charge using a voltage lookup table
  * with coulomb-counting refinement.
  *
  * Hardware assumptions:
  *   - 6 × 8V lead-acid batteries in series (48V nominal, 24 cells)
- *   - Voltage divider (e.g. 180kΩ / 10kΩ) scales pack voltage to 0-3.3V
- *   - ACS758LCB-100B current sensor with optional output divider
+ *   - Voltage divider (e.g. 220kΩ / 10kΩ) scales pack voltage to 0-3.3V
+ *   - Hall-effect current sensor (e.g. LEM HTFS-200-P) with output divider
  *   - Both sensor outputs connected to ADC1 channels on the ESP32-C6
  */
 
@@ -31,11 +31,11 @@ typedef struct
 {
 	int voltage_gpio;           // GPIO for pack voltage divider (must be on ADC1)
 	int current_gpio;           // GPIO for current sensor output (must be on ADC1)
-	uint16_t divider_ratio;     // Voltage divider multiplier (e.g. 19 for 180k/10k)
+	uint16_t divider_ratio;     // Voltage divider multiplier (e.g. 23 for 220k/10k)
 	uint16_t current_zero_mv;   // Sensor output at 0A in mV (e.g. 2500 for 5V supply)
-	uint16_t current_sens_uv;   // Sensor sensitivity in µV/mA (e.g. 20 for 20mV/A)
-	float current_output_scale; // Output divider ratio applied to sensor (e.g. 0.6)
-	uint32_t capacity_mah;      // Nominal battery capacity in mAh (e.g. 150000)
+	float current_sens_uv;      // Sensor sensitivity in µV/mA (e.g. 6.25 for 6.25mV/A)
+	float current_output_scale; // Output divider ratio applied to sensor (e.g. 0.5952)
+	uint32_t capacity_mah;      // Nominal battery capacity in mAh (e.g. 170000 for 170Ah)
 } battery_monitor_config_t;
 
 /**

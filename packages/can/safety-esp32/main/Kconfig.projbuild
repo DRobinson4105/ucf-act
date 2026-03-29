@@ -65,13 +65,13 @@ menu "Test Bypasses"
             bool "Bypass push button input: force inactive"
             default n
             help
-                Force push button e-stop reading to inactive (not pressed).
+                Force push button reading to inactive (not pressed).
 
         config BYPASS_INPUT_RF_REMOTE
             bool "Bypass RF remote input: force inactive"
             default n
             help
-                Force RF remote e-stop reading to inactive (not engaged).
+                Force RF remote reading to inactive (not engaged).
 
         config BYPASS_INPUT_ULTRASONIC
             bool "Bypass ultrasonic input: force clear and healthy"
@@ -94,6 +94,43 @@ menu "Debug Logging"
 
     menu "CAN Traffic"
 
+        config LOG_CAN_FRAMES
+            bool "Log raw CAN frames (TX and RX)"
+            default n
+            help
+                Log every CAN frame at the TWAI driver layer. Very verbose —
+                one line per frame sent or received.
+
+        config LOG_CAN_FRAMES_MOTORS_ONLY
+            bool "Log stepper motor frames only (suppress all standard frames)"
+            default n
+            depends on LOG_CAN_FRAMES
+            help
+                Only log extended CAN frames (stepper motor traffic).
+                Suppresses standard frames (heartbeats). Overrides the
+                individual heartbeat suppress options below.
+
+        config LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB
+            bool "Suppress Safety heartbeat frames (0x100) from frame log"
+            default n
+            depends on LOG_CAN_FRAMES
+            help
+                Exclude Safety heartbeat frames from the raw frame log.
+
+        config LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB
+            bool "Suppress Planner heartbeat frames (0x110) from frame log"
+            default n
+            depends on LOG_CAN_FRAMES
+            help
+                Exclude Planner heartbeat frames from the raw frame log.
+
+        config LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB
+            bool "Suppress Control heartbeat frames (0x120) from frame log"
+            default n
+            depends on LOG_CAN_FRAMES
+            help
+                Exclude Control heartbeat frames from the raw frame log.
+
         config LOG_CAN_HEARTBEAT_TX
             bool "Log CAN heartbeat TX: every frame"
             default n
@@ -107,9 +144,8 @@ menu "Debug Logging"
             default n
             help
                 Log every received Planner and Control heartbeat with sequence,
-                state, fault code, and flags. Very verbose (up to 20 msgs/sec
-                with both nodes). For edge-triggered node state/fault change
-                logs, use the separate options under Safety Logic instead.
+                state, fault flags, and status flags. Very verbose (up to
+                20 msgs/sec with both nodes).
 
     endmenu
 
@@ -185,27 +221,28 @@ menu "Debug Logging"
                 (latched, consumed, re-armed).
 
         config LOG_SAFETY_FAULT_CHANGES
-            bool "Log Safety estop fault code changes"
+            bool "Log Safety fault flag changes"
             default y
             help
-                Log each estop fault code transition (e.g. none -> ultrasonic,
-                ultrasonic -> none). Edge-triggered on fault code change.
+                Log each fault flag transition (e.g. none -> ultrasonic,
+                ultrasonic -> none). Edge-triggered on fault flags change.
 
         config LOG_SAFETY_ESTOP_INPUTS
-            bool "Log Safety e-stop inputs: every cycle (verbose)"
+            bool "Log Safety stop/fault inputs: every cycle (verbose)"
             default n
             help
-                Log all e-stop input readings on every safety loop tick (20Hz).
-                Includes push button, RF remote, ultrasonic, and node states.
-                Extremely verbose — use only for detailed input debugging.
+                Log all stop/fault input readings on every safety loop tick
+                (20Hz). Includes push button, RF remote, ultrasonic, and
+                node states. Extremely verbose — use only for detailed
+                input debugging.
 
         config LOG_SAFETY_STATE_TICK
             bool "Log Safety state evaluation: every cycle (verbose)"
             default n
             help
                 Log the full state evaluation on every safety loop tick (20Hz).
-                Includes estop status, node states, autonomy request, and
-                target state old/new. Extremely verbose.
+                Includes stop/fault status, node states, autonomy request,
+                and target state old/new. Extremely verbose.
 
     endmenu
 
@@ -268,13 +305,6 @@ menu "Debug Logging"
     endmenu
 
     menu "Heartbeat LED"
-
-        config LOG_HEARTBEAT_LED_STATE_CHANGES
-            bool "Log heartbeat LED color/reason changes"
-            default n
-            help
-                Log when the WS2812 heartbeat LED changes color or blink
-                pattern due to a state change.
 
         config LOG_HEARTBEAT_LED_COLOR_UPDATES
             bool "Log heartbeat LED color updates"
