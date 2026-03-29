@@ -6,7 +6,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    params = osp.join(get_package_share_directory("bringup"), "config", "nav2_no_map.yaml")
+    params = osp.join(get_package_share_directory("bringup"), "config", "navigation.yaml")
 
     return LaunchDescription([
         Node(
@@ -51,20 +51,21 @@ def generate_launch_description():
                 "local_costmap_topic": "/local_costmap/costmap_raw",
                 "speed_limit_topic": "/speed_limit",
                 "max_start_goal_distance_m": 35.0,
-                "goal_ahead_m": 8.0,
+                "goal_ahead_m": 15.0,
                 "replan_period_s": 0.75,
                 "stuck_time_s": 10.0,
                 "stuck_dist_m": 0.25,
-                "min_follow_replace_period_s": 2.0,
+                "min_follow_replace_period_s": 1.5,
+                "follow_path_key_resolution_m": 0.5,
                 "speed_limit_publish_hz": 10.0,
                 "speed_limit_max_mps": 3.58,
                 "speed_limit_crawl_mps": 0.4,
                 "speed_limit_fallback_mps": 0.75,
-                "speed_limit_comfort_decel_mps2": 1.0,
-                "speed_limit_reaction_time_s": 1.0,
-                "speed_limit_buffer_m": 3.0,
-                "speed_limit_cost_threshold": 100,
-                "speed_limit_cap_rise_mps2": 1.0,
+                "speed_limit_comfort_decel_mps2": 1.5,
+                "speed_limit_reaction_time_s": 0.75,
+                "speed_limit_buffer_m": 2.0,
+                "speed_limit_cost_threshold": 180,
+                "speed_limit_cap_rise_mps2": 2.5,
                 "env_sample_step_m": 0.25,
                 "path_speed_v_min_mps": 0.2,
                 "path_speed_a_lat_max_mps2": 1.0,

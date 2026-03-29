@@ -28,29 +28,34 @@ def generate_launch_description():
         include("bringup", "localization.launch.py"),
         #include("perception", "seg_all.launch.py"),
         include("perception", "lidar_filter.launch.py"),
-        include("bringup", "nav2_no_map.launch.py"),
+        include("bringup", "navigation.launch.py"),
 
         Node(
             package="navigation",
-            executable="act_global_path_manager",
-            name="act_global_path_manager",
+            executable="global_path_manager",
+            name="global_path_manager",
             output="screen",
             parameters=[{
                 "map_frame": "odom",
                 "input_topic": "/ui/global_route_wgs84_json",
                 "output_topic_clean": "/global_path",
                 "output_topic_raw": "/global_path_raw",
-                "datum_lat": 28.6017759,
-                "datum_lon": -81.2005371,
+                "auto_datum_from_fix": True,
+                "fix_topic": "/fix",
+                # "datum_lat": 28.6017759, # Set auto_datum_from_fix -> False to use hardcoded datum
+                # "datum_lon": -81.2005371,
                 "datum_alt": 0.0,
+                "datum_covariance_threshold_m2": 25.0,
+                "datum_wait_timeout_s": 5.0,
+                "current_fix_max_age_s": 3.0,
                 "v_max_mps": 3.58,
                 "a_lat_max_mps2": 1.0
             }],
         ),
         # Node(
         #     package="navigation",
-        #     executable="clicked_point_path_publisher",
-        #     name="clicked_point_path_publisher",
+        #     executable="clicked_point_to_path",
+        #     name="clicked_point_to_path",
         #     output="screen",
         #     parameters=[{
         #         "global_frame": "odom",
@@ -68,7 +73,7 @@ def generate_launch_description():
             parameters=[{
                 "cmd_in_topic": "/cmd_vel_nav",
                 "odom_topic": "/odometry/local",
-                "out_topic": "/act/drive_cmd",
+                "can_topic": "/act/drive_cmd",
                 "speed_limit_topic": "/speed_limit",
                 "publish_hz": 25.0,
                 "v_max": 3.58,
@@ -76,7 +81,7 @@ def generate_launch_description():
                 "a_max": 1.0,
                 "d_max": 1.5,
                 "w_acc_max": 2.0,
-                "speed_limit_timeout_s": 0.5,
+                "speed_limit_timeout_s": 1.0,
                 "min_turning_r": 2.8
             }],
         ),

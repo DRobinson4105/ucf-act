@@ -50,6 +50,7 @@ public:
     goal_ahead_m_ = declare_parameter<double>("goal_ahead_m", 25.0);
     replan_period_s_ = declare_parameter<double>("replan_period_s", 0.5);
     min_follow_replace_period_s_ = declare_parameter<double>("min_follow_replace_period_s", 2.0);
+    follow_path_key_resolution_m_ = declare_parameter<double>("follow_path_key_resolution_m", 0.5);
 
     stuck_time_s_ = declare_parameter<double>("stuck_time_s", 3.0);
     stuck_dist_m_ = declare_parameter<double>("stuck_dist_m", 0.25);
@@ -217,6 +218,16 @@ private:
     publishSpeedLimitValue(0.0);
   }
 
+  void clearActiveLocalPlan() {
+    have_local_plan_ = false;
+    latest_local_plan_ = nav_msgs::msg::Path();
+  }
+
+  void setActiveLocalPlan(const nav_msgs::msg::Path &path) {
+    latest_local_plan_ = path;
+    have_local_plan_ = latest_local_plan_.poses.size() >= 2;
+  }
+
   void resetSpeedLimitState() {
     have_last_speed_limit_cap_ = false;
     last_speed_limit_cap_mps_ = speed_limit_max_mps_;
@@ -229,11 +240,10 @@ private:
     active_follow_token_++;
 
     have_path_ = false;
-    have_local_plan_ = false;
     planning_ = false;
     stuck_ = false;
     global_path_ = nav_msgs::msg::Path();
-    latest_local_plan_ = nav_msgs::msg::Path();
+    clearActiveLocalPlan();
     monotonic_i_ = 0;
     nearest_i_ = 0;
     active_follow_path_key_.clear();
@@ -262,8 +272,7 @@ private:
 
     global_path_ = *msg;
     have_path_ = true;
-    have_local_plan_ = false;
-    latest_local_plan_ = nav_msgs::msg::Path();
+    clearActiveLocalPlan();
 
     if (go_to_start_) {
       mode_ = Mode::GO_TO_START;
@@ -647,23 +656,19 @@ private:
       planning_ = false;
       if (route_version != route_version_) return;
       if (res.code != rclcpp_action::ResultCode::SUCCEEDED || !res.result) {
-        have_local_plan_ = false;
-        latest_local_plan_ = nav_msgs::msg::Path();
+        if (!active_follow_) clearActiveLocalPlan();
         return;
       }
 
       const auto &path = res.result->path;
       if (path.poses.size() < 2) {
-        have_local_plan_ = false;
-        latest_local_plan_ = nav_msgs::msg::Path();
+        if (!active_follow_) clearActiveLocalPlan();
         return;
       }
 
-      latest_local_plan_ = path;
-      have_local_plan_ = true;
       planned_path_pub_->publish(path);
 
-      const std::string path_key = makePathKey(path, 0.25);
+      const std::string path_key = makePathKey(path, follow_path_key_resolution_m_);
 
       if (active_follow_) {
         const double since_last_follow_send = (now() - last_follow_send_time_).seconds();
@@ -684,6 +689,7 @@ private:
       follow_client_->async_cancel_all_goals();
     }
     last_follow_send_time_ = now();
+    setActiveLocalPlan(path);
 
     FollowPath::Goal fg;
     fg.path = path;
@@ -698,6 +704,7 @@ private:
       if (!h) {
         active_follow_.reset();
         active_follow_path_key_.clear();
+        clearActiveLocalPlan();
         return;
       }
       active_follow_ = h;
@@ -708,6 +715,7 @@ private:
       if (follow_token != active_follow_token_) return;
       active_follow_.reset();
       active_follow_path_key_.clear();
+      clearActiveLocalPlan();
     };
 
     follow_client_->async_send_goal(fg, opts);
@@ -733,6 +741,7 @@ private:
   double goal_ahead_m_{25.0};
   double replan_period_s_{0.5};
   double min_follow_replace_period_s_{2.0};
+  double follow_path_key_resolution_m_{0.5};
   double stuck_time_s_{3.0};
   double stuck_dist_m_{0.25};
 

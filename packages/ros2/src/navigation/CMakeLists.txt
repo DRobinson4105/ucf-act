@@ -26,23 +26,24 @@ if(TARGET GeographicLib::GeographicLib)
   set(_GEOLIB_TARGET GeographicLib::GeographicLib)
 endif()
 
-add_executable(act_global_path_manager src/act_global_path_manager.cpp)
-ament_target_dependencies(act_global_path_manager
+add_executable(global_path_manager src/global_path_manager.cpp)
+ament_target_dependencies(global_path_manager
   rclcpp
   std_msgs
   geometry_msgs
   nav_msgs
+  sensor_msgs
 )
 
 if(TARGET GeographicLib::GeographicLib)
-  target_link_libraries(act_global_path_manager GeographicLib::GeographicLib)
+  target_link_libraries(global_path_manager GeographicLib::GeographicLib)
 else()
-  target_include_directories(act_global_path_manager PRIVATE ${GeographicLib_INCLUDE_DIRS})
-  target_link_libraries(act_global_path_manager ${GeographicLib_LIBRARIES})
+  target_include_directories(global_path_manager PRIVATE ${GeographicLib_INCLUDE_DIRS})
+  target_link_libraries(global_path_manager ${GeographicLib_LIBRARIES})
 endif()
 
-add_executable(fake_odom_integrator src/fake_odom_integrator.cpp)
-ament_target_dependencies(fake_odom_integrator
+add_executable(mock_odom src/mock_odom.cpp)
+ament_target_dependencies(mock_odom
   rclcpp
   geometry_msgs
   nav_msgs
@@ -69,22 +70,14 @@ ament_target_dependencies(mock_livox_pointcloud_publisher
   tf2_geometry_msgs
 )
 
-add_executable(clicked_point_path_publisher src/clicked_point_path_publisher.cpp)
-ament_target_dependencies(clicked_point_path_publisher
+add_executable(clicked_point_to_path src/clicked_point_to_path.cpp)
+ament_target_dependencies(clicked_point_to_path
   rclcpp
   geometry_msgs
   nav_msgs
   tf2
   tf2_ros
   tf2_geometry_msgs
-)
-
-add_executable(follow_path_client src/follow_path_client.cpp)
-ament_target_dependencies(follow_path_client
-  rclcpp
-  rclcpp_action
-  nav_msgs
-  nav2_msgs
 )
 
 add_executable(route_navigator src/route_navigator.cpp)
@@ -102,12 +95,11 @@ ament_target_dependencies(route_navigator
 
 
 install(TARGETS
-  act_global_path_manager
-  fake_odom_integrator
+  global_path_manager
+  mock_odom
   cmd_vel_adapter
   mock_livox_pointcloud_publisher
-  clicked_point_path_publisher
-  follow_path_client
+  clicked_point_to_path
   route_navigator
   DESTINATION lib/${PROJECT_NAME}
 )

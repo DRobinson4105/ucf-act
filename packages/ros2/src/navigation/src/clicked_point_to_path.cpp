@@ -12,9 +12,9 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
-class ClickedPointPathPublisher : public rclcpp::Node {
+class ClickedPointToPath : public rclcpp::Node {
 public:
-  ClickedPointPathPublisher() : rclcpp::Node("clicked_point_path_publisher"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_) {
+  ClickedPointToPath() : rclcpp::Node("clicked_point_to_path"), tf_buffer_(this->get_clock()), tf_listener_(tf_buffer_) {
     global_frame_ = this->declare_parameter<std::string>("global_frame", "odom");
     base_frame_ = this->declare_parameter<std::string>("base_frame", "base_link");
     clicked_topic_ = this->declare_parameter<std::string>("clicked_topic", "/clicked_point");
@@ -26,7 +26,7 @@ public:
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>(path_topic_, qos);
 
     clicked_sub_ = this->create_subscription<geometry_msgs::msg::PointStamped>(
-        clicked_topic_, 10, std::bind(&ClickedPointPathPublisher::onClickedPoint, this, std::placeholders::_1));
+        clicked_topic_, 10, std::bind(&ClickedPointToPath::onClickedPoint, this, std::placeholders::_1));
   }
 
 private:
@@ -108,7 +108,7 @@ private:
 
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<ClickedPointPathPublisher>());
+  rclcpp::spin(std::make_shared<ClickedPointToPath>());
   rclcpp::shutdown();
   return 0;
 }
