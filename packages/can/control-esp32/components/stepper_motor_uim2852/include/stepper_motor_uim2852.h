@@ -91,7 +91,7 @@ typedef struct stepper_motor_uim2852
 
 	// Speed and position from last MS[1] query
 	int32_t current_speed;     // pulses/sec
-	int32_t absolute_position; // pulses from the motor's current origin (MS[1] / PTP-complete)
+	int32_t absolute_position; // pulses
 	int32_t target_position;   // last commanded absolute position (from pt_feed)
 
 	// Tracking
@@ -221,11 +221,7 @@ esp_err_t stepper_motor_uim2852_set_accel(stepper_motor_uim2852_t *motor, uint32
 esp_err_t stepper_motor_uim2852_set_decel(stepper_motor_uim2852_t *motor, uint32_t decel_rate);
 
 /**
- * @brief Set the motor's current physical position as origin (zero).
- *
- * Sends OG to reset the motor's internal position counter. On success, the
- * driver's local absolute/target position caches are also reset to zero.
- * The motor must be stationary when this is called.
+ * @brief Set current position as origin (zero)
  */
 esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
 
@@ -297,10 +293,8 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 esp_err_t stepper_motor_uim2852_query_status(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Query motor speed and absolute position (MS[1]).
- * @note Results stored in motor->current_speed and motor->absolute_position.
- *       absolute_position is reported relative to the motor's current origin,
- *       which is reset by OG.
+ * @brief Query motor position and speed (MS[1])
+ * @note Results stored in motor->current_speed and motor->absolute_position
  */
 esp_err_t stepper_motor_uim2852_query_position(stepper_motor_uim2852_t *motor);
 
@@ -354,7 +348,7 @@ static inline bool stepper_motor_uim2852_has_error(const stepper_motor_uim2852_t
 }
 
 /**
- * @brief Get current absolute position relative to the current origin.
+ * @brief Get current absolute position (from last query)
  */
 static inline int32_t stepper_motor_uim2852_get_position(const stepper_motor_uim2852_t *motor)
 {

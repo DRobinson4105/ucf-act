@@ -22,6 +22,15 @@ static const uint8_t PT_FIFO_PREFILL_FRAMES = 2;
 static const uint16_t PT_START_ROW = 0;
 static const uint16_t PT_TABLE_ROWS = 512;
 
+// MP (motion parameter) register indices for PT/PVT FIFO configuration.
+// See UIM2852CA CAN protocol manual, CW=0x22 (MP) instruction.
+static const uint8_t MP_IDX_RESET = 0x00;     // Reset PT/PVT queue
+static const uint8_t MP_IDX_FIRST_ROW = 0x01; // First row pointer
+static const uint8_t MP_IDX_LAST_ROW = 0x02;  // Last row pointer
+static const uint8_t MP_IDX_MODE = 0x03;      // PT/PVT mode select
+static const uint8_t MP_IDX_FRAME_TIME = 0x04; // Frame time (ms, 16-bit LE)
+static const uint8_t MP_IDX_LOW_WATER = 0x05; // FIFO low-water mark
+
 // (Notification callback is now per-motor, stored in stepper_motor_uim2852_t)
 
 // ============================================================================
@@ -75,34 +84,6 @@ static esp_err_t send_instruction_internal(stepper_motor_uim2852_t *motor, uint8
 static esp_err_t send_instruction(stepper_motor_uim2852_t *motor, uint8_t cw, const uint8_t *data, uint8_t dl)
 {
 	return send_instruction_internal(motor, cw, data, dl, motor->config.request_ack);
-}
-
-static esp_err_t send_ms_query(stepper_motor_uim2852_t *motor, uint8_t index)
-{
-	if (!motor || !motor->initialized)
-		return ESP_ERR_INVALID_STATE;
-
-	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_ms(data, index);
-
-	taskENTER_CRITICAL(&motor->lock);
-	motor->query_pending_cw = STEPPER_UIM2852_CW_MS;
-	motor->query_pending_idx = index;
-	taskEXIT_CRITICAL(&motor->lock);
-
-	esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
-	if (err != ESP_OK)
-	{
-		taskENTER_CRITICAL(&motor->lock);
-		if (motor->query_pending_cw == STEPPER_UIM2852_CW_MS && motor->query_pending_idx == index)
-		{
-			motor->query_pending_cw = 0;
-			motor->query_pending_idx = 0;
-		}
-		taskEXIT_CRITICAL(&motor->lock);
-	}
-
-	return err;
 }
 
 // ============================================================================
@@ -339,15 +320,6 @@ esp_err_t stepper_motor_uim2852_set_decel(stepper_motor_uim2852_t *motor, uint32
 
 esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor)
 {
-	if (!motor || !motor->initialized)
-		return ESP_ERR_INVALID_STATE;
-
-	taskENTER_CRITICAL(&motor->lock);
-	bool motion_in_progress = motor->motion_in_progress;
-	taskEXIT_CRITICAL(&motor->lock);
-	if (motion_in_progress)
-		return ESP_ERR_INVALID_STATE;
-
 	uint8_t data[8];
 	uint8_t dl = stepper_uim2852_build_og(data);
 
@@ -356,8 +328,6 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor)
 	{
 		taskENTER_CRITICAL(&motor->lock);
 		motor->absolute_position = 0;
-		motor->target_position = 0;
-		motor->status.relative_position = 0;
 		taskEXIT_CRITICAL(&motor->lock);
 	}
 	return err;
@@ -381,34 +351,34 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 
 	// Reset the PT/PVT queue and select PT FIFO mode per the manual:
 	// MP[0]=0, MP[1]=0, MP[2]=0, MP[3]=0, MP[4]=frame_time, MP[5]=queue-low.
-	const uint8_t cw22_mp0_data[3] = {0x00, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_mp0_data, 3);
+	const uint8_t mp_reset[3] = {MP_IDX_RESET, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_reset, 3);
 	if (err != ESP_OK)
 		return err;
 
-	const uint8_t cw22_first_row_data[3] = {0x01, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_first_row_data, 3);
+	const uint8_t mp_first_row[3] = {MP_IDX_FIRST_ROW, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_first_row, 3);
 	if (err != ESP_OK)
 		return err;
 
-	const uint8_t cw22_last_row_data[3] = {0x02, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_last_row_data, 3);
+	const uint8_t mp_last_row[3] = {MP_IDX_LAST_ROW, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_last_row, 3);
 	if (err != ESP_OK)
 		return err;
 
-	const uint8_t cw22_data[3] = {0x03, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, cw22_data, 3);
+	const uint8_t mp_mode[3] = {MP_IDX_MODE, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_mode, 3);
 	if (err != ESP_OK)
 		return err;
 
-	data[0] = 0x04;
+	data[0] = MP_IDX_FRAME_TIME;
 	data[1] = (uint8_t)(motor->pt_frame_time_ms & 0xFF);
 	data[2] = (uint8_t)(motor->pt_frame_time_ms >> 8);
 	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
 	if (err != ESP_OK)
 		return err;
 
-	data[0] = 0x05;
+	data[0] = MP_IDX_LOW_WATER;
 	data[1] = motor->pt_low_water_mark;
 	data[2] = 0x00;
 	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
@@ -564,12 +534,16 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 
 esp_err_t stepper_motor_uim2852_query_status(stepper_motor_uim2852_t *motor)
 {
-	return send_ms_query(motor, STEPPER_UIM2852_MS_FLAGS_RELPOS);
+	uint8_t data[8];
+	uint8_t dl = stepper_uim2852_build_ms(data, STEPPER_UIM2852_MS_FLAGS_RELPOS);
+	return send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
 }
 
 esp_err_t stepper_motor_uim2852_query_position(stepper_motor_uim2852_t *motor)
 {
-	return send_ms_query(motor, STEPPER_UIM2852_MS_SPEED_ABSPOS);
+	uint8_t data[8];
+	uint8_t dl = stepper_uim2852_build_ms(data, STEPPER_UIM2852_MS_SPEED_ABSPOS);
+	return send_instruction(motor, STEPPER_UIM2852_CW_MS, data, dl);
 }
 
 esp_err_t stepper_motor_uim2852_clear_status(stepper_motor_uim2852_t *motor)
@@ -597,12 +571,10 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 	if (!stepper_uim2852_parse_can_id(msg->identifier, &producer_id, &cw))
 		return false;
 
-	// UIM2852 responses publish the motor node ID as the producer ID in the
-	// extended CAN identifier, so reject frames from other stepper nodes
-	// before any status/notify/error state is updated.
-	if (producer_id != motor->config.node_id)
-		return false;
-
+	// Both motors respond with producer_id=1.  Route frames by checking
+	// whether this motor is actively waiting for a response.  For
+	// unsolicited frames (status polls, notifications, errors), accept
+	// on any instance — the caller's !matched guard prevents duplicates.
 	uint8_t cw_base_peek = stepper_uim2852_cw_base(cw);
 
 	bool is_unsolicited = (cw_base_peek == STEPPER_UIM2852_CW_MS || cw_base_peek == STEPPER_UIM2852_CW_NOTIFY ||
@@ -787,12 +759,13 @@ bool stepper_motor_uim2852_check_liveness(const stepper_motor_uim2852_t *motor, 
 	TickType_t last_response_tick = m->last_response_tick;
 	taskEXIT_CRITICAL(&m->lock);
 
-	// Only flag timeout if the driver has been enabled (we expect responses)
-	// and at least one response has been received (last_response_tick != 0).
+	// Only flag timeout if the driver has been enabled (we expect responses).
 	if (!driver_enabled)
 		return false;
+
+	// Motor never responded since being enabled — treat as unresponsive.
 	if (last_response_tick == 0)
-		return false;
+		return true;
 
 	TickType_t elapsed = now_tick - last_response_tick;
 	return (elapsed > timeout_ticks);
