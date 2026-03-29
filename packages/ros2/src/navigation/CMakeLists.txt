@@ -32,6 +32,7 @@ ament_target_dependencies(global_path_manager
   std_msgs
   geometry_msgs
   nav_msgs
+  sensor_msgs
 )
 
 if(TARGET GeographicLib::GeographicLib)

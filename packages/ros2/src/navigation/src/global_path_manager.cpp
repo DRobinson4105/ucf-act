@@ -5,10 +5,12 @@
 #include <nlohmann/json.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -34,6 +36,27 @@ struct XY {
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 
+struct DatumFallback {
+  double lat;
+  double lon;
+};
+
+struct FixSnapshot {
+  double lat{0.0};
+  double lon{0.0};
+  double alt{0.0};
+  double horizontalCovarianceM2{std::numeric_limits<double>::infinity()};
+  rclcpp::Time stamp;
+  bool valid{false};
+  bool covarianceKnown{false};
+  bool covarianceOk{false};
+};
+
+constexpr std::array<DatumFallback, 2> kDatumFallbacks{{
+  {28.6017759, -81.2005371},
+  {28.5188, -81.6701},
+}};
+
 double distXy(const XY &a, const XY &b) {
   const double dx = a.x - b.x;
   const double dy = a.y - b.y;
@@ -41,6 +64,41 @@ double distXy(const XY &a, const XY &b) {
 }
 
 double clampDouble(double v, double lo, double hi) { return std::max(lo, std::min(hi, v)); }
+
+double degToRad(double deg) { return deg * kPi / 180.0; }
+
+bool isValidLatLon(double lat, double lon) {
+  return std::isfinite(lat) && std::isfinite(lon) &&
+         lat >= -90.0 && lat <= 90.0 &&
+         lon >= -180.0 && lon <= 180.0;
+}
+
+double haversineDistanceM(double lat1, double lon1, double lat2, double lon2) {
+  constexpr double kEarthRadiusM = 6371000.0;
+  const double p1 = degToRad(lat1);
+  const double p2 = degToRad(lat2);
+  const double dp = degToRad(lat2 - lat1);
+  const double dl = degToRad(lon2 - lon1);
+  const double sinDp = std::sin(dp * 0.5);
+  const double sinDl = std::sin(dl * 0.5);
+  const double a = sinDp * sinDp + std::cos(p1) * std::cos(p2) * sinDl * sinDl;
+  const double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(std::max(0.0, 1.0 - a)));
+  return kEarthRadiusM * c;
+}
+
+double horizontalCovarianceMetricM2(const sensor_msgs::msg::NavSatFix &msg) {
+  if (msg.position_covariance_type == sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_UNKNOWN) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  const double xx = msg.position_covariance[0];
+  const double yy = msg.position_covariance[4];
+  if (!std::isfinite(xx) || !std::isfinite(yy) || xx < 0.0 || yy < 0.0) {
+    return std::numeric_limits<double>::infinity();
+  }
+
+  return std::max(xx, yy);
+}
 
 double wrapAngleRad(double a) {
   while (a > kPi)
@@ -525,6 +583,11 @@ struct Config {
   double datumLat;
   double datumLon;
   double datumAlt;
+  bool autoDatumFromFix;
+  std::string fixTopic;
+  double datumCovarianceThresholdM2;
+  double datumWaitTimeoutS;
+  double currentFixMaxAgeS;
 
   int maxInputPoints;
 
@@ -587,6 +650,11 @@ public:
     cfg.datumLat = this->declare_parameter<double>("datum_lat", 0.0);
     cfg.datumLon = this->declare_parameter<double>("datum_lon", 0.0);
     cfg.datumAlt = this->declare_parameter<double>("datum_alt", 0.0);
+    cfg.autoDatumFromFix = this->declare_parameter<bool>("auto_datum_from_fix", false);
+    cfg.fixTopic = this->declare_parameter<std::string>("fix_topic", "/fix");
+    cfg.datumCovarianceThresholdM2 = this->declare_parameter<double>("datum_covariance_threshold_m2", 25.0);
+    cfg.datumWaitTimeoutS = this->declare_parameter<double>("datum_wait_timeout_s", 5.0);
+    cfg.currentFixMaxAgeS = this->declare_parameter<double>("current_fix_max_age_s", 3.0);
 
     cfg.maxInputPoints = this->declare_parameter<int>("max_input_points", 50000);
 
@@ -627,8 +695,21 @@ public:
     {
       std::lock_guard<std::mutex> lk(cfgMutex_);
       cfg_ = cfg;
-      localCartesian_ = std::make_shared<GeographicLib::LocalCartesian>(cfg.datumLat, cfg.datumLon, cfg.datumAlt);
+      if (cfg.autoDatumFromFix) {
+        localCartesian_.reset();
+      } else {
+        localCartesian_ = std::make_shared<GeographicLib::LocalCartesian>(cfg.datumLat, cfg.datumLon, cfg.datumAlt);
+      }
     }
+
+    {
+      std::lock_guard<std::mutex> lk(datumMutex_);
+      datumReady_ = !cfg.autoDatumFromFix;
+      datumShutdown_ = false;
+    }
+    datumSource_ = cfg.autoDatumFromFix ? "pending" : "parameters";
+    datumUsedFallback_ = false;
+    datumStartTime_ = this->now();
 
     const auto outQos = buildQosFromParams(cfg.outputReliability, cfg.outputDurability, cfg.outputDepth);
     rawPub_ = this->create_publisher<nav_msgs::msg::Path>(cfg.outputTopicRaw, outQos);
@@ -642,20 +723,37 @@ public:
     const auto inQos = buildQosFromParams(cfg.inputReliability, cfg.inputDurability, cfg.inputDepth);
     routeSub_ =
         this->create_subscription<std_msgs::msg::String>(cfg.inputTopic, inQos, std::bind(&GlobalPathManager::onRouteJson, this, std::placeholders::_1));
+    fixSub_ = this->create_subscription<sensor_msgs::msg::NavSatFix>(
+      cfg.fixTopic, rclcpp::SensorDataQoS(), std::bind(&GlobalPathManager::onFix, this, std::placeholders::_1));
 
     paramsCb_ = this->add_on_set_parameters_callback(std::bind(&GlobalPathManager::onSetParameters, this, std::placeholders::_1));
 
     workerRunning_ = true;
     worker_ = std::thread([this]() { workerLoop(); });
+    if (cfg.autoDatumFromFix) {
+      datumTimer_ = this->create_wall_timer(std::chrono::milliseconds(100), std::bind(&GlobalPathManager::onDatumTimer, this));
+    }
 
     RCLCPP_INFO(this->get_logger(), "global_path_manager ready");
-    RCLCPP_INFO(this->get_logger(), "datum lat=%.9f lon=%.9f alt=%.3f", cfg.datumLat, cfg.datumLon, cfg.datumAlt);
+    if (cfg.autoDatumFromFix) {
+      RCLCPP_INFO(
+        this->get_logger(),
+        "waiting up to %.1fs for %s covariance <= %.2f m^2 to resolve datum",
+        cfg.datumWaitTimeoutS, cfg.fixTopic.c_str(), cfg.datumCovarianceThresholdM2);
+    } else {
+      RCLCPP_INFO(this->get_logger(), "datum lat=%.9f lon=%.9f alt=%.3f", cfg.datumLat, cfg.datumLon, cfg.datumAlt);
+    }
     RCLCPP_INFO(this->get_logger(), "input=%s raw=%s clean=%s profile=%s meta=%s points_raw=%s points_clean=%s frame=%s", cfg.inputTopic.c_str(),
                 cfg.outputTopicRaw.c_str(), cfg.outputTopicClean.c_str(), cfg.outputTopicProfile.c_str(), cfg.outputTopicMeta.c_str(),
                 cfg.outputTopicPointsRaw.c_str(), cfg.outputTopicPointsClean.c_str(), cfg.mapFrame.c_str());
   }
 
   ~GlobalPathManager() override {
+    {
+      std::lock_guard<std::mutex> lk(datumMutex_);
+      datumShutdown_ = true;
+    }
+    datumCv_.notify_all();
     {
       std::lock_guard<std::mutex> lk(queueMutex_);
       workerRunning_ = false;
@@ -741,11 +839,18 @@ private:
       } else if (name == "datum_alt") {
         next.datumAlt = p.as_double();
         datumChanged = true;
+      } else if (name == "datum_covariance_threshold_m2") {
+        next.datumCovarianceThresholdM2 = p.as_double();
+      } else if (name == "datum_wait_timeout_s") {
+        next.datumWaitTimeoutS = p.as_double();
+      } else if (name == "current_fix_max_age_s") {
+        next.currentFixMaxAgeS = p.as_double();
       } else if (name == "map_frame") {
         next.mapFrame = p.as_string();
       } else if (name == "input_topic" || name == "output_topic_clean" || name == "output_topic_raw" || name == "output_topic_profile" ||
                  name == "output_topic_meta" || name == "output_topic_points_raw" || name == "output_topic_points_clean" || name == "input_reliability" ||
-                 name == "input_durability" || name == "input_depth" || name == "output_reliability" || name == "output_durability" || name == "output_depth") {
+                 name == "input_durability" || name == "input_depth" || name == "output_reliability" || name == "output_durability" || name == "output_depth" ||
+                 name == "auto_datum_from_fix" || name == "fix_topic") {
         res.successful = false;
         res.reason = "topic/qos changes require restart";
         return res;
@@ -755,7 +860,8 @@ private:
     if (next.minPointDistM < 0.0 || next.kinkShortM < 0.0 || next.collinearDistM < 0.0 || next.rdpEpsilonM < 0.0 || next.resampleSpacingM < 0.0 ||
         next.vMaxMps < 0.0 || next.vMinMps < 0.0 || next.aLatMaxMps2 < 0.0 || next.kDeadband < 0.0 || next.cleanLenRatioWarnMin < 0.0 ||
         next.cleanLenRatioAbortMin < 0.0 || next.maxInputPoints < 0 || next.loopGuardWindowPts < 0 || next.loopGuardAdjacencySkipPts < 0 ||
-        next.yawLookaheadPts < 0 || next.yawSmoothWindowPts < 0) {
+        next.yawLookaheadPts < 0 || next.yawSmoothWindowPts < 0 || next.datumCovarianceThresholdM2 < 0.0 || next.datumWaitTimeoutS < 0.0 ||
+        next.currentFixMaxAgeS < 0.0) {
       res.successful = false;
       res.reason = "invalid negative parameter";
       return res;
@@ -782,7 +888,19 @@ private:
     {
       std::lock_guard<std::mutex> lk(cfgMutex_);
       cfg_ = next;
-      if (datumChanged) localCartesian_ = std::make_shared<GeographicLib::LocalCartesian>(next.datumLat, next.datumLon, next.datumAlt);
+      if (datumChanged) {
+        localCartesian_ = std::make_shared<GeographicLib::LocalCartesian>(next.datumLat, next.datumLon, next.datumAlt);
+        datumSource_ = "parameters";
+        datumUsedFallback_ = false;
+      }
+    }
+    if (datumChanged) {
+      {
+        std::lock_guard<std::mutex> lk(datumMutex_);
+        datumReady_ = true;
+      }
+      datumCv_.notify_all();
+      if (datumTimer_) datumTimer_->cancel();
     }
 
     return res;
@@ -835,6 +953,147 @@ private:
     cv_.notify_one();
   }
 
+  void onFix(const sensor_msgs::msg::NavSatFix::SharedPtr msg) {
+    if (!msg) return;
+    if (msg->status.status < 0) return;
+    if (!isValidLatLon(msg->latitude, msg->longitude)) return;
+
+    double covarianceThresholdM2 = 0.0;
+    bool autoDatumFromFix = false;
+    {
+      std::lock_guard<std::mutex> lk(cfgMutex_);
+      covarianceThresholdM2 = cfg_.datumCovarianceThresholdM2;
+      autoDatumFromFix = cfg_.autoDatumFromFix;
+    }
+
+    FixSnapshot fix;
+    fix.lat = msg->latitude;
+    fix.lon = msg->longitude;
+    fix.alt = std::isfinite(msg->altitude) ? msg->altitude : 0.0;
+    fix.horizontalCovarianceM2 = horizontalCovarianceMetricM2(*msg);
+    fix.covarianceKnown = std::isfinite(fix.horizontalCovarianceM2);
+    fix.covarianceOk = fix.covarianceKnown && fix.horizontalCovarianceM2 <= covarianceThresholdM2;
+    fix.stamp = this->now();
+    fix.valid = true;
+
+    {
+      std::lock_guard<std::mutex> lk(fixMutex_);
+      latestFix_ = fix;
+    }
+
+    if (autoDatumFromFix && fix.covarianceOk) {
+      resolveDatum(fix.lat, fix.lon, fix.alt, "fix", false);
+    }
+  }
+
+  bool waitForDatumReady() {
+    std::unique_lock<std::mutex> lk(datumMutex_);
+    datumCv_.wait(lk, [this]() { return datumReady_ || datumShutdown_; });
+    return datumReady_;
+  }
+
+  bool getRecentFix(FixSnapshot &out, double maxAgeS) {
+    {
+      std::lock_guard<std::mutex> lk(fixMutex_);
+      out = latestFix_;
+    }
+
+    if (!out.valid) return false;
+    if (maxAgeS <= 0.0) return true;
+    return (this->now() - out.stamp).seconds() <= maxAgeS;
+  }
+
+  DatumFallback selectFallbackDatum(const FixSnapshot &fix) const {
+    if (!fix.valid) return kDatumFallbacks.front();
+
+    const DatumFallback *best = &kDatumFallbacks.front();
+    double bestDist = std::numeric_limits<double>::infinity();
+    for (const auto &candidate : kDatumFallbacks) {
+      const double d = haversineDistanceM(fix.lat, fix.lon, candidate.lat, candidate.lon);
+      if (d < bestDist) {
+        bestDist = d;
+        best = &candidate;
+      }
+    }
+    return *best;
+  }
+
+  void resolveDatum(double lat, double lon, double alt, const std::string &source, bool usedFallback) {
+    {
+      std::lock_guard<std::mutex> lk(cfgMutex_);
+      if (localCartesian_) return;
+      cfg_.datumLat = lat;
+      cfg_.datumLon = lon;
+      cfg_.datumAlt = alt;
+      localCartesian_ = std::make_shared<GeographicLib::LocalCartesian>(lat, lon, alt);
+      datumSource_ = source;
+      datumUsedFallback_ = usedFallback;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(datumMutex_);
+      if (datumReady_) return;
+      datumReady_ = true;
+    }
+
+    if (datumTimer_) datumTimer_->cancel();
+    datumCv_.notify_all();
+
+    if (usedFallback) {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "datum fallback selected from %s: lat=%.9f lon=%.9f alt=%.3f",
+        source.c_str(), lat, lon, alt);
+    } else {
+      RCLCPP_INFO(
+        this->get_logger(),
+        "datum resolved from %s: lat=%.9f lon=%.9f alt=%.3f",
+        source.c_str(), lat, lon, alt);
+    }
+  }
+
+  void onDatumTimer() {
+    Config cfg;
+    {
+      std::lock_guard<std::mutex> lk(cfgMutex_);
+      cfg = cfg_;
+    }
+
+    if (!cfg.autoDatumFromFix) {
+      if (datumTimer_) datumTimer_->cancel();
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lk(datumMutex_);
+      if (datumReady_ || datumShutdown_) {
+        if (datumTimer_) datumTimer_->cancel();
+        return;
+      }
+    }
+
+    const double elapsedS = (this->now() - datumStartTime_).seconds();
+    if (elapsedS < cfg.datumWaitTimeoutS) {
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "waiting for %s covariance <= %.2f m^2 before setting datum",
+        cfg.fixTopic.c_str(), cfg.datumCovarianceThresholdM2);
+      return;
+    }
+
+    FixSnapshot fix;
+    {
+      std::lock_guard<std::mutex> lk(fixMutex_);
+      fix = latestFix_;
+    }
+
+    const auto fallback = selectFallbackDatum(fix);
+    resolveDatum(
+      fallback.lat, fallback.lon, 0.0,
+      fix.valid ? "nearest_fallback_to_fix" : "default_fallback",
+      true);
+  }
+
   void workerLoop() {
     uint64_t lastSeq = 0;
 
@@ -855,6 +1114,7 @@ private:
 
   void processPayload(const std::string &s) {
     const auto t0 = std::chrono::steady_clock::now();
+    if (!waitForDatumReady()) return;
 
     Config cfg;
     std::shared_ptr<GeographicLib::LocalCartesian> lc;
@@ -862,6 +1122,10 @@ private:
       std::lock_guard<std::mutex> lk(cfgMutex_);
       cfg = cfg_;
       lc = localCartesian_;
+    }
+    if (!lc) {
+      RCLCPP_ERROR(this->get_logger(), "datum unavailable, dropping route payload");
+      return;
     }
 
     json j;
@@ -899,12 +1163,33 @@ private:
       return;
     }
 
+    const std::string tag = routeId.empty() ? "" : ("route_id=" + routeId + " ");
+
+    if (waypoints.size() == 1) {
+      FixSnapshot fix;
+      if (!getRecentFix(fix, cfg.currentFixMaxAgeS)) {
+        RCLCPP_ERROR(
+          this->get_logger(),
+          "%ssingle-waypoint route requires recent %s within %.1fs",
+          tag.c_str(), cfg.fixTopic.c_str(), cfg.currentFixMaxAgeS);
+        return;
+      }
+
+      json currentWp;
+      currentWp["latitude"] = fix.lat;
+      currentWp["longitude"] = fix.lon;
+      currentWp["altitude"] = fix.alt;
+      json prepended = json::array();
+      prepended.push_back(currentWp);
+      prepended.push_back(waypoints.front());
+      waypoints = std::move(prepended);
+      RCLCPP_INFO(this->get_logger(), "%sprepended current %s to single-waypoint route", tag.c_str(), cfg.fixTopic.c_str());
+    }
+
     if (cfg.maxInputPoints > 0 && static_cast<int>(waypoints.size()) > cfg.maxInputPoints) {
       RCLCPP_ERROR(this->get_logger(), "input has %zu points, exceeds max_input_points=%d", waypoints.size(), cfg.maxInputPoints);
       return;
     }
-
-    const std::string tag = routeId.empty() ? "" : ("route_id=" + routeId + " ");
 
     std::vector<XY> rawPts;
     rawPts.reserve(waypoints.size());
@@ -1088,6 +1373,8 @@ private:
       meta["datum_lat"] = cfg.datumLat;
       meta["datum_lon"] = cfg.datumLon;
       meta["datum_alt"] = cfg.datumAlt;
+      meta["datum_source"] = datumSource_;
+      meta["datum_used_fallback"] = datumUsedFallback_;
       meta["skipped_waypoints"] = skipped;
       meta["invalid_waypoints"] = invalid;
       meta["clean_aborted"] = !cleanOk;
@@ -1106,6 +1393,8 @@ private:
   std::mutex cfgMutex_;
   Config cfg_;
   std::shared_ptr<GeographicLib::LocalCartesian> localCartesian_;
+  std::string datumSource_{"parameters"};
+  bool datumUsedFallback_{false};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr paramsCb_;
 
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr rawPub_;
@@ -1115,6 +1404,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pointsRawPub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pointsCleanPub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr routeSub_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fixSub_;
+  rclcpp::TimerBase::SharedPtr datumTimer_;
 
   std::mutex queueMutex_;
   std::condition_variable cv_;
@@ -1125,6 +1416,15 @@ private:
   bool haveLastRouteState_{false};
   std::string lastRouteId_;
   std::string lastRouteSignature_;
+
+  std::mutex datumMutex_;
+  std::condition_variable datumCv_;
+  bool datumReady_{true};
+  bool datumShutdown_{false};
+  rclcpp::Time datumStartTime_;
+
+  std::mutex fixMutex_;
+  FixSnapshot latestFix_;
 };
 
 int main(int argc, char **argv) {

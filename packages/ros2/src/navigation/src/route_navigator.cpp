@@ -50,6 +50,7 @@ public:
     goal_ahead_m_ = declare_parameter<double>("goal_ahead_m", 25.0);
     replan_period_s_ = declare_parameter<double>("replan_period_s", 0.5);
     min_follow_replace_period_s_ = declare_parameter<double>("min_follow_replace_period_s", 2.0);
+    follow_path_key_resolution_m_ = declare_parameter<double>("follow_path_key_resolution_m", 0.5);
 
     stuck_time_s_ = declare_parameter<double>("stuck_time_s", 3.0);
     stuck_dist_m_ = declare_parameter<double>("stuck_dist_m", 0.25);
@@ -667,7 +668,7 @@ private:
 
       planned_path_pub_->publish(path);
 
-      const std::string path_key = makePathKey(path, 0.25);
+      const std::string path_key = makePathKey(path, follow_path_key_resolution_m_);
 
       if (active_follow_) {
         const double since_last_follow_send = (now() - last_follow_send_time_).seconds();
@@ -740,6 +741,7 @@ private:
   double goal_ahead_m_{25.0};
   double replan_period_s_{0.5};
   double min_follow_replace_period_s_{2.0};
+  double follow_path_key_resolution_m_{0.5};
   double stuck_time_s_{3.0};
   double stuck_dist_m_{0.25};
 
