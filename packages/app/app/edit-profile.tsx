@@ -194,3 +194,13 @@ const styles = StyleSheet.create({
 	inputDisabledText: {
 		fontSize: 16,
 		fontWeight: "500",
+		color: Colors.textSecondary,
+	},
+	fieldHint: {
+		fontSize: 12,
+		color: Colors.textSecondary,
+		marginTop: 8,
+		paddingLeft: 4,
+		lineHeight: 18,
+	},
+});
