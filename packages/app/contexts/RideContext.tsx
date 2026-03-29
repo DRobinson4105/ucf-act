@@ -2,6 +2,11 @@ import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Notification, Ride, RideStatus } from "@/types/ride";
+import {
+  startRideActivity,
+  updateRideActivity,
+  endRideActivity,
+} from "@/utils/liveActivity";
 import createContextHook from "@nkzw/create-context-hook";
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -147,6 +152,36 @@ export const [RideProvider, useRide] = createContextHook(() => {
       setNotifications((prev) => [notification, ...prev]);
     }
   }, [currentRide?.status]);
+
+  // Trigger Live Activity updates on status transitions
+  useEffect(() => {
+    const status = currentRide?.status;
+    if (!status) {
+      if (prevStatusRef.current) {
+        endRideActivity();
+      }
+      return;
+    }
+
+    if (status === "assigned" && prevStatusRef.current !== "assigned") {
+      const pickupLoc = CAMPUS_LOCATIONS.find(
+        (l) => l.id === currentRide.pickupLocationId
+      );
+      const dropoffLoc = CAMPUS_LOCATIONS.find(
+        (l) => l.id === currentRide.dropoffLocationId
+      );
+      startRideActivity({
+        cartName: "ACT-001",
+        pickupName: pickupLoc?.shortName ?? "Pickup",
+        dropoffName: dropoffLoc?.shortName ?? "Destination",
+        status: "assigned",
+      });
+    } else if (status === "arriving" || status === "in_progress") {
+      updateRideActivity(status);
+    } else if (status === "completed" || status === "cancelled") {
+      endRideActivity();
+    }
+  }, [currentRide?.status, currentRide?.pickupLocationId, currentRide?.dropoffLocationId]);
 
   const requestRide = useCallback(
     async (

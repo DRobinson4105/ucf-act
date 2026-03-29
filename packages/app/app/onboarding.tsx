@@ -5,7 +5,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as SecureStore from "expo-secure-store";
 import * as Location from "expo-location";
-import { router } from "expo-router";
+import * as Notifications from "expo-notifications";
+import { router, useLocalSearchParams } from "expo-router";
 import { Bell, Check } from "lucide-react-native";
 import React, { useState } from "react";
 import {
@@ -23,6 +24,9 @@ type OnboardingStep = "welcome" | "location" | "notifications" | "complete";
 export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const { completeOnboarding } = useAuth();
+
+  const params = useLocalSearchParams<{ signInOnly?: string }>();
+  const signInOnly = params.signInOnly === "true";
 
   const [step, setStep] = useState<OnboardingStep>("welcome");
   const [isLoading, setIsLoading] = useState(false);
@@ -65,7 +69,11 @@ export default function OnboardingScreen() {
       await SecureStore.setItemAsync(TOKEN_STORAGE_KEY, credential.identityToken);
       setAppleToken(credential.identityToken);
 
-      setStep("location");
+      if (signInOnly) {
+        router.replace("/(tabs)");
+      } else {
+        setStep("location");
+      }
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
       // User cancelled — don't show error
@@ -94,6 +102,10 @@ export default function OnboardingScreen() {
   const handleNotifications = async () => {
     setIsLoading(true);
     try {
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status === "granted") {
+        console.log("Notification permissions granted");
+      }
       await completeOnboarding();
       setStep("complete");
       setTimeout(() => router.replace("/(tabs)"), 1500);
@@ -105,21 +117,21 @@ export default function OnboardingScreen() {
   };
 
   const renderProgressBar = () => (
-    <View className="flex-row items-center gap-4">
-      <View className="flex-1 h-1 bg-surface rounded-sm overflow-hidden">
-        <View className="h-full bg-primary" style={{ width: `${progress * 100}%` }} />
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
+      <View style={{ flex: 1, height: 4, backgroundColor: Colors.surface, borderRadius: 2, overflow: "hidden" }}>
+        <View style={{ height: "100%", backgroundColor: Colors.primary, width: `${progress * 100}%` }} />
       </View>
-      <Text className="text-sm font-semibold text-textSecondary">
+      <Text style={{ fontSize: 14, fontWeight: "600", color: Colors.textSecondary }}>
         {currentStepNumber} of {totalSteps}
       </Text>
     </View>
   );
 
   const renderWelcome = () => (
-    <View className="items-center py-10">
+    <View style={{ alignItems: "center", paddingVertical: 40 }}>
       <MaterialCommunityIcons name="golf-cart" size={80} color={Colors.primary} style={{ marginBottom: 24 }} />
-      <Text className="text-3xl font-bold text-text text-center mb-3">Welcome to ACT</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-10">
+      <Text style={{ fontSize: 30, fontWeight: "700", color: Colors.text, textAlign: "center", marginBottom: 12 }}>Welcome to ACT</Text>
+      <Text style={{ fontSize: 16, color: Colors.textSecondary, textAlign: "center", lineHeight: 24, marginBottom: 40 }}>
         Safe, autonomous rides around campus. Sign in with Apple to get started.
       </Text>
 
@@ -127,43 +139,51 @@ export default function OnboardingScreen() {
         <AppleAuthentication.AppleAuthenticationButton
           buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
           buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE_OUTLINE}
-          cornerRadius={16}
-          style={{ width: "100%", height: 56 }}
+          cornerRadius={14}
+          style={{ width: "100%", height: 52 }}
           onPress={handleAppleSignIn}
         />
       ) : (
         <TouchableOpacity
-          className="w-full bg-surface rounded-2xl py-4 items-center border border-border"
+          style={{
+            width: "100%",
+            backgroundColor: Colors.accent,
+            borderRadius: 14,
+            paddingVertical: 16,
+            alignItems: "center",
+          }}
           onPress={handleAppleSignIn}
           disabled={isLoading}
         >
-          <Text className="text-base font-semibold text-text">Sign in with Apple</Text>
+          <Text style={{ fontSize: 16, fontWeight: "700", color: Colors.black }}>
+            Sign in with Apple
+          </Text>
         </TouchableOpacity>
       )}
 
       {isLoading && <ActivityIndicator color={Colors.primary} style={{ marginTop: 16 }} />}
       {authError && (
-        <Text className="text-sm text-error text-center mt-4">{authError}</Text>
+        <Text style={{ fontSize: 14, color: Colors.error, textAlign: "center", marginTop: 16 }}>{authError}</Text>
       )}
     </View>
   );
 
   const renderLocation = () => (
-    <View className="items-center py-10">
-      <View className="w-24 h-24 rounded-full bg-surface items-center justify-center mb-6">
+    <View style={{ alignItems: "center", paddingVertical: 40 }}>
+      <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: Colors.surface, alignItems: "center", justifyContent: "center", marginBottom: 24 }}>
         <MaterialCommunityIcons name="map-marker" size={40} color={Colors.primary} />
       </View>
-      <Text className="text-3xl font-bold text-text text-center mb-3">Enable location services</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">We need your location to:</Text>
-      <View className="w-full gap-4">
+      <Text style={{ fontSize: 30, fontWeight: "700", color: Colors.text, textAlign: "center", marginBottom: 12 }}>Enable location services</Text>
+      <Text style={{ fontSize: 16, color: Colors.textSecondary, textAlign: "center", lineHeight: 24, marginBottom: 32 }}>We need your location to:</Text>
+      <View style={{ width: "100%", gap: 16 }}>
         {[
           "Show nearby pickup points",
           "Track your ride in real-time",
           "Ensure safe and accurate pickups",
         ].map((item) => (
-          <View key={item} className="flex-row items-center gap-3">
+          <View key={item} style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
             <Check size={20} color={Colors.success} />
-            <Text className="flex-1 text-base text-text">{item}</Text>
+            <Text style={{ flex: 1, fontSize: 16, color: Colors.text }}>{item}</Text>
           </View>
         ))}
       </View>
@@ -171,23 +191,23 @@ export default function OnboardingScreen() {
   );
 
   const renderNotifications = () => (
-    <View className="items-center py-10">
-      <View className="w-24 h-24 rounded-full bg-surface items-center justify-center mb-6">
+    <View style={{ alignItems: "center", paddingVertical: 40 }}>
+      <View style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: Colors.surface, alignItems: "center", justifyContent: "center", marginBottom: 24 }}>
         <Bell size={40} color={Colors.primary} />
       </View>
-      <Text className="text-3xl font-bold text-text text-center mb-3">Stay updated</Text>
-      <Text className="text-base text-textSecondary text-center leading-6 mb-8">
+      <Text style={{ fontSize: 30, fontWeight: "700", color: Colors.text, textAlign: "center", marginBottom: 12 }}>Stay updated</Text>
+      <Text style={{ fontSize: 16, color: Colors.textSecondary, textAlign: "center", lineHeight: 24, marginBottom: 32 }}>
         Allow notifications to receive:
       </Text>
-      <View className="w-full gap-4">
+      <View style={{ width: "100%", gap: 16 }}>
         {[
           "Cart arrival updates",
           "Ride status changes",
           "Important safety alerts",
         ].map((item) => (
-          <View key={item} className="flex-row items-center gap-3">
+          <View key={item} style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
             <Check size={20} color={Colors.success} />
-            <Text className="flex-1 text-base text-text">{item}</Text>
+            <Text style={{ flex: 1, fontSize: 16, color: Colors.text }}>{item}</Text>
           </View>
         ))}
       </View>
@@ -195,12 +215,12 @@ export default function OnboardingScreen() {
   );
 
   const renderComplete = () => (
-    <View className="items-center py-10">
-      <View className="w-32 h-32 rounded-full bg-success items-center justify-center mb-6">
+    <View style={{ alignItems: "center", paddingVertical: 40 }}>
+      <View style={{ width: 128, height: 128, borderRadius: 64, backgroundColor: Colors.success, alignItems: "center", justifyContent: "center", marginBottom: 24 }}>
         <Check size={60} color={Colors.white} />
       </View>
-      <Text className="text-3xl font-bold text-text text-center mb-3">You&apos;re all set!</Text>
-      <Text className="text-base text-textSecondary text-center leading-6">
+      <Text style={{ fontSize: 30, fontWeight: "700", color: Colors.text, textAlign: "center", marginBottom: 12 }}>You&apos;re all set!</Text>
+      <Text style={{ fontSize: 16, color: Colors.textSecondary, textAlign: "center", lineHeight: 24 }}>
         Welcome to ACT. Let&apos;s get you to your destination.
       </Text>
     </View>
@@ -223,13 +243,13 @@ export default function OnboardingScreen() {
   const showContinueButton = step === "location" || step === "notifications";
 
   return (
-    <View className="flex-1 bg-background">
-      <View className="px-5 pb-4" style={{ paddingTop: insets.top + 16 }}>
-        {currentStepNumber > 0 && step !== "complete" && renderProgressBar()}
+    <View style={{ flex: 1, backgroundColor: Colors.background }}>
+      <View style={{ paddingHorizontal: 20, paddingBottom: 16, paddingTop: insets.top + 16 }}>
+        {!signInOnly && currentStepNumber > 0 && step !== "complete" && renderProgressBar()}
       </View>
 
       <ScrollView
-        contentContainerClassName="flex-grow justify-center px-5"
+        contentContainerStyle={{ flexGrow: 1, justifyContent: "center", paddingHorizontal: 20 }}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -237,17 +257,27 @@ export default function OnboardingScreen() {
       </ScrollView>
 
       {showContinueButton && (
-        <View className="px-5 pt-5 border-t border-border" style={{ paddingBottom: insets.bottom + 20 }}>
+        <View style={{ paddingHorizontal: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: Colors.border, paddingBottom: insets.bottom + 20 }}>
           <TouchableOpacity
-            className="flex-row items-center justify-center bg-primary rounded-2xl py-4.5 gap-2"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              backgroundColor: Colors.accent,
+              borderRadius: 14,
+              paddingVertical: 16,
+              gap: 8,
+            }}
             onPress={handleContinue}
             disabled={isLoading}
             activeOpacity={0.7}
           >
             {isLoading ? (
-              <ActivityIndicator color={Colors.white} />
+              <ActivityIndicator color={Colors.black} />
             ) : (
-              <Text className="text-lg font-bold text-white">Continue</Text>
+              <Text style={{ fontSize: 16, fontWeight: "700", color: Colors.black }}>
+                Continue
+              </Text>
             )}
           </TouchableOpacity>
         </View>

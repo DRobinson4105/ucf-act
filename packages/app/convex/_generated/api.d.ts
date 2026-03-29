@@ -10,6 +10,7 @@
 
 import type * as carts from "../carts.js";
 import type * as http from "../http.js";
+import type * as notifications from "../notifications.js";
 import type * as rides from "../rides.js";
 import type * as users from "../users.js";
 
@@ -22,6 +23,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   carts: typeof carts;
   http: typeof http;
+  notifications: typeof notifications;
   rides: typeof rides;
   users: typeof users;
 }>;
