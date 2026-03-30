@@ -105,6 +105,7 @@ menu "Test Bypasses"
             help
                 Skip MCP41HV51 digital potentiometer and MY5NJ DPDT relay control.
 
+
         config BYPASS_ACTUATOR_STEPPER_STEERING
             bool "Bypass steering stepper actuator"
             default n

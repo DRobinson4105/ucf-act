@@ -15,8 +15,9 @@ const char *TAG = "DIGIPOT";
 // SPI Constants
 // ============================================================================
 
-constexpr uint8_t CMD_WRITE_VOLATILE_WIPER = 0x00; // MCP41HV51 write volatile wiper command
-constexpr int SPI_CLOCK_HZ = 1000000;              // 1 MHz SPI clock
+constexpr uint8_t CMD_WRITE_VOLATILE_WIPER = 0x00; // MCP41HV51 write command (addr=0000, cmd=00)
+constexpr uint8_t CMD_READ_VOLATILE_WIPER = 0x0C;  // MCP41HV51 read command (addr=0000, cmd=11)
+constexpr int SPI_CLOCK_HZ = 100000;               // 100 kHz SPI clock (reduced for long cable runs)
 
 // ============================================================================
 // Module State
@@ -66,10 +67,39 @@ esp_err_t write_wiper(uint8_t position)
 	uint8_t tx_data[2] = {CMD_WRITE_VOLATILE_WIPER, position};
 
 	spi_transaction_t txn = {};
-	txn.length = 16; // 2 bytes = 16 bits
+	txn.length = 16;
 	txn.tx_buffer = tx_data;
 
 	return spi_device_transmit(s_spi_handle, &txn);
+}
+
+/**
+ * @brief Read the volatile wiper register from the MCP41HV51 via SPI.
+ *
+ * Sends a read command and returns the wiper value from SDO.
+ *
+ * @param out_position  [out] Wiper position read from the chip
+ * @return ESP_OK on success, or an error code on failure
+ */
+esp_err_t read_wiper(uint8_t *out_position)
+{
+	if (!s_spi_handle || !out_position)
+		return ESP_ERR_INVALID_STATE;
+
+	uint8_t tx_data[2] = {CMD_READ_VOLATILE_WIPER, 0x00};
+	uint8_t rx_data[2] = {};
+
+	spi_transaction_t txn = {};
+	txn.length = 16;
+	txn.tx_buffer = tx_data;
+	txn.rx_buffer = rx_data;
+
+	esp_err_t err = spi_device_transmit(s_spi_handle, &txn);
+	if (err != ESP_OK)
+		return err;
+
+	*out_position = rx_data[1]; // Wiper value is in the second byte
+	return ESP_OK;
 }
 
 } // namespace
@@ -94,7 +124,7 @@ esp_err_t digipot_mcp41hv51_init(const digipot_mcp41hv51_config_t *config)
 	// Initialize SPI bus
 	spi_bus_config_t bus_cfg = {};
 	bus_cfg.mosi_io_num = config->sdi; // SDI on MCP41HV51 datasheet
-	bus_cfg.miso_io_num = -1;          // SDO not used (write-only)
+	bus_cfg.miso_io_num = config->sdo; // SDO on MCP41HV51 (read-back verification)
 	bus_cfg.sclk_io_num = config->sck;
 	bus_cfg.quadwp_io_num = -1;
 	bus_cfg.quadhd_io_num = -1;
@@ -159,11 +189,27 @@ esp_err_t digipot_mcp41hv51_set_wiper(uint8_t position)
 	if (err != ESP_OK)
 		return err;
 
-	s_current_wiper = position;
+	// Read back and verify the wiper register matches what we wrote.
+	uint8_t readback = 0xFF;
+	err = read_wiper(&readback);
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TAG, "Wiper readback failed: %s", esp_err_to_name(err));
+		return err;
+	}
 
-#ifdef CONFIG_LOG_ACTUATOR_DIGIPOT_WIPER
-	ESP_LOGI(TAG, "Wiper set to %d", position);
-#endif
+	// Log readback periodically or on mismatch
+	static uint16_t s_verify_count = 0;
+	if (readback != position || (++s_verify_count % 50) == 0)
+	{
+		ESP_LOGI(TAG, "Wiper: wrote=%d read=%d %s", position, readback,
+		         (readback == position) ? "OK" : "MISMATCH");
+	}
+
+	if (readback != position)
+		return ESP_ERR_INVALID_RESPONSE;
+
+	s_current_wiper = position;
 	return ESP_OK;
 }
 

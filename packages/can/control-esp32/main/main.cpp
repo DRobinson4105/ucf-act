@@ -172,6 +172,7 @@ constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
 // MCP41HV51 digital potentiometer (throttle level selection via SPI)
 constexpr gpio_num_t DIGIPOT_SDI_GPIO = GPIO_NUM_18;
+constexpr gpio_num_t DIGIPOT_SDO_GPIO = GPIO_NUM_21;
 constexpr gpio_num_t DIGIPOT_SCK_GPIO = GPIO_NUM_19;
 constexpr gpio_num_t DIGIPOT_CS_GPIO = GPIO_NUM_20;
 
@@ -192,6 +193,7 @@ constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23; // reverse contact optocoupl
 digipot_mcp41hv51_config_t g_digipot_cfg = {
 	.spi_host = SPI2_HOST,
 	.sdi = DIGIPOT_SDI_GPIO,
+	.sdo = DIGIPOT_SDO_GPIO,
 	.sck = DIGIPOT_SCK_GPIO,
 	.cs = DIGIPOT_CS_GPIO,
 };
@@ -2584,6 +2586,11 @@ void throttle_test_task(void *param)
 		// ............................................................
 		case TEST_ARMED:
 		{
+			// Refresh wiper every loop iteration to combat analog POR resets.
+			// The MCP41HV51 analog POR resets the wiper to mid-scale (0x7F)
+			// whenever V+ crosses its internal threshold due to transients.
+			(void)digipot_mcp41hv51_set_wiper(current_wiper);
+
 			// Diagnostic: log pedal ADC + wiper + FR every 2 seconds
 			if (now_ms - last_status_log_ms >= 2000)
 			{

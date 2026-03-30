@@ -30,7 +30,7 @@ extern "C"
 //   - V+ powered from 24V rail, V- and DGND to GND bus, VL from ESP32 3.3V
 //   - SHDN (pin 7) tied to VL (3.3V), WLAT (pin 6) tied to GND
 //   - 256 wiper positions (0 = minimum throttle, 255 = maximum throttle)
-//   - SPI interface (SDI, SCK, CS)
+//   - SPI interface (SDI, SDO, SCK, CS) — SDO used for write verification
 //
 // Safe state: wiper position 0 (minimum throttle)
 // ============================================================================
@@ -42,12 +42,14 @@ extern "C"
 // digipot_mcp41hv51_config_t - SPI pin assignments
 //   spi_host: SPI host device (SPI2_HOST on ESP32-C6)
 //   sdi:      Serial Data In (host → device)
+//   sdo:      Serial Data Out (device → host, for read-back verification)
 //   sck:      Serial Clock line
 //   cs:       Chip Select line (active low)
 typedef struct
 {
 	spi_host_device_t spi_host;
 	gpio_num_t sdi;
+	gpio_num_t sdo;
 	gpio_num_t sck;
 	gpio_num_t cs;
 } digipot_mcp41hv51_config_t;
