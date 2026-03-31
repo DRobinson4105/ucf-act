@@ -189,18 +189,22 @@ typedef struct
 // ============================================================================
 // Sent by Planner when in ACTIVE state.
 // byte 0: sequence counter (0-255, wraps)
-// byte 1: throttle level (0-255)
-// byte 2: steering high byte (MSB) for steering command (0-720)
-// byte 3: steering low byte (LSB) for steering command (0-720)
-// byte 4: braking value
-// byte 5-7: reserved (unused; planner currently sends DLC=5)
+// byte 1: throttle high byte (MSB) for throttle level (0-4095)
+// byte 2: throttle low byte (LSB) for throttle level (0-4095)
+// byte 3: steering high byte (MSB) for steering command (0-720)
+// byte 4: steering low byte (LSB) for steering command (0-720)
+// byte 5: braking value
+// byte 6-7: reserved
 // NOTE: This struct is for logical representation only — not packed to CAN frame layout.
 // Encoding/decoding uses explicit byte-level access via can_encode/decode_planner_command().
+//
+// Throttle deadband: levels below ~800 are within the Curtis controller's deadband
+// and produce no movement. First wheel movement begins at approximately level 800.
 
 typedef struct
 {
 	node_seq_t sequence;
-	uint8_t throttle;
+	uint16_t throttle;          // DAC level (0-4095, deadband below ~800)
 	uint16_t steering_position; // Planner command value (expected 0-720)
 	uint8_t braking_position;
 } planner_command_t;
@@ -323,8 +327,8 @@ static inline bool can_decode_heartbeat(const uint8_t *data, uint8_t dlc, node_h
 /**
  * @brief Encode a planner command struct into an 8-byte CAN data frame.
  *
- * Writes sequence (byte 0), throttle (byte 1), steering bytes
- * (byte 2 = MSB, byte 3 = LSB), braking (byte 4), and zeroes bytes 5-7.
+ * Writes sequence (byte 0), throttle (bytes 1-2), steering (bytes 3-4),
+ * braking (byte 5), and zeroes bytes 6-7.
  * Silently returns if either pointer is NULL.
  *
  * @param data  Destination buffer (must have room for 8 bytes)
@@ -335,11 +339,11 @@ static inline void can_encode_planner_command(uint8_t *data, const planner_comma
 	if (!data || !cmd)
 		return;
 	data[0] = cmd->sequence;
-	data[1] = cmd->throttle;
-	data[2] = (uint8_t)((cmd->steering_position >> 8) & 0xFF); // MSB
-	data[3] = (uint8_t)(cmd->steering_position & 0xFF);        // LSB
-	data[4] = cmd->braking_position;
-	data[5] = 0; // reserved
+	data[1] = (uint8_t)((cmd->throttle >> 8) & 0xFF);          // throttle MSB
+	data[2] = (uint8_t)(cmd->throttle & 0xFF);                 // throttle LSB
+	data[3] = (uint8_t)((cmd->steering_position >> 8) & 0xFF); // steering MSB
+	data[4] = (uint8_t)(cmd->steering_position & 0xFF);        // steering LSB
+	data[5] = cmd->braking_position;
 	data[6] = 0; // reserved
 	data[7] = 0; // reserved
 }
@@ -347,23 +351,23 @@ static inline void can_encode_planner_command(uint8_t *data, const planner_comma
 /**
  * @brief Decode CAN data into a planner command struct.
  *
- * Reads sequence (byte 0), throttle (byte 1),
- * steering bytes (byte 2 = MSB, byte 3 = LSB), and braking (byte 4).
- * Returns false if any pointer is NULL or the DLC is less than 5.
+ * Reads sequence (byte 0), throttle (bytes 1-2),
+ * steering (bytes 3-4), and braking (byte 5).
+ * Returns false if any pointer is NULL or the DLC is less than 6.
  *
- * @param data  Source CAN data buffer (at least 5 bytes)
- * @param dlc   Data length code (must be >= 5)
+ * @param data  Source CAN data buffer (at least 6 bytes)
+ * @param dlc   Data length code (must be >= 6)
  * @param cmd   Destination planner command struct
  * @return true on success, false on invalid arguments
  */
 static inline bool can_decode_planner_command(const uint8_t *data, uint8_t dlc, planner_command_t *cmd)
 {
-	if (!data || !cmd || dlc < 5)
+	if (!data || !cmd || dlc < 6)
 		return false;
 	cmd->sequence = data[0];
-	cmd->throttle = data[1];
-	cmd->steering_position = (uint16_t)(((uint16_t)data[2] << 8) | (uint16_t)data[3]);
-	cmd->braking_position = data[4];
+	cmd->throttle = (uint16_t)(((uint16_t)data[1] << 8) | (uint16_t)data[2]);
+	cmd->steering_position = (uint16_t)(((uint16_t)data[3] << 8) | (uint16_t)data[4]);
+	cmd->braking_position = data[5];
 	return true;
 }
 

@@ -7,7 +7,7 @@ The tests cover:
 - Pure protocol logic (`common/protocol/stepper_protocol_uim2852`, `common/protocol/can_protocol`)
 - Motor driver component (`control-esp32/components/stepper_motor_uim2852`) via mocked ESP-IDF APIs
 - Driver input hardware components (`control-esp32/components/adc_12bitsar`, `control-esp32/components/optocoupler_pc817`)
-- Actuator components (`control-esp32/components/digipot_mcp41hv51`, `control-esp32/components/relay_dpdt_my5nj`) via mocked ESP-IDF APIs
+- Actuator components (`control-esp32/components/relay_dpdt_my5nj`) via mocked ESP-IDF APIs
 - Extracted decision logic (`common/logic/safety_logic`, `common/logic/control_logic`, `common/logic/system_state`) — pure functions with no hardware deps
 - Integration tests combining Safety and Control state machines for full round-trip verification
 
@@ -41,7 +41,6 @@ make
 | `make test_system_state`              | Compile only the system state test binary      |
 | `make test_heartbeat_monitor`         | Compile only the heartbeat monitor test binary |
 | `make test_driver_inputs`             | Compile only the driver inputs test binary     |
-| `make test_digipot`                   | Compile only the digipot test binary           |
 | `make test_relay`                     | Compile only the relay test binary             |
 | `make test_integration_state_machine` | Compile only the integration test binary       |
 | `make clean`                          | Delete compiled binaries                       |
@@ -192,17 +191,6 @@ Tests the split hardware input components used by Control: `adc_12bitsar` and `o
 | F/R debounce     | Debounced transition requires stable `FR_PC817_DEBOUNCE_MS` interval |
 | F/R raw mapping  | PC817 active-low mapping for Forward/Reverse/Neutral/Invalid         |
 | F/R init failure | GPIO setup failure propagates init failure                           |
-
-### `test_digipot.cpp`
-
-Tests the `digipot_mcp41hv51` driver component (MCP41HV51 5kΩ digital potentiometer over SPI) using mocked ESP-IDF APIs.
-
-| Category      | What it covers                                               |
-| ------------- | ------------------------------------------------------------ |
-| Init          | Success, NULL config, GPIO/SPI failures, preloads safe level |
-| Wiper control | Set position, boundary values (0, 255), SPI failure          |
-| State query   | Position readback, pre/post init                             |
-| Deinit        | SPI cleanup, NULL safety                                     |
 
 ### `test_relay.cpp`
 

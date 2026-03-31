@@ -97,7 +97,7 @@ esp_err_t relay_dpdt_my5nj_energize(void)
 		return err;
 
 #ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY
-	ESP_LOGI(TAG, "ENERGIZED (throttle source: digipot, pedal bypass: active)");
+	ESP_LOGI(TAG, "ENERGIZED (throttle source: DAC, pedal bypass: active)");
 #endif
 	return ESP_OK;
 }

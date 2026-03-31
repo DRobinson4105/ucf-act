@@ -460,8 +460,10 @@ Not all components can detect physical absence at init or runtime. Components th
 The throttle system uses an MCP4728 DAC + LM358 op-amp to provide 4096 output levels (0-4095) for continuous throttle level control:
 
 - Level 0: Off (0V output, in Curtis deadband, no movement)
-- Low levels: Fine low-speed control (~2.0 mV per step)
-- Level 4095: Maximum throttle (~8.5V output)
+- Levels 0-~800: Within Curtis deadband, no wheel movement
+- Level ~800: First wheel movement (deadband exit, ~1.6V at op-amp output)
+- Levels ~800-4095: Proportional speed control (~2.0 mV per step)
+- Level 4095: Maximum throttle (~8.24V output)
 - Slew rate limited: max 200 DAC steps per 100ms
 
 Enable sequence (READY -> ACTIVE):

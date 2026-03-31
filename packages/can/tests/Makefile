@@ -20,7 +20,6 @@ SYSTEM_STATE_SRC = ../common/logic/system_state/system_state.cpp
 HEARTBEAT_MON_SRC = ../common/services/heartbeat_monitor/heartbeat_monitor.cpp
 ADC_12BITSAR_SRC = ../control-esp32/components/adc_12bitsar/adc_12bitsar.cpp
 OPTOCOUPLER_PC817_SRC = ../control-esp32/components/optocoupler_pc817/optocoupler_pc817.cpp
-DIGIPOT_SRC = ../control-esp32/components/digipot_mcp41hv51/digipot_mcp41hv51.cpp
 RELAY_SRC = ../control-esp32/components/relay_dpdt_my5nj/relay_dpdt_my5nj.cpp
 
 # Mock include path must come FIRST so esp_log.h, can_twai.h, etc. resolve to mocks
@@ -30,10 +29,9 @@ MOCK_INCLUDES = -Imocks \
 # Components with unused TAG variable when logging is mocked out
 MOTOR_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 DRIVER_INPUTS_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
-DIGIPOT_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 RELAY_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 
-all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_digipot test_relay test_integration_state_machine
+all: test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_relay test_integration_state_machine
 	@set -eu; \
 	tmp_summary=$$(mktemp); \
 	tmp_out=$$(mktemp); \
@@ -79,7 +77,6 @@ all: test_stepper_protocol test_can_protocol test_motor_component test_safety_lo
 	run_suite "system_state" ./test_system_state; \
 	run_suite "heartbeat_monitor" ./test_heartbeat_monitor; \
 	run_suite "driver_inputs" ./test_driver_inputs; \
-	run_suite "digipot" ./test_digipot; \
 	run_suite "relay" ./test_relay; \
 	run_suite "integration_state_machine" ./test_integration_state_machine; \
 	if [ $$total_pass -ne $$total_tests ]; then \
@@ -133,9 +130,6 @@ test_heartbeat_monitor: test_heartbeat_monitor.cpp $(HEARTBEAT_MON_SRC) esp_idf_
 test_driver_inputs: test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
 	@$(CXX) $(DRIVER_INPUTS_CXXFLAGS) -Imocks -I../control-esp32/components/adc_12bitsar/include -I../control-esp32/components/optocoupler_pc817/include $(INCLUDES) -o $@ test_driver_inputs.cpp $(ADC_12BITSAR_SRC) $(OPTOCOUPLER_PC817_SRC) esp_idf_mock.o
 
-test_digipot: test_digipot.cpp $(DIGIPOT_SRC) esp_idf_mock.o
-	@$(CXX) $(DIGIPOT_CXXFLAGS) -Imocks -I../control-esp32/components/digipot_mcp41hv51/include $(INCLUDES) -o $@ test_digipot.cpp $(DIGIPOT_SRC) esp_idf_mock.o
-
 test_relay: test_relay.cpp $(RELAY_SRC) esp_idf_mock.o
 	@$(CXX) $(RELAY_CXXFLAGS) -Imocks -I../control-esp32/components/relay_dpdt_my5nj/include $(INCLUDES) -o $@ test_relay.cpp $(RELAY_SRC) esp_idf_mock.o
 
@@ -143,6 +137,6 @@ test_integration_state_machine: test_integration_state_machine.cpp $(SYSTEM_STAT
 	@$(CXX) $(CXXFLAGS) -I../common/logic/system_state/include -I../common/logic/control_logic/include $(INCLUDES) -o $@ $^
 
 clean:
-	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_digipot test_relay test_integration_state_machine esp_idf_mock.o
+	@rm -f test_stepper_protocol test_can_protocol test_motor_component test_safety_logic test_control_logic test_system_state test_heartbeat_monitor test_driver_inputs test_relay test_integration_state_machine esp_idf_mock.o
 
 .PHONY: all clean

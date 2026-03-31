@@ -35,7 +35,7 @@ static control_inputs_t default_inputs(void)
 		.throttle_slew_interval_ms = 100,
 		.throttle_slew_step = 1,
 		.throttle_min = 0,
-		.throttle_max = 255,
+		.throttle_max = 4095,
 		.last_steering_sent = STEPPER_DEDUP_RESET_STEERING,
 		.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING,
 		.steering_min = -3000,
@@ -635,13 +635,13 @@ static void test_active_throttle_clamps_to_envelope(void)
 {
 	control_inputs_t in = default_inputs();
 	in.target_state = NODE_STATE_ACTIVE;
-	in.throttle_cmd = 500; // above envelope max
-	in.throttle_current = 255;
+	in.throttle_cmd = 5000; // above envelope max (4095)
+	in.throttle_current = 4095;
 	in.now_ms = 1000;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_ACTIVE);
 	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) == 0);
-	assert(r.throttle_level == 255);
+	assert(r.throttle_level == 4095);
 }
 
 static void test_active_throttle_unconfigured_forces_neutral(void)
