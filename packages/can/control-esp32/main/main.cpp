@@ -22,7 +22,7 @@
 #include "can_protocol.h"
 #include "can_twai.h"
 #include "led_ws2812.h"
-#include "digipot_mcp41hv51.h"
+#include "dac_mcp4728.h"
 #include "stepper_motor_uim2852.h"
 #include "relay_dpdt_my5nj.h"
 #include "adc_12bitsar.h"
@@ -114,13 +114,13 @@ constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
 constexpr TickType_t CAN_RX_TIMEOUT = pdMS_TO_TICKS(10);                             // wait per RX poll
 constexpr TickType_t CONTROL_LOOP_INTERVAL = pdMS_TO_TICKS(20);                      // state/actuation tick (50 Hz)
 constexpr TickType_t HEARTBEAT_SEND_INTERVAL = pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS); // protocol cadence
-constexpr int16_t THROTTLE_LEVEL_MIN = 0;                                            // digipot minimum level
-constexpr int16_t THROTTLE_LEVEL_MAX = 255;                                          // digipot maximum level
+constexpr int16_t THROTTLE_LEVEL_MIN = 0;                                            // DAC minimum level
+constexpr int16_t THROTTLE_LEVEL_MAX = 4095;                                         // DAC maximum level (12-bit)
 constexpr uint8_t PT_STREAM_STARTUP_FRAMES = 2;                // one active segment + one spare segment
 constexpr uint32_t INIT_DWELL_MS = 500;                        // minimum dwell in INIT before READY
 constexpr uint32_t ENABLE_SEQUENCE_MS = 200;                   // ENABLE dwell before enable_complete
 constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;            // throttle slew timing interval
-constexpr int16_t THROTTLE_SLEW_STEP = 12;                     // throttle: max wiper delta per interval (0-255 range)
+constexpr int16_t THROTTLE_SLEW_STEP = 200;                    // throttle: max DAC level delta per interval (0-4095 range)
 constexpr TickType_t PLANNER_CMD_TIMEOUT = pdMS_TO_TICKS(500); // stale planner command cutoff
 constexpr uint8_t PLANNER_CMD_STALE_COUNT = 10;                // same sequence seen this many cycles = stale
 constexpr uint16_t PEDAL_ADC_THRESHOLD_MV = 500;               // pedal override trigger threshold
@@ -170,11 +170,9 @@ constexpr uint32_t RETRY_INTERVAL_MS = 500; // component retry cadence (infinite
 constexpr gpio_num_t TWAI_TX_GPIO = GPIO_NUM_4;
 constexpr gpio_num_t TWAI_RX_GPIO = GPIO_NUM_5;
 
-// MCP41HV51 digital potentiometer (throttle level selection via SPI)
-constexpr gpio_num_t DIGIPOT_SDI_GPIO = GPIO_NUM_18;
-constexpr gpio_num_t DIGIPOT_SDO_GPIO = GPIO_NUM_21;
-constexpr gpio_num_t DIGIPOT_SCK_GPIO = GPIO_NUM_19;
-constexpr gpio_num_t DIGIPOT_CS_GPIO = GPIO_NUM_20;
+// MCP4728 DAC (throttle level via I2C + external op-amp)
+constexpr gpio_num_t DAC_SDA_GPIO = GPIO_NUM_6;
+constexpr gpio_num_t DAC_SCL_GPIO = GPIO_NUM_7;
 
 // DPDT relay (MY5NJ — throttle source switching + pedal bypass)
 constexpr gpio_num_t DPDT_RELAY_GPIO = GPIO_NUM_10; // 2N5551 base (via 680R) for MY5NJ
@@ -190,12 +188,12 @@ constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23; // reverse contact optocoupl
 // Component Configurations
 // ============================================================================
 
-digipot_mcp41hv51_config_t g_digipot_cfg = {
-	.spi_host = SPI2_HOST,
-	.sdi = DIGIPOT_SDI_GPIO,
-	.sdo = DIGIPOT_SDO_GPIO,
-	.sck = DIGIPOT_SCK_GPIO,
-	.cs = DIGIPOT_CS_GPIO,
+dac_mcp4728_config_t g_dac_cfg = {
+	.i2c_port = I2C_NUM_0,
+	.sda = DAC_SDA_GPIO,
+	.scl = DAC_SCL_GPIO,
+	.device_addr = 0x60,
+	.clk_speed_hz = 100000,
 };
 
 relay_dpdt_my5nj_config_t g_dpdt_relay_cfg = {
@@ -283,7 +281,7 @@ uint8_t g_can_tx_in_flight = 0;
 
 // Component health tracking for startup checks and persistent retries.
 volatile bool g_twai_ready = false;
-volatile bool g_digipot_ready = false;
+volatile bool g_dac_ready = false;
 volatile bool g_dpdt_relay_ready = false;
 volatile bool g_stepper_steering_ready = false;
 volatile bool g_stepper_braking_ready = false;
@@ -554,7 +552,7 @@ fr_state_t fr_state_debounced(void)
  * components are logged as BYPASSED at WARNING level.
  *
  * @param twai_ready              TWAI driver initialized successfully
- * @param digipot_ready           MCP41HV51 digipot initialized
+ * @param DAC_ready           MCP4728 DAC initialized
  * @param dpdt_relay_ready        MY5NJ DPDT relay initialized
  * @param pedal_ready             Pedal ADC initialized and validated
  * @param fr_ready                F/R optocoupler initialized and valid
@@ -562,7 +560,7 @@ fr_state_t fr_state_debounced(void)
  * @param stepper_braking_ready   Braking stepper initialized and configured
  * @param heartbeat_ready         WS2812 status LED initialized
  */
-void log_startup_device_status(bool twai_ready, bool digipot_ready, bool dpdt_relay_ready, bool pedal_ready,
+void log_startup_device_status(bool twai_ready, bool DAC_ready, bool dpdt_relay_ready, bool pedal_ready,
                                bool fr_ready, bool stepper_steering_ready, bool stepper_braking_ready,
                                bool heartbeat_ready)
 {
@@ -572,19 +570,18 @@ void log_startup_device_status(bool twai_ready, bool digipot_ready, bool dpdt_re
 		ESP_LOGE(TAG_INIT, "TWAI: FAILED: tx_gpio=%d rx_gpio=%d", TWAI_TX_GPIO, TWAI_RX_GPIO);
 
 #ifdef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	ESP_LOGW(TAG_INIT, "DIGIPOT: BYPASSED: disabled (sdi=%d sck=%d cs=%d)", g_digipot_cfg.sdi, g_digipot_cfg.sck,
-	         g_digipot_cfg.cs);
+	ESP_LOGW(TAG_INIT, "DAC: BYPASSED: disabled (sda=%d scl=%d)", g_dac_cfg.sda, g_dac_cfg.scl);
 	ESP_LOGW(TAG_INIT, "DPDT_RELAY: BYPASSED: disabled (gpio=%d)", g_dpdt_relay_cfg.gpio);
 #else
-	if (digipot_ready)
+	if (DAC_ready)
 	{
-		ESP_LOGI(TAG_INIT, "DIGIPOT: CONFIGURED: sdi=%d sck=%d cs=%d start=WIPER_0", g_digipot_cfg.sdi,
-		         g_digipot_cfg.sck, g_digipot_cfg.cs);
+		ESP_LOGI(TAG_INIT, "DAC: CONFIGURED: sda=%d scl=%d addr=0x%02X start=LEVEL_0", g_dac_cfg.sda,
+		         g_dac_cfg.scl, g_dac_cfg.device_addr);
 	}
 	else
 	{
-		ESP_LOGE(TAG_INIT, "DIGIPOT: FAILED: sdi=%d sck=%d cs=%d", g_digipot_cfg.sdi, g_digipot_cfg.sck,
-		         g_digipot_cfg.cs);
+		ESP_LOGE(TAG_INIT, "DAC: FAILED: sda=%d scl=%d addr=0x%02X", g_dac_cfg.sda, g_dac_cfg.scl,
+		         g_dac_cfg.device_addr);
 	}
 
 	if (dpdt_relay_ready)
@@ -679,7 +676,7 @@ bool all_required_components_ready(void)
 {
 	bool ready = true;
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	if (!g_digipot_ready)
+	if (!g_dac_ready)
 		ready = false;
 	if (!g_dpdt_relay_ready)
 		ready = false;
@@ -708,7 +705,7 @@ bool all_required_components_ready(void)
 node_fault_t primary_fault_from_component_health(void)
 {
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	if (!g_digipot_ready)
+	if (!g_dac_ready)
 		return NODE_FAULT_CONTROL_THROTTLE_INIT;
 	if (!g_dpdt_relay_ready)
 		return NODE_FAULT_CONTROL_RELAY_INIT;
@@ -983,27 +980,27 @@ void retry_failed_components(void)
 	}
 
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	if (!g_digipot_ready)
+	if (!g_dac_ready)
 	{
 		[[maybe_unused]] static uint16_t s_retry_count = 0;
-		esp_err_t err = digipot_mcp41hv51_init(&g_digipot_cfg);
+		esp_err_t err = dac_mcp4728_init(&g_dac_cfg);
 		bool recovered = (err == ESP_OK);
-#ifdef CONFIG_LOG_RETRY_DIGIPOT
+#ifdef CONFIG_LOG_RETRY_DAC
 		if (!recovered)
 		{
 			s_retry_count++;
 			if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0)
 			{
-				ESP_LOGW(TAG, "DIGIPOT retry failed (%u attempts): %s", s_retry_count, esp_err_to_name(err));
+				ESP_LOGW(TAG, "DAC retry failed (%u attempts): %s", s_retry_count, esp_err_to_name(err));
 			}
 		}
 #endif
 		if (recovered)
 		{
 			s_retry_count = 0;
-			log_component_regained("DIGIPOT (driver-level)");
+			log_component_regained("DAC (driver-level)");
 		}
-		g_digipot_ready = recovered;
+		g_dac_ready = recovered;
 	}
 
 	if (!g_dpdt_relay_ready)
@@ -1475,8 +1472,8 @@ static esp_err_t feed_pt_stream_if_due(stepper_motor_uim2852_t *motor, int32_t p
 void disable_autonomous_actuators(void)
 {
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	handle_runtime_error(digipot_mcp41hv51_disable(), &g_digipot_ready, "DIGIPOT", "disable command failed");
-	handle_runtime_error(digipot_mcp41hv51_emergency_stop(), &g_digipot_ready, "DIGIPOT",
+	handle_runtime_error(dac_mcp4728_disable(), &g_dac_ready, "DAC", "disable command failed");
+	handle_runtime_error(dac_mcp4728_emergency_stop(), &g_dac_ready, "DAC",
 	                     "emergency stop command failed");
 	handle_runtime_error(relay_dpdt_my5nj_deenergize(), &g_dpdt_relay_ready, "DPDT_RELAY",
 	                     "de-energize command failed");
@@ -1558,7 +1555,7 @@ void execute_disable_autonomy(disable_reason_t reason, node_fault_t safety_fault
 /**
  * @brief Begin the autonomous enable sequence.
  *
- * Sets the digital potentiometer to wiper position 0 (idle).
+ * Sets the DAC output to level 0 (idle).
  * The DPDT relay is NOT energized here — both poles (throttle source
  * switching and pedal bypass) switch together in execute_complete_enable().
  */
@@ -1568,7 +1565,7 @@ void execute_start_enable()
 	ESP_LOGI(TAG, "Starting autonomous enable sequence");
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	handle_runtime_error(digipot_mcp41hv51_set_wiper(0), &g_digipot_ready, "DIGIPOT", "set wiper command failed");
+	handle_runtime_error(dac_mcp4728_set_level(0), &g_dac_ready, "DAC", "set level command failed");
 #endif
 }
 
@@ -1617,7 +1614,7 @@ void execute_complete_enable()
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
 		handle_runtime_error(relay_dpdt_my5nj_deenergize(), &g_dpdt_relay_ready, "DPDT_RELAY",
 		                     "de-energize command failed");
-		handle_runtime_error(digipot_mcp41hv51_disable(), &g_digipot_ready, "DIGIPOT", "disable command failed");
+		handle_runtime_error(dac_mcp4728_disable(), &g_dac_ready, "DAC", "disable command failed");
 #endif
 		return;
 	}
@@ -1649,7 +1646,7 @@ void execute_complete_enable()
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
 		handle_runtime_error(relay_dpdt_my5nj_deenergize(), &g_dpdt_relay_ready, "DPDT_RELAY",
 		                     "de-energize command failed");
-		handle_runtime_error(digipot_mcp41hv51_disable(), &g_digipot_ready, "DIGIPOT", "disable command failed");
+		handle_runtime_error(dac_mcp4728_disable(), &g_dac_ready, "DAC", "disable command failed");
 #endif
 		return;
 	}
@@ -1659,7 +1656,7 @@ void execute_complete_enable()
 	handle_runtime_error(relay_dpdt_my5nj_energize(), &g_dpdt_relay_ready, "DPDT_RELAY", "energize command failed");
 	vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle time
 
-	handle_runtime_error(digipot_mcp41hv51_enable_autonomous(), &g_digipot_ready, "DIGIPOT",
+	handle_runtime_error(dac_mcp4728_enable_autonomous(), &g_dac_ready, "DAC",
 	                     "enable autonomous command failed");
 #endif
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
@@ -1686,7 +1683,7 @@ void execute_abort_enable(abort_reason_t reason)
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
 	handle_runtime_error(relay_dpdt_my5nj_deenergize(), &g_dpdt_relay_ready, "DPDT_RELAY",
 	                     "de-energize command failed");
-	handle_runtime_error(digipot_mcp41hv51_disable(), &g_digipot_ready, "DIGIPOT", "disable command failed");
+	handle_runtime_error(dac_mcp4728_disable(), &g_dac_ready, "DAC", "disable command failed");
 #endif
 }
 
@@ -2109,8 +2106,8 @@ void control_task(void *param)
 			{
 				execute_complete_enable();
 #if !defined(CONFIG_BYPASS_ACTUATOR_THROTTLE)
-				// If complete_enable failed, digipot remains non-autonomous — keep retrying.
-				if (!digipot_mcp41hv51_is_autonomous())
+				// If complete_enable failed, DAC remains non-autonomous — keep retrying.
+				if (!dac_mcp4728_is_autonomous())
 				{
 					step.new_state = NODE_STATE_ENABLE;
 					step.new_fault_flags = NODE_FAULT_NONE;
@@ -2127,8 +2124,8 @@ void control_task(void *param)
 		if (step.actions & CONTROL_ACTION_APPLY_THROTTLE)
 		{
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-			handle_runtime_error(digipot_mcp41hv51_set_wiper((uint8_t)step.throttle_level), &g_digipot_ready, "DIGIPOT",
-			                     "set wiper command failed");
+			handle_runtime_error(dac_mcp4728_set_level((uint16_t)step.throttle_level), &g_dac_ready, "DAC",
+			                     "set level command failed");
 #endif
 #ifdef CONFIG_LOG_CONTROL_THROTTLE_CHANGES
 			{
@@ -2242,9 +2239,9 @@ void control_task(void *param)
 		last_steering_sent = step.new_last_steering;
 		last_braking_sent = step.new_last_braking;
 
-		if (step.new_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT && g_digipot_ready)
+		if (step.new_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT && g_dac_ready)
 		{
-			mark_component_lost(&g_digipot_ready, "DIGIPOT", "runtime init fault");
+			mark_component_lost(&g_dac_ready, "DAC", "runtime init fault");
 		}
 		if (step.new_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT && g_dpdt_relay_ready)
 		{
@@ -2399,8 +2396,8 @@ void heartbeat_task(void *param)
  * @brief Standalone throttle test task — serial-controlled throttle levels.
  *
  * Replaces the normal CAN-based control loop when CONFIG_THROTTLE_TEST_MODE
- * is enabled.  Reads wiper values 0-255 from USB serial (type digits, then
- * space/enter to commit) and drives the MCP41HV51 digipot / MY5NJ relay
+ * is enabled.  Reads DAC levels 0-4095 from USB serial (type digits, then
+ * space/enter to commit) and drives the MCP4728 DAC / MY5NJ relay
  * hardware directly.  No CAN, steppers, or Safety/Planner dependencies.
  *
  * Safety behavior:
@@ -2425,7 +2422,7 @@ void throttle_test_task(void *param)
 
 	ESP_LOGI(TAG_TEST, "========================================");
 	ESP_LOGI(TAG_TEST, "  THROTTLE TEST MODE");
-	ESP_LOGI(TAG_TEST, "  0-255: set wiper (type digits + space/enter)");
+	ESP_LOGI(TAG_TEST, "  0-4095: set DAC level (type digits + space/enter)");
 	ESP_LOGI(TAG_TEST, "  r:   toggle DPDT relay (MY5NJ)");
 	ESP_LOGI(TAG_TEST, "  q:   quit (shutdown all)");
 	ESP_LOGI(TAG_TEST, "  pedal: manual override (auto re-arms)");
@@ -2438,10 +2435,10 @@ void throttle_test_task(void *param)
 	// in FORWARD — the anti-arcing microswitch in the solenoid circuit
 	// enforces this at the hardware level.
 	// ----------------------------------------------------------------
-	esp_err_t err = digipot_mcp41hv51_set_wiper(0);
+	esp_err_t err = dac_mcp4728_set_level(0);
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG_TEST, "Digipot set wiper 0 failed: %s — cannot arm", esp_err_to_name(err));
+		ESP_LOGE(TAG_TEST, "DAC set level 0 failed: %s — cannot arm", esp_err_to_name(err));
 		led_ws2812_set_fault_overlay(true);
 		led_ws2812_set_state(NODE_STATE_NOT_READY);
 		while (true)
@@ -2455,7 +2452,7 @@ void throttle_test_task(void *param)
 	if (err != ESP_OK)
 	{
 		ESP_LOGE(TAG_TEST, "DPDT relay failed: %s — cannot arm", esp_err_to_name(err));
-		(void)digipot_mcp41hv51_disable();
+		(void)dac_mcp4728_disable();
 		led_ws2812_set_fault_overlay(true);
 		led_ws2812_set_state(NODE_STATE_NOT_READY);
 		while (true)
@@ -2467,12 +2464,12 @@ void throttle_test_task(void *param)
 
 	vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle
 
-	err = digipot_mcp41hv51_enable_autonomous();
+	err = dac_mcp4728_enable_autonomous();
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG_TEST, "Digipot enable failed: %s — cannot arm", esp_err_to_name(err));
+		ESP_LOGE(TAG_TEST, "DAC enable failed: %s — cannot arm", esp_err_to_name(err));
 		(void)relay_dpdt_my5nj_deenergize();
-		(void)digipot_mcp41hv51_disable();
+		(void)dac_mcp4728_disable();
 		led_ws2812_set_fault_overlay(true);
 		led_ws2812_set_state(NODE_STATE_NOT_READY);
 		while (true)
@@ -2482,19 +2479,19 @@ void throttle_test_task(void *param)
 		}
 	}
 
-	ESP_LOGI(TAG_TEST, "Throttle system ready — DPDT relay ON, digipot autonomous");
-	ESP_LOGI(TAG_TEST, "Type 0-255 + space/enter to set wiper. r=toggle relay, q=quit");
+	ESP_LOGI(TAG_TEST, "Throttle system ready — DPDT relay ON, DAC autonomous");
+	ESP_LOGI(TAG_TEST, "Type 0-4095 + space/enter to set level. r=toggle relay, q=quit");
 	ESP_LOGI(TAG_TEST, "F/R software enforced: REVERSE disables throttle, NEUTRAL zeros level");
 
 	// ----------------------------------------------------------------
 	// State machine
 	//
-	// ARMED:    DPDT relay ON, digipot active.
-	//           Type 0-255 + space/enter to set wiper position.
+	// ARMED:    DPDT relay ON, DAC active.
+	//           Type 0-4095 + space/enter to set DAC level.
 	//           Pedal press or F/R REVERSE → OVERRIDE.
 	//           F/R NEUTRAL → zero throttle (stay ARMED).
 	// OVERRIDE: DPDT relay OFF (manual pedal drives).
-	//           Pedal release + F/R not REVERSE → back to ARMED at wiper 0.
+	//           Pedal release + F/R not REVERSE → back to ARMED at level 0.
 	// SHUTDOWN: everything OFF, idle forever.
 	// ----------------------------------------------------------------
 	enum test_state_t : uint8_t
@@ -2504,11 +2501,11 @@ void throttle_test_task(void *param)
 		TEST_SHUTDOWN,
 	};
 
-	uint8_t current_wiper = 0;
+	uint16_t current_level = 0;
 	bool relay_on = true; // MY5NJ DPDT relay (GPIO 10) — energized on boot
 	uint32_t last_status_log_ms = 0;
 
-	serial_input_accum_t wiper_input = SERIAL_INPUT_ACCUM_INIT(255);
+	serial_input_accum_t level_input = SERIAL_INPUT_ACCUM_INIT(4095);
 
 	// Post-bypass F/R gate: DPDT relay is energized so the full truth
 	// table is readable.  Wait for debounce to settle, then start in
@@ -2520,10 +2517,10 @@ void throttle_test_task(void *param)
 	if (fr_arm == FR_STATE_REVERSE || fr_arm == FR_STATE_INVALID)
 	{
 		ESP_LOGW(TAG_TEST, "F/R is %s at arm — entering override until not in reverse", fr_state_to_string(fr_arm));
-		(void)digipot_mcp41hv51_disable();
+		(void)dac_mcp4728_disable();
 		(void)relay_dpdt_my5nj_deenergize();
 		relay_on = false;
-		current_wiper = 0;
+		current_level = 0;
 		state = TEST_OVERRIDE;
 		led_ws2812_set_fault_overlay(false);
 		led_ws2812_set_state(NODE_STATE_NOT_READY);
@@ -2566,12 +2563,12 @@ void throttle_test_task(void *param)
 		if (ch == 'q' || ch == 'Q')
 		{
 			ESP_LOGI(TAG_TEST, "Quit requested");
-			(void)digipot_mcp41hv51_disable();
-			(void)digipot_mcp41hv51_emergency_stop();
+			(void)dac_mcp4728_disable();
+			(void)dac_mcp4728_emergency_stop();
 			(void)relay_dpdt_my5nj_deenergize();
 			led_ws2812_set_state(NODE_STATE_INIT);
 			ESP_LOGI(TAG_TEST, "Shutdown complete — idle");
-			serial_input_accum_reset(&wiper_input);
+			serial_input_accum_reset(&level_input);
 			state = TEST_SHUTDOWN;
 		}
 
@@ -2579,22 +2576,20 @@ void throttle_test_task(void *param)
 		switch (state)
 		{
 		// ............................................................
-		// ARMED: DPDT relay ON, digipot active.
+		// ARMED: DPDT relay ON, DAC active.
 		// Serial commands 0-7 control throttle level.
 		// Pedal press or F/R REVERSE → OVERRIDE (manual control).
 		// F/R NEUTRAL → zero throttle (stay ARMED).
 		// ............................................................
 		case TEST_ARMED:
 		{
-			// Refresh wiper every loop iteration to combat analog POR resets.
-			// The MCP41HV51 analog POR resets the wiper to mid-scale (0x7F)
-			// whenever V+ crosses its internal threshold due to transients.
-			(void)digipot_mcp41hv51_set_wiper(current_wiper);
+			// Refresh DAC level every loop iteration as a safety net.
+			(void)dac_mcp4728_set_level(current_level);
 
-			// Diagnostic: log pedal ADC + wiper + FR every 2 seconds
+			// Diagnostic: log pedal ADC + level + FR every 2 seconds
 			if (now_ms - last_status_log_ms >= 2000)
 			{
-				ESP_LOGI(TAG_TEST, "Armed: wiper=%u pedal=%u mV (threshold=%u) fr=%s", current_wiper,
+				ESP_LOGI(TAG_TEST, "Armed: level=%u pedal=%u mV (threshold=%u) fr=%s", current_level,
 				         (unsigned)g_pedal_mv, (unsigned)PEDAL_ADC_THRESHOLD_MV, fr_state_to_string(fr_now));
 				last_status_log_ms = now_ms;
 			}
@@ -2603,11 +2598,11 @@ void throttle_test_task(void *param)
 			if (pedal_is_pressed)
 			{
 				ESP_LOGI(TAG_TEST, "Pedal pressed (%u mV) — manual override, DPDT relay off", (unsigned)g_pedal_mv);
-				(void)digipot_mcp41hv51_disable();
+				(void)dac_mcp4728_disable();
 				(void)relay_dpdt_my5nj_deenergize();
 				relay_on = false;
-				current_wiper = 0;
-				serial_input_accum_reset(&wiper_input);
+				current_level = 0;
+				serial_input_accum_reset(&level_input);
 				led_ws2812_set_fault_overlay(false);
 				led_ws2812_set_state(NODE_STATE_NOT_READY);
 				state = TEST_OVERRIDE;
@@ -2618,11 +2613,11 @@ void throttle_test_task(void *param)
 			if (fr_is_reverse)
 			{
 				ESP_LOGW(TAG_TEST, "F/R is %s — override, DPDT relay off", fr_state_to_string(fr_now));
-				(void)digipot_mcp41hv51_disable();
+				(void)dac_mcp4728_disable();
 				(void)relay_dpdt_my5nj_deenergize();
 				relay_on = false;
-				current_wiper = 0;
-				serial_input_accum_reset(&wiper_input);
+				current_level = 0;
+				serial_input_accum_reset(&level_input);
 				led_ws2812_set_fault_overlay(false);
 				led_ws2812_set_state(NODE_STATE_NOT_READY);
 				state = TEST_OVERRIDE;
@@ -2631,36 +2626,36 @@ void throttle_test_task(void *param)
 
 			// F/R NEUTRAL: zero throttle but stay ARMED (cart can't
 			// drive in neutral, resumes when switched to FORWARD)
-			if (fr_now == FR_STATE_NEUTRAL && current_wiper > 0)
+			if (fr_now == FR_STATE_NEUTRAL && current_level > 0)
 			{
-				ESP_LOGW(TAG_TEST, "F/R is NEUTRAL — zeroing throttle (was wiper %u)", current_wiper);
-				esp_err_t zerr = digipot_mcp41hv51_set_wiper(0);
+				ESP_LOGW(TAG_TEST, "F/R is NEUTRAL — zeroing throttle (was level %u)", current_level);
+				esp_err_t zerr = dac_mcp4728_set_level(0);
 				if (zerr == ESP_OK)
 				{
-					current_wiper = 0;
+					current_level = 0;
 					led_ws2812_set_fault_overlay(false);
 					led_ws2812_set_state(NODE_STATE_READY);
 				}
 			}
 
-			// Handle serial throttle commands: type 0-255 then space/enter to commit.
-			if (serial_input_accum_feed(&wiper_input, ch))
+			// Handle serial throttle commands: type 0-4095 then space/enter to commit.
+			if (serial_input_accum_feed(&level_input, ch))
 			{
-				uint8_t wiper = (uint8_t)wiper_input.value;
-				serial_input_accum_reset(&wiper_input);
-				if (wiper != current_wiper)
+				uint16_t level = (uint16_t)level_input.value;
+				serial_input_accum_reset(&level_input);
+				if (level != current_level)
 				{
-					esp_err_t serr = digipot_mcp41hv51_set_wiper(wiper);
+					esp_err_t serr = dac_mcp4728_set_level(level);
 					if (serr == ESP_OK)
 					{
-						current_wiper = wiper;
-						ESP_LOGI(TAG_TEST, "Throttle wiper: %u", wiper);
+						current_level = level;
+						ESP_LOGI(TAG_TEST, "Throttle level: %u", level);
 						led_ws2812_set_fault_overlay(false);
-						led_ws2812_set_state(wiper > 0 ? NODE_STATE_ACTIVE : NODE_STATE_READY);
+						led_ws2812_set_state(level > 0 ? NODE_STATE_ACTIVE : NODE_STATE_READY);
 					}
 					else
 					{
-						ESP_LOGE(TAG_TEST, "Digipot set wiper %u failed: %s", wiper, esp_err_to_name(serr));
+						ESP_LOGE(TAG_TEST, "DAC set level %u failed: %s", level, esp_err_to_name(serr));
 					}
 				}
 			}
@@ -2683,11 +2678,11 @@ void throttle_test_task(void *param)
 				}
 				else
 				{
-					// Reset digipot to 0 before reconnecting to prevent sudden throttle jump
-					esp_err_t dp_err = digipot_mcp41hv51_set_wiper(0);
+					// Reset DAC to 0 before reconnecting to prevent sudden throttle jump
+					esp_err_t dp_err = dac_mcp4728_set_level(0);
 					if (dp_err != ESP_OK)
 					{
-						ESP_LOGE(TAG_TEST, "Digipot reset to 0 failed: %s — aborting relay ON",
+						ESP_LOGE(TAG_TEST, "DAC reset to 0 failed: %s — aborting relay ON",
 						         esp_err_to_name(dp_err));
 					}
 					else
@@ -2696,8 +2691,8 @@ void throttle_test_task(void *param)
 						if (rerr == ESP_OK)
 						{
 							relay_on = true;
-							current_wiper = 0;
-							ESP_LOGI(TAG_TEST, "DPDT relay ON — digipot drives Curtis (wiper reset to 0)");
+							current_level = 0;
+							ESP_LOGI(TAG_TEST, "DPDT relay ON — DAC drives Curtis (level reset to 0)");
 						}
 						else
 						{
@@ -2712,23 +2707,23 @@ void throttle_test_task(void *param)
 		// ............................................................
 		// OVERRIDE: driver has manual control via pedal/potbox.
 		// DPDT relay OFF (manual pedal drives, pedal switch in circuit).
-		// Digipot disabled.  When pedal is released, rearmed, AND F/R
-		// is not in REVERSE, re-enable autonomous at wiper 0.
+		// DAC disabled.  When pedal is released, rearmed, AND F/R
+		// is not in REVERSE, re-enable autonomous at level 0.
 		// ............................................................
 		case TEST_OVERRIDE:
 		{
 			if (pedal_is_rearmed && !fr_is_reverse)
 			{
-				ESP_LOGI(TAG_TEST, "Override cleared (pedal rearmed, fr=%s) — re-arming at wiper 0",
+				ESP_LOGI(TAG_TEST, "Override cleared (pedal rearmed, fr=%s) — re-arming at level 0",
 				         fr_state_to_string(fr_now));
 
-				esp_err_t rerr = digipot_mcp41hv51_set_wiper(0);
+				esp_err_t rerr = dac_mcp4728_set_level(0);
 				if (rerr == ESP_OK)
 					rerr = relay_dpdt_my5nj_energize();
 				if (rerr == ESP_OK)
 				{
 					vTaskDelay(pdMS_TO_TICKS(50)); // relay contact settle
-					rerr = digipot_mcp41hv51_enable_autonomous();
+					rerr = dac_mcp4728_enable_autonomous();
 				}
 
 				if (rerr != ESP_OK)
@@ -2736,15 +2731,15 @@ void throttle_test_task(void *param)
 					ESP_LOGE(TAG_TEST, "Re-arm failed: %s — staying in override", esp_err_to_name(rerr));
 					// Clean up partial state
 					(void)relay_dpdt_my5nj_deenergize();
-					(void)digipot_mcp41hv51_disable();
+					(void)dac_mcp4728_disable();
 					break;
 				}
 
-				current_wiper = 0;
+				current_level = 0;
 				relay_on = true;
 				led_ws2812_set_fault_overlay(false);
 				led_ws2812_set_state(NODE_STATE_READY);
-				ESP_LOGI(TAG_TEST, "Throttle ARMED at wiper 0 — enter command");
+				ESP_LOGI(TAG_TEST, "Throttle ARMED at level 0 — enter command");
 				state = TEST_ARMED;
 			}
 			else if (now_ms - last_status_log_ms >= 2000)
@@ -2808,7 +2803,7 @@ void main_task(void *param)
 	if (heartbeat_ready)
 		led_ws2812_set_state(NODE_STATE_INIT);
 
-	g_digipot_ready = (digipot_mcp41hv51_init(&g_digipot_cfg) == ESP_OK);
+	g_dac_ready = (dac_mcp4728_init(&g_dac_cfg) == ESP_OK);
 	g_dpdt_relay_ready = (relay_dpdt_my5nj_init(&g_dpdt_relay_cfg) == ESP_OK);
 
 #ifndef CONFIG_BYPASS_INPUT_PEDAL_ADC
@@ -2824,8 +2819,8 @@ void main_task(void *param)
 #endif
 
 	ESP_LOGI(TAG_INIT, "--- THROTTLE TEST MODE ---");
-	ESP_LOGI(TAG_INIT, "DIGIPOT: %s (sdi=%d sck=%d cs=%d)", g_digipot_ready ? "OK" : "FAILED", g_digipot_cfg.sdi,
-	         g_digipot_cfg.sck, g_digipot_cfg.cs);
+	ESP_LOGI(TAG_INIT, "DAC: %s (sda=%d scl=%d addr=0x%02X)", g_dac_ready ? "OK" : "FAILED", g_dac_cfg.sda,
+	         g_dac_cfg.scl, g_dac_cfg.device_addr);
 	ESP_LOGI(TAG_INIT, "DPDT_RELAY: %s (gpio=%d)", g_dpdt_relay_ready ? "OK" : "FAILED", g_dpdt_relay_cfg.gpio);
 #ifdef CONFIG_BYPASS_INPUT_PEDAL_ADC
 	ESP_LOGW(TAG_INIT, "PEDAL_INPUT: BYPASSED");
@@ -2841,7 +2836,7 @@ void main_task(void *param)
 	ESP_LOGI(TAG_INIT, "HEARTBEAT_LED: %s", heartbeat_ready ? "OK" : "UNAVAILABLE");
 	ESP_LOGI(TAG_INIT, "Skipped: CAN/TWAI, steppers, Safety/Planner");
 
-	if (!g_digipot_ready || !g_dpdt_relay_ready)
+	if (!g_dac_ready || !g_dpdt_relay_ready)
 	{
 		ESP_LOGE(TAG_INIT, "Required throttle hardware init failed — test task will report errors");
 		if (heartbeat_ready)
@@ -2894,10 +2889,10 @@ void main_task(void *param)
 
 	// One startup attempt per component; retries happen later while faulted.
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
-	g_digipot_ready = (digipot_mcp41hv51_init(&g_digipot_cfg) == ESP_OK);
+	g_dac_ready = (dac_mcp4728_init(&g_dac_cfg) == ESP_OK);
 	g_dpdt_relay_ready = (relay_dpdt_my5nj_init(&g_dpdt_relay_cfg) == ESP_OK);
 #else
-	g_digipot_ready = true;
+	g_dac_ready = true;
 	g_dpdt_relay_ready = true;
 #endif
 
@@ -2959,7 +2954,7 @@ void main_task(void *param)
 	g_stepper_steering_ready = true;
 #endif
 
-	log_startup_device_status(g_twai_ready, g_digipot_ready, g_dpdt_relay_ready, g_pedal_input_ready, g_fr_inputs_ready,
+	log_startup_device_status(g_twai_ready, g_dac_ready, g_dpdt_relay_ready, g_pedal_input_ready, g_fr_inputs_ready,
 	                          g_stepper_steering_ready, g_stepper_braking_ready, heartbeat_ready);
 
 	// Log all active test bypasses at boot so they are visible on the serial console.
@@ -2995,7 +2990,7 @@ void main_task(void *param)
 		any_bypass = true;
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_THROTTLE
-		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_THROTTLE (digipot/DPDT relay skipped)");
+		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_THROTTLE (DAC/DPDT relay skipped)");
 		any_bypass = true;
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
