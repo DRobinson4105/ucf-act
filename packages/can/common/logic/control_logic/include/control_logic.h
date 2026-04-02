@@ -114,7 +114,7 @@ typedef struct
 	// Planner commands (valid when ACTIVE)
 	int16_t throttle_cmd;
 	int32_t steering_cmd;
-	int16_t braking_cmd;
+	int32_t braking_cmd;
 	node_fault_t motor_fault_code; // one-shot issue cause from CAN RX (NODE_FAULT_*)
 	node_stop_t stop_flags;        // current latched non-fault stop causes (NODE_STOP_*)
 
@@ -152,15 +152,15 @@ typedef struct
 
 	// Stepper dedup
 	int32_t last_steering_sent;
-	int16_t last_braking_sent;
+	int32_t last_braking_sent;
 
 	// Command envelope limits.
 	// If min == max == 0, the envelope is treated as unconfigured and the
 	// command is forced to neutral (0) for fail-safe behavior.
 	int32_t steering_min; // minimum allowed steering position
 	int32_t steering_max; // maximum allowed steering position
-	int16_t braking_min;  // minimum allowed braking position
-	int16_t braking_max;  // maximum allowed braking position
+	int32_t braking_min;  // minimum allowed braking position
+	int32_t braking_max;  // maximum allowed braking position
 } control_inputs_t;
 
 typedef struct
@@ -188,9 +188,9 @@ typedef struct
 	bool send_steering;        // true if steering position changed
 	bool send_braking;         // true if braking position changed
 	int32_t steering_position; // current clamped steering target (also used for PT streaming)
-	int16_t braking_position;  // current clamped braking target (also used for PT streaming)
+	int32_t braking_position;  // current clamped braking target (also used for PT streaming)
 	int32_t new_last_steering; // updated dedup tracker
-	int16_t new_last_braking;  // updated dedup tracker
+	int32_t new_last_braking;  // updated dedup tracker
 
 	// Recovery tracking
 	uint32_t enable_start_ms; // updated enable start time

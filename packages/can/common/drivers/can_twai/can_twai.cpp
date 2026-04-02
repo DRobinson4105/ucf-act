@@ -27,21 +27,6 @@ constexpr int RECOVERY_REINSTALL_SETTLE_MS = 200; // settle after twai_driver_un
 
 #include "stepper_protocol_uim2852.h"
 
-// Returns a short type label for an RX extended frame based on the command word.
-// CW_ER (0x0F) = error report, CW_NOTIFY (0x5A) = real-time notification,
-// ACK bit (0x80) set = motor ACK for a commanded CW, else status/query response.
-static inline const char *can_rx_ext_type(uint8_t cw)
-{
-	uint8_t cw_base = cw & 0x7F;
-	if (cw_base == 0x0F)
-		return "ERR  ";
-	if (cw_base == 0x5A)
-		return "NOTIF";
-	if (cw & 0x80)
-		return "ACK  ";
-	return "RSP  ";
-}
-
 // Returns true if a frame should be suppressed from the frame log.
 static inline bool can_log_suppressed(uint32_t id, bool extd)
 {
@@ -144,23 +129,7 @@ esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8
 	for (int i = 0; i < msg.data_length_code; ++i)
 		msg.data[i] = data[i];
 
-	esp_err_t err = twai_transmit(&msg, timeout);
-#ifdef CONFIG_LOG_CAN_FRAMES
-	{
-		uint8_t prod = 0, cw = 0;
-		if (stepper_uim2852_parse_can_id(identifier, &prod, &cw))
-			ESP_LOGI(TAG, "TX ext  id=0x%08lX node=%u cw=0x%02X dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
-			         (unsigned long)identifier, prod, cw, msg.data_length_code, msg.data[0], msg.data[1], msg.data[2],
-			         msg.data[3], msg.data[4], msg.data[5], msg.data[6], msg.data[7],
-			         err == ESP_OK ? "ok" : esp_err_to_name(err));
-		else
-			ESP_LOGI(TAG, "TX ext  id=0x%08lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
-			         (unsigned long)identifier, msg.data_length_code, msg.data[0], msg.data[1], msg.data[2],
-			         msg.data[3], msg.data[4], msg.data[5], msg.data[6], msg.data[7],
-			         err == ESP_OK ? "ok" : esp_err_to_name(err));
-	}
-#endif
-	return err;
+	return twai_transmit(&msg, timeout);
 }
 
 // ============================================================================
@@ -174,27 +143,11 @@ esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout)
 
 	esp_err_t err = twai_receive(msg, timeout);
 #ifdef CONFIG_LOG_CAN_FRAMES
-	if (err == ESP_OK && !can_log_suppressed(msg->identifier, msg->extd))
+	if (err == ESP_OK && !msg->extd && !can_log_suppressed(msg->identifier, false))
 	{
-		if (msg->extd)
-		{
-			uint8_t prod = 0, cw = 0;
-			if (stepper_uim2852_parse_can_id(msg->identifier, &prod, &cw))
-				ESP_LOGI(
-					TAG, "RX ext  id=0x%08lX node=%u cw=0x%02X %s dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
-					(unsigned long)msg->identifier, prod, cw, can_rx_ext_type(cw), msg->data_length_code, msg->data[0],
-					msg->data[1], msg->data[2], msg->data[3], msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
-			else
-				ESP_LOGI(TAG, "RX ext  id=0x%08lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
-				         (unsigned long)msg->identifier, msg->data_length_code, msg->data[0], msg->data[1],
-				         msg->data[2], msg->data[3], msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
-		}
-		else
-		{
-			ESP_LOGI(TAG, "RX std  id=0x%03lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
-			         (unsigned long)msg->identifier, msg->data_length_code, msg->data[0], msg->data[1], msg->data[2],
-			         msg->data[3], msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
-		}
+		ESP_LOGI(TAG, "RX std  id=0x%03lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+		         (unsigned long)msg->identifier, msg->data_length_code, msg->data[0], msg->data[1], msg->data[2],
+		         msg->data[3], msg->data[4], msg->data[5], msg->data[6], msg->data[7]);
 	}
 #endif
 	return err;

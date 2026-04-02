@@ -16,8 +16,8 @@ static const char *TAG = "STEPPER";
 static const TickType_t TX_TIMEOUT = pdMS_TO_TICKS(20);
 
 // PT FIFO defaults aligned with the planner's 100 ms command cadence.
-static const uint16_t PT_FRAME_TIME_MS_DEFAULT = 100;
-static const uint8_t PT_FIFO_LOW_WATER_DEFAULT = 1;
+static const uint16_t PT_FRAME_TIME_MS_DEFAULT = CONFIG_STEPPER_PT_FRAME_TIME_MS;
+static const uint8_t PT_FIFO_LOW_WATER_DEFAULT = CONFIG_STEPPER_PT_LOW_WATER_MARK;
 static const uint8_t PT_FIFO_PREFILL_FRAMES = 2;
 static const uint16_t PT_START_ROW = 0;
 static const uint16_t PT_TABLE_ROWS = 512;
@@ -29,7 +29,8 @@ static const uint8_t MP_IDX_FIRST_ROW = 0x01; // First row pointer
 static const uint8_t MP_IDX_LAST_ROW = 0x02;  // Last row pointer
 static const uint8_t MP_IDX_MODE = 0x03;      // PT/PVT mode select
 static const uint8_t MP_IDX_FRAME_TIME = 0x04; // Frame time (ms, 16-bit LE)
-static const uint8_t MP_IDX_LOW_WATER = 0x05; // FIFO low-water mark
+static const uint8_t MP_IDX_LOW_WATER = 0x05;      // FIFO low-water mark
+static const uint8_t MP_IDX_NEXT_ROW_INDEX = 0x06; // Set index of next writing row
 
 // (Notification callback is now per-motor, stored in stepper_motor_uim2852_t)
 
@@ -68,13 +69,33 @@ static esp_err_t send_instruction_internal(stepper_motor_uim2852_t *motor, uint8
 
 	if (err == ESP_OK)
 	{
+		taskENTER_CRITICAL(&motor->lock);
 		motor->last_command_tick = xTaskGetTickCount();
 		motor->last_cw_sent = cw;
+		motor->last_tx_dlc = (dl > 8) ? 8 : dl;
+		motor->last_tx_request_ack = request_ack;
+		memset(motor->last_tx_data, 0, sizeof(motor->last_tx_data));
+		for (int i = 0; i < motor->last_tx_dlc; ++i)
+			motor->last_tx_data[i] = data[i];
 		if (request_ack)
 			motor->ack_pending = true;
+		taskEXIT_CRITICAL(&motor->lock);
 	}
+#ifdef CONFIG_LOG_CAN_FRAMES
+	{
+		uint8_t d[8] = {};
+		uint8_t dl_log = dl < 8 ? dl : 8;
+		for (int i = 0; i < dl_log; i++)
+			d[i] = data[i];
+		ESP_LOGI(TAG, "TX ext  id=0x%08lX node=%u cw=0x%02X(%s) dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
+		         (unsigned long)can_id, motor->config.node_id, cw_to_send,
+		         stepper_uim2852_cw_name(cw_to_send), dl_log,
+		         d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7],
+		         err == ESP_OK ? "ok" : esp_err_to_name(err));
+	}
+#endif
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-	else
+	if (err != ESP_OK)
 		ESP_LOGW(TAG, "Node %u: TX failed for CW=0x%02X: %s", motor->config.node_id, cw, esp_err_to_name(err));
 #endif
 
@@ -196,27 +217,52 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor)
 	return err;
 }
 
-esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t lower_limit, int32_t upper_limit)
+esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t max_speed, int32_t lower_limit,
+                                           int32_t upper_limit, int32_t max_accel, bool enable_hw_limits)
 {
 	if (!motor || !motor->initialized)
 		return ESP_ERR_INVALID_STATE;
 
 	esp_err_t err;
 
-	// Set lower working limit (LM[1])
-	err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM, STEPPER_UIM2852_LM_LOWER_WORK, lower_limit);
-	if (err != ESP_OK)
-		return err;
+	if (enable_hw_limits)
+	{
+		// LM[0]: maximum working speed
+		err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM, STEPPER_UIM2852_LM_MAX_SPEED, max_speed);
+		if (err != ESP_OK)
+			return err;
 
-	// Set upper working limit (LM[2])
-	err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM, STEPPER_UIM2852_LM_UPPER_WORK, upper_limit);
-	if (err != ESP_OK)
-		return err;
+		// LM[1]: lower working limit
+		err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM, STEPPER_UIM2852_LM_LOWER_WORK, lower_limit);
+		if (err != ESP_OK)
+			return err;
 
-	// Enable software limits via IC[7]=1
+		// LM[2]: upper working limit
+		err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM, STEPPER_UIM2852_LM_UPPER_WORK, upper_limit);
+		if (err != ESP_OK)
+			return err;
+
+		// LM[7]: maximum acceleration
+		err = stepper_motor_uim2852_set_param(motor, STEPPER_UIM2852_CW_LM, STEPPER_UIM2852_LM_MAX_ACCEL, max_accel);
+		if (err != ESP_OK)
+			return err;
+	}
+
+	// IC[7]: enable or disable hardware software-limit enforcement
 	uint8_t data[8];
-	uint8_t dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_SOFTWARE_LIMITS, 1);
+	uint8_t dl = stepper_uim2852_build_ic_set(data, STEPPER_UIM2852_IC_SOFTWARE_LIMITS, enable_hw_limits ? 1 : 0);
 	err = send_instruction(motor, STEPPER_UIM2852_CW_IC, data, dl);
+
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+	if (err == ESP_OK)
+	{
+		if (enable_hw_limits)
+			ESP_LOGI(TAG, "Node %u: limits set (max_speed=%ld lower=%ld upper=%ld max_accel=%ld IC[7]=1)",
+			         motor->config.node_id, (long)max_speed, (long)lower_limit, (long)upper_limit, (long)max_accel);
+		else
+			ESP_LOGI(TAG, "Node %u: software limits disabled (IC[7]=0)", motor->config.node_id);
+	}
+#endif
 
 	return err;
 }
@@ -349,25 +395,10 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	uint8_t dl;
 	esp_err_t err;
 
-	// Reset the PT/PVT queue and select PT FIFO mode per the manual:
-	// MP[0]=0, MP[1]=0, MP[2]=0, MP[3]=0, MP[4]=frame_time, MP[5]=queue-low.
+	// Reset the PT/PVT queue, then program MP registers in the required order:
+	// MP[0]=0, MP[4]=frame_time, MP[3]=0, MP[5]=queue-low, MP[2]=0x00FF, MP[1]=0.
 	const uint8_t mp_reset[3] = {MP_IDX_RESET, 0x00, 0x00};
 	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_reset, 3);
-	if (err != ESP_OK)
-		return err;
-
-	const uint8_t mp_first_row[3] = {MP_IDX_FIRST_ROW, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_first_row, 3);
-	if (err != ESP_OK)
-		return err;
-
-	const uint8_t mp_last_row[3] = {MP_IDX_LAST_ROW, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_last_row, 3);
-	if (err != ESP_OK)
-		return err;
-
-	const uint8_t mp_mode[3] = {MP_IDX_MODE, 0x00, 0x00};
-	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_mode, 3);
 	if (err != ESP_OK)
 		return err;
 
@@ -378,8 +409,30 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	if (err != ESP_OK)
 		return err;
 
+	const uint8_t mp_mode[3] = {MP_IDX_MODE, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_mode, 3);
+	if (err != ESP_OK)
+		return err;
+
 	data[0] = MP_IDX_LOW_WATER;
 	data[1] = motor->pt_low_water_mark;
+	data[2] = 0x00;
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
+	if (err != ESP_OK)
+		return err;
+
+	const uint8_t mp_last_row[3] = {MP_IDX_LAST_ROW, 0xFF, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_last_row, 3);
+	if (err != ESP_OK)
+		return err;
+
+	const uint8_t mp_first_row[3] = {MP_IDX_FIRST_ROW, 0x00, 0x00};
+	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, mp_first_row, 3);
+	if (err != ESP_OK)
+		return err;
+
+	data[0] = MP_IDX_NEXT_ROW_INDEX;
+	data[1] = 0x00;
 	data[2] = 0x00;
 	err = send_instruction(motor, STEPPER_UIM2852_CW_MP, data, 3);
 	if (err != ESP_OK)
@@ -480,14 +533,17 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 	uint8_t data[8];
 	uint16_t row = 0;
 	bool start_now = false;
+	int32_t rx_position = 0;
+	int32_t rx_speed = 0;
 
 	taskENTER_CRITICAL(&motor->lock);
 	row = motor->pt_write_index;
+	rx_position = motor->absolute_position;
+	rx_speed = motor->current_speed;
 	taskEXIT_CRITICAL(&motor->lock);
 
 	uint8_t dl = stepper_uim2852_build_pt(data, row, position);
-	// PT row writes are high-rate FIFO traffic; do not request ACK for each row.
-	esp_err_t err = send_instruction_internal(motor, STEPPER_UIM2852_CW_PT, data, dl, false);
+	esp_err_t err = send_instruction_internal(motor, STEPPER_UIM2852_CW_PT, data, dl, true);
 
 	if (err == ESP_OK)
 	{
@@ -505,7 +561,7 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 		{
 			uint8_t bg_data[8];
 			uint8_t bg_dl = stepper_uim2852_build_bg(bg_data);
-			esp_err_t bg_err = send_instruction_internal(motor, STEPPER_UIM2852_CW_BG, bg_data, bg_dl, false);
+			esp_err_t bg_err = send_instruction_internal(motor, STEPPER_UIM2852_CW_BG, bg_data, bg_dl, true);
 			if (bg_err != ESP_OK)
 				return bg_err;
 
@@ -521,8 +577,9 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 #endif
 		}
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
-		ESP_LOGI(TAG, "Node %u: PT row=%u pos=%ld t=%lu ms", motor->config.node_id, (unsigned)row, (long)position,
-		         (unsigned long)time_ms);
+		ESP_LOGI(TAG, "Node %u: PT row=%u pos=%ld t=%lu ms rx_pos=%ld rx_speed=%ld err=%ld",
+		         motor->config.node_id, (unsigned)row, (long)position, (unsigned long)time_ms, (long)rx_position,
+		         (long)rx_speed, (long)llabs((long long)position - (long long)rx_position));
 #endif
 	}
 	return err;
@@ -571,30 +628,43 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 	if (!stepper_uim2852_parse_can_id(msg->identifier, &producer_id, &cw))
 		return false;
 
-	// Both motors respond with producer_id=1.  Route frames by checking
-	// whether this motor is actively waiting for a response.  For
-	// unsolicited frames (status polls, notifications, errors), accept
-	// on any instance — the caller's !matched guard prevents duplicates.
-	uint8_t cw_base_peek = stepper_uim2852_cw_base(cw);
-
-	bool is_unsolicited = (cw_base_peek == STEPPER_UIM2852_CW_MS || cw_base_peek == STEPPER_UIM2852_CW_NOTIFY ||
-	                       cw_base_peek == STEPPER_UIM2852_CW_ER);
-
-	if (!is_unsolicited)
-	{
-		// This is a query/command response — only accept if we're waiting
-		taskENTER_CRITICAL(&motor->lock);
-		bool expecting = motor->ack_pending || (motor->query_pending_cw != 0);
-		taskEXIT_CRITICAL(&motor->lock);
-		if (!expecting)
-			return false;
-	}
+	// Each motor responds with its own node ID as producer_id — reject frames
+	// from other nodes before doing any further work.
+	if (producer_id != motor->config.node_id)
+		return false;
 
 	// Update response timestamp
+	bool ack_was_pending;
+	uint8_t pending_query_cw;
+	uint8_t pending_query_idx;
+	uint8_t last_tx_cw;
+	uint8_t last_tx_dlc;
+	uint8_t last_tx_data[8];
+	bool last_tx_request_ack;
 	taskENTER_CRITICAL(&motor->lock);
+	ack_was_pending = motor->ack_pending;
+	pending_query_cw = motor->query_pending_cw;
+	pending_query_idx = motor->query_pending_idx;
+	last_tx_cw = motor->last_cw_sent;
+	last_tx_dlc = motor->last_tx_dlc;
+	last_tx_request_ack = motor->last_tx_request_ack;
+	memcpy(last_tx_data, motor->last_tx_data, sizeof(last_tx_data));
 	motor->last_response_tick = xTaskGetTickCount();
 	motor->ack_pending = false;
 	taskEXIT_CRITICAL(&motor->lock);
+	(void)ack_was_pending;
+	(void)last_tx_request_ack;
+
+#ifdef CONFIG_LOG_CAN_FRAMES
+	{
+		const uint8_t *d = msg->data;
+		uint8_t dl = msg->data_length_code;
+		ESP_LOGI(TAG, "RX ext  id=0x%08lX node=%u cw=0x%02X(%s) %s dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+		         (unsigned long)msg->identifier, motor->config.node_id, cw,
+		         stepper_uim2852_cw_name(cw), stepper_uim2852_rx_type(cw), dl,
+		         d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+	}
+#endif
 
 	uint8_t cw_base = stepper_uim2852_cw_base(cw);
 	uint8_t dl = msg->data_length_code;
@@ -681,21 +751,27 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 		break;
 
 	case STEPPER_UIM2852_CW_ER:
-		// Error report — suppress spurious 0x33/0x34 errors caused by
-		// motor misinterpreting Safety heartbeat frames as commands.
 		{
 			stepper_uim2852_error_t error = {};
 			if (stepper_uim2852_parse_error(data, dl, &error))
 			{
-				if (error.error_code != STEPPER_UIM2852_ERR_SUBINDEX && error.error_code != STEPPER_UIM2852_ERR_DATA)
-				{
-					taskENTER_CRITICAL(&motor->lock);
-					motor->status.error_detected = true;
-					motor->last_error = error;
-					taskEXIT_CRITICAL(&motor->lock);
-					ESP_LOGE(TAG, "Node %u: Error 0x%02X on CW=0x%02X[%u]", motor->config.node_id, error.error_code,
-					         error.related_cw, error.subindex);
-				}
+				bool relates_to_last_tx =
+					(error.related_cw == last_tx_cw && last_tx_dlc > 0 && error.subindex == last_tx_data[0]);
+				bool relates_to_pending_query =
+					(pending_query_cw == error.related_cw && pending_query_idx == error.subindex);
+				taskENTER_CRITICAL(&motor->lock);
+				motor->status.error_detected = true;
+				motor->last_error = error;
+				taskEXIT_CRITICAL(&motor->lock);
+				ESP_LOGE(
+					TAG,
+					"Node %u: Error 0x%02X on CW=0x%02X[%u] raw=[%02X %02X %02X %02X] last_tx=CW=0x%02X[%u] dlc=%u ack=%u "
+					"pending_ack=%u pending_query=CW=0x%02X[%u] match_last_tx=%u match_query=%u",
+					motor->config.node_id, error.error_code, error.related_cw, error.subindex,
+					data[0], data[1], data[2], data[3],
+					last_tx_cw, last_tx_dlc > 0 ? last_tx_data[0] : 0, last_tx_dlc, last_tx_request_ack ? 1 : 0,
+					ack_was_pending ? 1 : 0, pending_query_cw, pending_query_idx,
+					relates_to_last_tx ? 1 : 0, relates_to_pending_query ? 1 : 0);
 			}
 		}
 		break;

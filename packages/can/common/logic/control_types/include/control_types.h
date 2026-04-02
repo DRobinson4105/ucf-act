@@ -32,9 +32,9 @@ typedef uint8_t fr_state_t; // FR_STATE_* values
 // ============================================================================
 
 // Sentinel value for stepper dedup trackers — forces next command to send.
-// INT32_MIN for int32_t steering tracker, INT16_MIN for int16_t braking tracker.
+// Both steering and braking trackers use int32_t so full actuator travel is preserved.
 #define STEPPER_DEDUP_RESET_STEERING INT32_MIN
-#define STEPPER_DEDUP_RESET_BRAKING  INT16_MIN
+#define STEPPER_DEDUP_RESET_BRAKING  INT32_MIN
 
 // ============================================================================
 // Override / Preconditions / Actions

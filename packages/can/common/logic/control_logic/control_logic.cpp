@@ -500,7 +500,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		// If min == max == 0, envelope is not configured; force neutral (0)
 		// instead of passing through raw planner commands.
 		int32_t clamped_steering = inputs->steering_cmd;
-		int16_t clamped_braking = inputs->braking_cmd;
+		int32_t clamped_braking = inputs->braking_cmd;
 		if (inputs->steering_min == 0 && inputs->steering_max == 0)
 		{
 			clamped_steering = 0;
@@ -515,8 +515,7 @@ control_step_result_t control_compute_step(node_state_t current_state, node_faul
 		}
 		else
 		{
-			clamped_braking =
-				(int16_t)control_clamp_command(inputs->braking_cmd, inputs->braking_min, inputs->braking_max);
+			clamped_braking = control_clamp_command(inputs->braking_cmd, inputs->braking_min, inputs->braking_max);
 		}
 
 		// Expose the clamped targets even when they have not changed so the

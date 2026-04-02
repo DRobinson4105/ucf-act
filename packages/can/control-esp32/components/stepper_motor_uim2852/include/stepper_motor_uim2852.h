@@ -97,6 +97,9 @@ typedef struct stepper_motor_uim2852
 	// Tracking
 	TickType_t last_response_tick;
 	TickType_t last_command_tick;
+	uint8_t last_tx_data[8];    // last transmitted payload bytes
+	uint8_t last_tx_dlc;        // last transmitted DLC
+	bool last_tx_request_ack;   // whether last transmitted frame requested ACK
 
 	// Configuration (queried from motor)
 	uint16_t microstep_resolution; // From PP[5] (uint16_t to support 256 microsteps)
@@ -169,16 +172,20 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor);
 /**
  * @brief Program hardware software-limits (LM) on the motor controller.
  *
- * Sets lower/upper working limits and enables the limit system.
- * These act as a secondary safety net — even if the host sends an
- * out-of-range position, the motor controller will reject it.
+ * When enable_hw_limits is true, sends LM[0] (max speed), LM[1] (lower
+ * working limit), LM[2] (upper working limit), and LM[7] (max accel), then
+ * IC[7]=1 to enforce them. When false, skips the LM frames and sends IC[7]=0.
  *
- * @param motor       Motor instance
- * @param lower_limit Lower working limit in pulses (signed)
- * @param upper_limit Upper working limit in pulses (signed)
+ * @param motor            Motor instance
+ * @param max_speed        LM[0]: maximum working speed (pulses/sec)
+ * @param lower_limit      LM[1]: lower working limit (pulses, signed)
+ * @param upper_limit      LM[2]: upper working limit (pulses, signed)
+ * @param max_accel        LM[7]: maximum acceleration (pulses/sec^2)
+ * @param enable_hw_limits true → send LM frames + IC[7]=1, false → IC[7]=0 only
  * @return ESP_OK on success
  */
-esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t lower_limit, int32_t upper_limit);
+esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t max_speed, int32_t lower_limit,
+                                           int32_t upper_limit, int32_t max_accel, bool enable_hw_limits);
 
 // ============================================================================
 // Basic Control

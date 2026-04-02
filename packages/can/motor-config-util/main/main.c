@@ -89,7 +89,7 @@ static void set_baud(uint32_t kbps)
     ESP_ERROR_CHECK(twai_stop());
     ESP_ERROR_CHECK(twai_driver_uninstall());
 
-    twai_general_config_t g_cfg = TWAI_GENERAL_CONFIG_DEFAULT(CONFIG_CAN_TX_GPIO, CONFIG_CAN_RX_GPIO, TWAI_MODE_NO_ACK);
+    twai_general_config_t g_cfg = TWAI_GENERAL_CONFIG_DEFAULT(CONFIG_CAN_TX_GPIO, CONFIG_CAN_RX_GPIO, TWAI_MODE_NORMAL);
     twai_filter_config_t  f_cfg = TWAI_FILTER_CONFIG_ACCEPT_ALL();
     twai_timing_config_t  t_cfg = (kbps == 500) ? (twai_timing_config_t)TWAI_TIMING_CONFIG_500KBITS()
                                                  : (twai_timing_config_t)TWAI_TIMING_CONFIG_1MBITS();
@@ -104,7 +104,7 @@ void app_main(void)
 {
     /* ---- 500 kbps ---- */
     {
-        twai_general_config_t g_cfg = TWAI_GENERAL_CONFIG_DEFAULT(CONFIG_CAN_TX_GPIO, CONFIG_CAN_RX_GPIO, TWAI_MODE_NO_ACK);
+        twai_general_config_t g_cfg = TWAI_GENERAL_CONFIG_DEFAULT(CONFIG_CAN_TX_GPIO, CONFIG_CAN_RX_GPIO, TWAI_MODE_NORMAL);
         twai_timing_config_t  t_cfg = TWAI_TIMING_CONFIG_500KBITS();
         twai_filter_config_t  f_cfg = TWAI_FILTER_CONFIG_ACCEPT_ALL();
         ESP_ERROR_CHECK(twai_driver_install(&g_cfg, &t_cfg, &f_cfg));
@@ -132,6 +132,7 @@ void app_main(void)
 
     /* ---- 1000 kbps ---- */
     set_baud(1000);
+    vTaskDelay(pdMS_TO_TICKS(2000)); /* wait for motor to reboot at new bit rate */
 
     /* cw=0x81, ins=[5], ack DLC=2 */
     {
@@ -152,12 +153,41 @@ void app_main(void)
     ESP_LOGI(TAG, "motor target set to %d (%s)",
              CONFIG_MOTOR_TARGET, CONFIG_MOTOR_TARGET == 1 ? "braking" : "steering");
 
+    /* cw=0x21, no ack */
+    {
+        twai_message_t msg = {
+            .flags            = TWAI_MSG_FLAG_EXTD,
+            .identifier       = make_can_id(CONSUMER_ID, 0x21),
+            .data_length_code = 0,
+        };
+        log_frame(&msg, "TX");
+        ESP_ERROR_CHECK(twai_transmit(&msg, pdMS_TO_TICKS(100)));
+        log_alerts();
+    }
+
     /* cw=0x7E, ins=[1], no ack — repeated at 1000 kbps */
     {
         uint8_t data[] = {1};
         send_frame(CONSUMER_ID, 0x7E, data, sizeof(data));
         log_alerts();
     }
+
+#if CONFIG_FACTORY_RESET
+    /* cw=0x7E, ins=[2], no ack — factory reset command */
+    {
+        uint8_t data[] = {2};
+        send_frame(CONSUMER_ID, 0x7E, data, sizeof(data));
+        log_alerts();
+    }
+
+    /* cw=0x7E, ins=[1], no ack — save after factory reset */
+    {
+        uint8_t data[] = {1};
+        send_frame(CONSUMER_ID, 0x7E, data, sizeof(data));
+        log_alerts();
+    }
+    ESP_LOGI(TAG, "factory reset sent");
+#endif
 
     ESP_LOGI(TAG, "Done");
 

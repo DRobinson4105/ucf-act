@@ -32,6 +32,186 @@ config THROTTLE_TEST_MODE
         Auto-recovers when pedal is rearmed and F/R is not in
         Reverse.
 
+menu "Motor Limits"
+
+    menu "Steering Motor"
+
+        config STEERING_LM0_MAX_SPEED
+            int "LM[0]: max working speed (pulses/sec)"
+            range 0 2147483647
+            default 160000
+            help
+                Maximum working speed sent to the steering motor (LM[0]).
+                Only programmed when steering software limits are enabled.
+                Units: pulses/sec.
+
+        config STEERING_LM1_LOWER_LIMIT
+            int "LM[1]: lower working limit (pulses)"
+            range -2147483648 2147483647
+            default -160000
+            help
+                Lower working position limit for the steering motor (LM[1]).
+                Only programmed when steering software limits are enabled.
+                Units: pulses (signed).
+
+        config STEERING_LM2_UPPER_LIMIT
+            int "LM[2]: upper working limit (pulses)"
+            range -2147483648 2147483647
+            default 160000
+            help
+                Upper working position limit for the steering motor (LM[2]).
+                Only programmed when steering software limits are enabled.
+                Units: pulses (signed).
+
+        config STEERING_LM7_MAX_ACCEL
+            int "LM[7]: max acceleration (pulses/sec^2)"
+            range 0 2147483647
+            default 5000
+            help
+                Maximum acceleration limit for the steering motor (LM[7]).
+                Only programmed when steering software limits are enabled.
+                Units: pulses/sec^2.
+
+        config STEERING_AC_DEFAULT_ACCEL
+            int "AC: default acceleration (pulses/sec^2)"
+            range 1 2147483647
+            default 5000
+            help
+                Acceleration rate sent to the steering motor via the AC
+                register during initialization. Used by the motor for all
+                non-PT motion and as a safety limit during PT interpolation.
+                Units: pulses/sec^2.
+
+        config STEERING_DC_DEFAULT_DECEL
+            int "DC: default deceleration (pulses/sec^2)"
+            range 1 2147483647
+            default 5000
+            help
+                Deceleration rate sent to the steering motor via the DC
+                register during initialization.
+                Units: pulses/sec^2.
+
+        config STEERING_SD_STOP_DECEL
+            int "SD: emergency stop deceleration (pulses/sec^2)"
+            range 1 2147483647
+            default 8000
+            help
+                Emergency stop deceleration rate sent to the steering motor
+                via the SD register during initialization. Also used (×10,
+                overflow-guarded) when stepper_motor_uim2852_emergency_stop()
+                is called at runtime.
+                Units: pulses/sec^2.
+
+    endmenu
+
+    menu "Braking Motor"
+
+        config BRAKING_LM0_MAX_SPEED
+            int "LM[0]: max working speed (pulses/sec)"
+            range 0 2147483647
+            default 28000
+            help
+                Maximum working speed sent to the braking motor (LM[0]).
+                Only programmed when braking software limits are enabled.
+                Units: pulses/sec.
+
+        config BRAKING_LM1_LOWER_LIMIT
+            int "LM[1]: lower working limit (pulses)"
+            range -2147483648 2147483647
+            default -28000
+            help
+                Lower working position limit for the braking motor (LM[1]).
+                Only programmed when braking software limits are enabled.
+                Units: pulses (signed).
+
+        config BRAKING_LM2_UPPER_LIMIT
+            int "LM[2]: upper working limit (pulses)"
+            range -2147483648 2147483647
+            default 0
+            help
+                Upper working position limit for the braking motor (LM[2]).
+                Only programmed when braking software limits are enabled.
+                Units: pulses (signed).
+
+        config BRAKING_LM7_MAX_ACCEL
+            int "LM[7]: max acceleration (pulses/sec^2)"
+            range 0 2147483647
+            default 5000
+            help
+                Maximum acceleration limit for the braking motor (LM[7]).
+                Only programmed when braking software limits are enabled.
+                Units: pulses/sec^2.
+
+        config BRAKE_RELEASE_POSITION
+            int "Brake release position (pulses)"
+            range -2147483648 2147483647
+            default -28000
+            help
+                Runtime braking release position used by planner command
+                translation and control-side clamping. This is distinct
+                from LM[1], which remains the braking motor's configured
+                lower software limit during limit initialization.
+                Units: pulses (signed).
+
+        config BRAKING_AC_DEFAULT_ACCEL
+            int "AC: default acceleration (pulses/sec^2)"
+            range 1 2147483647
+            default 5000
+            help
+                Acceleration rate sent to the braking motor via the AC
+                register during initialization. Used by the motor for all
+                non-PT motion and as a safety limit during PT interpolation.
+                Units: pulses/sec^2.
+
+        config BRAKING_DC_DEFAULT_DECEL
+            int "DC: default deceleration (pulses/sec^2)"
+            range 1 2147483647
+            default 5000
+            help
+                Deceleration rate sent to the braking motor via the DC
+                register during initialization.
+                Units: pulses/sec^2.
+
+        config BRAKING_SD_STOP_DECEL
+            int "SD: emergency stop deceleration (pulses/sec^2)"
+            range 1 2147483647
+            default 8000
+            help
+                Emergency stop deceleration rate sent to the braking motor
+                via the SD register during initialization. Also used (×10,
+                overflow-guarded) when stepper_motor_uim2852_emergency_stop()
+                is called at runtime.
+                Units: pulses/sec^2.
+
+    endmenu
+
+    menu "PT FIFO"
+
+        config STEPPER_PT_FRAME_TIME_MS
+            int "MP[4]: PT frame time (ms)"
+            range 5 30000
+            default 100
+            help
+                Fixed segment duration for every PT interpolation row,
+                sent via MP[4] during PT FIFO configuration. Must match
+                the planner's command cadence (default 100 ms).
+                Units: milliseconds.
+
+        config STEPPER_PT_LOW_WATER_MARK
+            int "MP[5]: PT FIFO low-water mark (rows)"
+            range 1 255
+            default 1
+            help
+                FIFO low-water threshold sent via MP[5] during PT FIFO
+                configuration. When the number of queued PT rows drops
+                to this value the motor sends a FIFO-low warning
+                notification, allowing the host to refill in time.
+                Units: rows.
+
+    endmenu
+
+endmenu
+
 menu "Test Bypasses"
 
     menu "Safety Mirror"
@@ -118,6 +298,26 @@ menu "Test Bypasses"
             help
                 Skip braking stepper motor (node 6) initialization,
                 configuration, and CAN commands.
+
+        config BYPASS_SOFTWARE_LIMITS_STEERING
+            bool "Disable steering software limits (IC[7]=0)"
+            default n
+            depends on !BYPASS_ACTUATOR_STEPPER_STEERING
+            help
+                Send IC[7]=0 instead of IC[7]=1 during steering software
+                limit initialization. LM[1] and LM[2] are still programmed.
+                Use when testing steering motion beyond the normal working
+                range. Do not enable on the vehicle.
+
+        config BYPASS_SOFTWARE_LIMITS_BRAKING
+            bool "Disable braking software limits (IC[7]=0)"
+            default n
+            depends on !BYPASS_ACTUATOR_STEPPER_BRAKING
+            help
+                Send IC[7]=0 instead of IC[7]=1 during braking software
+                limit initialization. LM[1] and LM[2] are still programmed.
+                Use when testing braking motion beyond the normal working
+                range. Do not enable on the vehicle.
 
     endmenu
 

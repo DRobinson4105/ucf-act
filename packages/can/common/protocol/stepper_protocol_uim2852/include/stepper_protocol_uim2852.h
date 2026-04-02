@@ -153,6 +153,70 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 #define STEPPER_UIM2852_CW_D1 0xD1 // High-speed reciprocating / fixed-angle pulse
 
 // ============================================================================
+// CW Name Lookup
+// ============================================================================
+
+static inline const char *stepper_uim2852_cw_name(uint8_t cw)
+{
+	if (cw == STEPPER_UIM2852_CW_D1)
+		return "high-speed pulse";
+	switch (cw & 0x7F)
+	{
+	case STEPPER_UIM2852_CW_PP:     return "system params";
+	case STEPPER_UIM2852_CW_IC:     return "initial config";
+	case STEPPER_UIM2852_CW_IE:     return "info enable";
+	case STEPPER_UIM2852_CW_ML:     return "model string";
+	case STEPPER_UIM2852_CW_SN:     return "serial number";
+	case STEPPER_UIM2852_CW_ER:     return "error";
+	case STEPPER_UIM2852_CW_MT:     return "motor driver params";
+	case STEPPER_UIM2852_CW_MS:     return "motion status";
+	case STEPPER_UIM2852_CW_MO:     return "motor on/off";
+	case STEPPER_UIM2852_CW_BG:     return "begin motion";
+	case STEPPER_UIM2852_CW_ST:     return "stop";
+	case STEPPER_UIM2852_CW_MF:     return "motion param frame";
+	case STEPPER_UIM2852_CW_AC:     return "acceleration";
+	case STEPPER_UIM2852_CW_DC:     return "deceleration";
+	case STEPPER_UIM2852_CW_SS:     return "cut-in speed";
+	case STEPPER_UIM2852_CW_SD:     return "stop deceleration";
+	case STEPPER_UIM2852_CW_JV:     return "jog velocity";
+	case STEPPER_UIM2852_CW_SP:     return "speed";
+	case STEPPER_UIM2852_CW_PR:     return "relative position";
+	case STEPPER_UIM2852_CW_PA:     return "absolute position";
+	case STEPPER_UIM2852_CW_OG:     return "set origin";
+	case STEPPER_UIM2852_CW_MP:     return "pvt motion params";
+	case STEPPER_UIM2852_CW_PV:     return "pvt mode select";
+	case STEPPER_UIM2852_CW_PT:     return "pt position";
+	case STEPPER_UIM2852_CW_QP:     return "pvt queue position";
+	case STEPPER_UIM2852_CW_QV:     return "pvt queue velocity";
+	case STEPPER_UIM2852_CW_QT:     return "pvt queue time";
+	case STEPPER_UIM2852_CW_QF:     return "pvt quick feed";
+	case STEPPER_UIM2852_CW_LM:     return "software limits";
+	case STEPPER_UIM2852_CW_BL:     return "backlash";
+	case STEPPER_UIM2852_CW_DV:     return "desired values";
+	case STEPPER_UIM2852_CW_IL:     return "input logic";
+	case STEPPER_UIM2852_CW_TG:     return "trigger";
+	case STEPPER_UIM2852_CW_DI:     return "digital io";
+	case STEPPER_UIM2852_CW_QE:     return "encoder/stall";
+	case STEPPER_UIM2852_CW_NOTIFY: return "notification";
+	case STEPPER_UIM2852_CW_SY:     return "system operation";
+	default:                        return "unknown";
+	}
+}
+
+// Returns a short type label for an RX extended frame based on the command word.
+static inline const char *stepper_uim2852_rx_type(uint8_t cw)
+{
+	uint8_t cw_base = cw & 0x7F;
+	if (cw_base == STEPPER_UIM2852_CW_ER)
+		return "ERR  ";
+	if (cw_base == STEPPER_UIM2852_CW_NOTIFY)
+		return "NOTIF";
+	if (cw & 0x80)
+		return "ACK  ";
+	return "RSP  ";
+}
+
+// ============================================================================
 // Parameter Indices
 // ============================================================================
 

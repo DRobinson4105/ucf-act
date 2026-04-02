@@ -1176,29 +1176,47 @@ static void test_set_limits_sends_lm_and_ic(void)
 	stepper_motor_uim2852_t motor;
 	init_default_motor(&motor);
 
-	esp_err_t err = stepper_motor_uim2852_set_limits(&motor, -3200, 3200);
+	// max_speed=5000 (0x00001388), lower=-3200 (0xFFFFF380), upper=3200 (0x00000C80), max_accel=2500 (0x000009C4)
+	esp_err_t err = stepper_motor_uim2852_set_limits(&motor, 5000, -3200, 3200, 2500, true);
 	assert(err == ESP_OK);
-	// Should send 3 frames: LM[1], LM[2], IC[7]
-	assert(mock_sent_count == 3);
+	// Should send 5 frames: LM[0], LM[1], LM[2], LM[7], IC[7]
+	assert(mock_sent_count == 5);
+
 	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_LM);
-	assert(mock_sent_frames[0].data[0] == STEPPER_UIM2852_LM_LOWER_WORK);
-	// -3200 = 0xFFFFF380 LE
-	assert(mock_sent_frames[0].data[1] == 0x80);
-	assert(mock_sent_frames[0].data[2] == 0xF3);
-	assert(mock_sent_frames[0].data[3] == 0xFF);
-	assert(mock_sent_frames[0].data[4] == 0xFF);
+	assert(mock_sent_frames[0].data[0] == STEPPER_UIM2852_LM_MAX_SPEED);
+	// 5000 = 0x00001388 LE
+	assert(mock_sent_frames[0].data[1] == 0x88);
+	assert(mock_sent_frames[0].data[2] == 0x13);
+	assert(mock_sent_frames[0].data[3] == 0x00);
+	assert(mock_sent_frames[0].data[4] == 0x00);
 
 	assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_LM);
-	assert(mock_sent_frames[1].data[0] == STEPPER_UIM2852_LM_UPPER_WORK);
-	// 3200 = 0x00000C80 LE
+	assert(mock_sent_frames[1].data[0] == STEPPER_UIM2852_LM_LOWER_WORK);
+	// -3200 = 0xFFFFF380 LE
 	assert(mock_sent_frames[1].data[1] == 0x80);
-	assert(mock_sent_frames[1].data[2] == 0x0C);
-	assert(mock_sent_frames[1].data[3] == 0x00);
-	assert(mock_sent_frames[1].data[4] == 0x00);
+	assert(mock_sent_frames[1].data[2] == 0xF3);
+	assert(mock_sent_frames[1].data[3] == 0xFF);
+	assert(mock_sent_frames[1].data[4] == 0xFF);
 
-	assert(get_sent_cw_base(2) == STEPPER_UIM2852_CW_IC);
-	assert(mock_sent_frames[2].data[0] == STEPPER_UIM2852_IC_SOFTWARE_LIMITS);
-	assert(mock_sent_frames[2].data[1] == 1); // enable
+	assert(get_sent_cw_base(2) == STEPPER_UIM2852_CW_LM);
+	assert(mock_sent_frames[2].data[0] == STEPPER_UIM2852_LM_UPPER_WORK);
+	// 3200 = 0x00000C80 LE
+	assert(mock_sent_frames[2].data[1] == 0x80);
+	assert(mock_sent_frames[2].data[2] == 0x0C);
+	assert(mock_sent_frames[2].data[3] == 0x00);
+	assert(mock_sent_frames[2].data[4] == 0x00);
+
+	assert(get_sent_cw_base(3) == STEPPER_UIM2852_CW_LM);
+	assert(mock_sent_frames[3].data[0] == STEPPER_UIM2852_LM_MAX_ACCEL);
+	// 2500 = 0x000009C4 LE
+	assert(mock_sent_frames[3].data[1] == 0xC4);
+	assert(mock_sent_frames[3].data[2] == 0x09);
+	assert(mock_sent_frames[3].data[3] == 0x00);
+	assert(mock_sent_frames[3].data[4] == 0x00);
+
+	assert(get_sent_cw_base(4) == STEPPER_UIM2852_CW_IC);
+	assert(mock_sent_frames[4].data[0] == STEPPER_UIM2852_IC_SOFTWARE_LIMITS);
+	assert(mock_sent_frames[4].data[1] == 1); // enable
 }
 
 static void test_set_limits_uninitialized(void)
@@ -1208,14 +1226,14 @@ static void test_set_limits_uninitialized(void)
 	memset(&motor, 0, sizeof(motor));
 	motor.initialized = false;
 
-	esp_err_t err = stepper_motor_uim2852_set_limits(&motor, -3200, 3200);
+	esp_err_t err = stepper_motor_uim2852_set_limits(&motor, 0, -3200, 3200, 0, true);
 	assert(err == ESP_ERR_INVALID_STATE);
 	assert(mock_sent_count == 0);
 }
 
 static void test_set_limits_null_motor(void)
 {
-	esp_err_t err = stepper_motor_uim2852_set_limits(NULL, -3200, 3200);
+	esp_err_t err = stepper_motor_uim2852_set_limits(NULL, 0, -3200, 3200, 0, true);
 	assert(err == ESP_ERR_INVALID_STATE);
 }
 
@@ -1225,9 +1243,9 @@ static void test_set_limits_tx_failure(void)
 	init_default_motor(&motor);
 	mock_twai_send_result = ESP_FAIL;
 
-	esp_err_t err = stepper_motor_uim2852_set_limits(&motor, -3200, 3200);
+	esp_err_t err = stepper_motor_uim2852_set_limits(&motor, 0, -3200, 3200, 0, true);
 	assert(err == ESP_FAIL);
-	assert(mock_sent_count == 0); // first send fails
+	assert(mock_sent_count == 0); // first send (LM[0]) fails
 }
 
 // ============================================================================
@@ -1241,31 +1259,40 @@ static void test_pt_configure_sets_fifo_mode_and_notifications(void)
 
 	esp_err_t err = stepper_motor_uim2852_pt_configure(&motor);
 	assert(err == ESP_OK);
-	assert(mock_sent_count == 8);
+	assert(mock_sent_count == 9);
 	assert(get_sent_cw_base(0) == STEPPER_UIM2852_CW_MP);
 	assert(mock_sent_frames[0].data[0] == 0x00); // MP[0] reset
 	assert(get_sent_cw_base(1) == STEPPER_UIM2852_CW_MP);
-	assert(mock_sent_frames[1].data[0] == 0x01); // MP[1] first row
+	assert(mock_sent_frames[1].data[0] == 0x04); // MP[4] frame time
+	assert(mock_sent_frames[1].data[1] == 0x64);
+	assert(mock_sent_frames[1].data[2] == 0x00);
+	assert(mock_sent_frames[1].len == 3);
 	assert(get_sent_cw_base(2) == STEPPER_UIM2852_CW_MP);
-	assert(mock_sent_frames[2].data[0] == 0x02); // MP[2] last row
+	assert(mock_sent_frames[2].data[0] == 0x03); // MP[3] FIFO mode
 	assert(get_sent_cw_base(3) == STEPPER_UIM2852_CW_MP);
-	assert(mock_sent_frames[3].data[0] == 0x03); // MP[3] FIFO mode
+	assert(mock_sent_frames[3].data[0] == 0x05); // MP[5] queue low
+	assert(mock_sent_frames[3].data[1] == 1);
+	assert(mock_sent_frames[3].data[2] == 0);
 	assert(get_sent_cw_base(4) == STEPPER_UIM2852_CW_MP);
-	assert(mock_sent_frames[4].data[0] == 0x04); // MP[4] frame time
-	assert(mock_sent_frames[4].data[1] == 100);
-	assert(mock_sent_frames[4].data[2] == 0);
+	assert(mock_sent_frames[4].data[0] == 0x02); // MP[2] last row
+	assert(mock_sent_frames[4].data[1] == 0xFF);
+	assert(mock_sent_frames[4].data[2] == 0x00);
 	assert(get_sent_cw_base(5) == STEPPER_UIM2852_CW_MP);
-	assert(mock_sent_frames[5].data[0] == 0x05); // MP[5] queue low
-	assert(mock_sent_frames[5].data[1] == 1);
+	assert(mock_sent_frames[5].data[0] == 0x01); // MP[1] first row
+	assert(mock_sent_frames[5].data[1] == 0);
 	assert(mock_sent_frames[5].data[2] == 0);
-	assert(get_sent_cw_base(6) == STEPPER_UIM2852_CW_IE);
-	assert(mock_sent_frames[6].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_EMPTY);
-	assert(mock_sent_frames[6].data[1] == 1);
+	assert(get_sent_cw_base(6) == STEPPER_UIM2852_CW_MP);
+	assert(mock_sent_frames[6].data[0] == 0x06); // MP[6] next write index
+	assert(mock_sent_frames[6].data[1] == 0);
 	assert(mock_sent_frames[6].data[2] == 0);
 	assert(get_sent_cw_base(7) == STEPPER_UIM2852_CW_IE);
-	assert(mock_sent_frames[7].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_LOW);
+	assert(mock_sent_frames[7].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_EMPTY);
 	assert(mock_sent_frames[7].data[1] == 1);
 	assert(mock_sent_frames[7].data[2] == 0);
+	assert(get_sent_cw_base(8) == STEPPER_UIM2852_CW_IE);
+	assert(mock_sent_frames[8].data[0] == STEPPER_UIM2852_IE_PVT_FIFO_LOW);
+	assert(mock_sent_frames[8].data[1] == 1);
+	assert(mock_sent_frames[8].data[2] == 0);
 }
 
 static void test_pt_start_sends_pv_and_sets_active(void)

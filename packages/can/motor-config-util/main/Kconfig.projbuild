@@ -21,4 +21,13 @@ menu "SC3 Sender"
         help
             1 = braking motor, 2 = steering motor.
 
+    config FACTORY_RESET
+        bool "Factory reset motor after configuration"
+        default n
+        help
+            When enabled, two additional cw=0x7E frames are sent after the
+            normal save frame: one with data byte 0 = 2 (factory reset
+            command) followed by one with data byte 0 = 1 (save), matching
+            the motor's factory-reset sequence.
+
 endmenu
