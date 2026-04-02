@@ -45,11 +45,8 @@ struct FixSnapshot {
   double lat{0.0};
   double lon{0.0};
   double alt{0.0};
-  double horizontalCovarianceM2{std::numeric_limits<double>::infinity()};
   rclcpp::Time stamp;
   bool valid{false};
-  bool covarianceKnown{false};
-  bool covarianceOk{false};
 };
 
 constexpr std::array<DatumFallback, 2> kDatumFallbacks{{
@@ -58,12 +55,8 @@ constexpr std::array<DatumFallback, 2> kDatumFallbacks{{
 }};
 
 double distXy(const XY &a, const XY &b) {
-  const double dx = a.x - b.x;
-  const double dy = a.y - b.y;
-  return std::sqrt(dx * dx + dy * dy);
+  return std::hypot(a.x - b.x, a.y - b.y);
 }
-
-double clampDouble(double v, double lo, double hi) { return std::max(lo, std::min(hi, v)); }
 
 double degToRad(double deg) { return deg * kPi / 180.0; }
 
@@ -101,11 +94,7 @@ double horizontalCovarianceMetricM2(const sensor_msgs::msg::NavSatFix &msg) {
 }
 
 double wrapAngleRad(double a) {
-  while (a > kPi)
-    a -= 2.0 * kPi;
-  while (a < -kPi)
-    a += 2.0 * kPi;
-  return a;
+  return std::atan2(std::sin(a), std::cos(a));
 }
 
 double pointToSegmentDistance(const XY &p, const XY &a, const XY &b) {
@@ -114,7 +103,7 @@ double pointToSegmentDistance(const XY &p, const XY &a, const XY &b) {
   const double denom = dx * dx + dy * dy;
   if (denom <= 1e-12) return distXy(p, a);
   double t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / denom;
-  t = clampDouble(t, 0.0, 1.0);
+  t = std::clamp(t, 0.0, 1.0);
   const XY proj{a.x + t * dx, a.y + t * dy};
   return distXy(p, proj);
 }
@@ -213,7 +202,7 @@ std::vector<XY> removeKinksGuarded(const std::vector<XY> &pts, double kinkShortM
         const double n2 = std::sqrt(v2x * v2x + v2y * v2y);
 
         if (n1 > 1e-9 && n2 > 1e-9) {
-          const double cosang = clampDouble((v1x * v2x + v1y * v2y) / (n1 * n2), -1.0, 1.0);
+          const double cosang = std::clamp((v1x * v2x + v1y * v2y) / (n1 * n2), -1.0, 1.0);
           const double ang = std::acos(cosang) * 180.0 / kPi;
           if (ang > uTurnDeg) drop = true;
         }
@@ -439,7 +428,7 @@ double speedFromCurvature(double k, double vMin, double vMax, double aLatMax, do
   const double ak = std::abs(k);
   if (ak < kDeadband) return vMax;
   const double v = std::sqrt(std::max(0.0, aLatMax / ak));
-  return clampDouble(v, vMin, vMax);
+  return std::clamp(v, vMin, vMax);
 }
 
 uint64_t gridKey(int gx, int gy) {
@@ -966,13 +955,13 @@ private:
       autoDatumFromFix = cfg_.autoDatumFromFix;
     }
 
+    const double horizontalCovarianceM2 = horizontalCovarianceMetricM2(*msg);
+    const bool covarianceOk = std::isfinite(horizontalCovarianceM2) && horizontalCovarianceM2 <= covarianceThresholdM2;
+
     FixSnapshot fix;
     fix.lat = msg->latitude;
     fix.lon = msg->longitude;
     fix.alt = std::isfinite(msg->altitude) ? msg->altitude : 0.0;
-    fix.horizontalCovarianceM2 = horizontalCovarianceMetricM2(*msg);
-    fix.covarianceKnown = std::isfinite(fix.horizontalCovarianceM2);
-    fix.covarianceOk = fix.covarianceKnown && fix.horizontalCovarianceM2 <= covarianceThresholdM2;
     fix.stamp = this->now();
     fix.valid = true;
 
@@ -981,7 +970,7 @@ private:
       latestFix_ = fix;
     }
 
-    if (autoDatumFromFix && fix.covarianceOk) {
+    if (autoDatumFromFix && covarianceOk) {
       resolveDatum(fix.lat, fix.lon, fix.alt, "fix", false);
     }
   }
@@ -1139,8 +1128,6 @@ private:
 
     json waypoints;
     std::string routeId;
-    bool clearRequested = false;
-
     if (j.is_object() && j.contains("waypoints") && j["waypoints"].is_array()) {
       waypoints = j["waypoints"];
       if (j.contains("route_id") && j["route_id"].is_string()) routeId = j["route_id"].get<std::string>();
@@ -1151,9 +1138,7 @@ private:
       return;
     }
 
-    clearRequested = waypoints.empty();
-
-    if (clearRequested) {
+    if (waypoints.empty()) {
       if (haveLastRouteState_ && routeId == lastRouteId_ && lastRouteSignature_.empty()) return;
 
       publishClearOutputs(cfg, routeId);

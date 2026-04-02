@@ -70,7 +70,7 @@ static control_inputs_t default_ctrl_inputs(void)
 	in.throttle_slew_interval_ms = 100;
 	in.throttle_slew_step = 12;
 	in.throttle_min = 0;
-	in.throttle_max = 255;
+	in.throttle_max = 4095;
 	in.last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
 	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
 	in.steering_min = -3000;

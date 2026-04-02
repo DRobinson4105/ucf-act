@@ -31,7 +31,7 @@ typedef struct
 {
 	int voltage_gpio;           // GPIO for pack voltage divider (must be on ADC1)
 	int current_gpio;           // GPIO for current sensor output (must be on ADC1)
-	uint16_t divider_ratio;     // Voltage divider multiplier (e.g. 23 for 220k/10k)
+	float divider_ratio;        // Voltage divider multiplier (e.g. 22.33 for 220k/10k)
 	uint16_t current_zero_mv;   // Sensor output at 0A in mV (e.g. 2500 for 5V supply)
 	float current_sens_uv;      // Sensor sensitivity in µV/mA (e.g. 6.25 for 6.25mV/A)
 	float current_output_scale; // Output divider ratio applied to sensor (e.g. 0.5952)

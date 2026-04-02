@@ -1757,7 +1757,7 @@ void main_task(void *param)
 	g_battery_cfg = {
 		.voltage_gpio = BATTERY_VOLTAGE_GPIO,
 		.current_gpio = BATTERY_CURRENT_GPIO,
-		.divider_ratio = 23,              // 220kΩ / 10kΩ → ratio 1:23
+		.divider_ratio = 22.33f,          // 220kΩ / 10kΩ nominal 23, calibrated from multimeter
 		.current_zero_mv = 2500,          // HTFS at 5V: VCC/2 = 2.5V at 0A
 		.current_sens_uv = 6.25f,         // HTFS-200-P: 6.25mV/A = 6.25µV/mA
 		.current_output_scale = 0.5952f,  // 10k/(6.8k+10k) output divider

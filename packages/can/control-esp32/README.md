@@ -102,11 +102,10 @@ See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | 0    | Pedal ADC   | Analog In | ADC1_CH0, voltage divider (220k/100k), threshold 500mV |
 | 4    | CAN TX      | Output    | TWAI peripheral (SN65HVD230 transceiver)               |
 | 5    | CAN RX      | Input     | TWAI peripheral (SN65HVD230 transceiver)               |
+| 6    | DAC SDA     | I/O       | MCP4728 I2C data (4.7kΩ pull-up to 3.3V at throttle box) |
+| 7    | DAC SCL     | I/O       | MCP4728 I2C clock (4.7kΩ pull-up to 3.3V at throttle box) |
 | 8    | Status LED  | Output    | Onboard WS2812 RGB LED (no external wiring)            |
 | 10   | DPDT Relay  | Output    | 2N5551 base via 680R (10k pull-down), MY5NJ 24V coil   |
-| 18   | Digipot SDI | Output    | MCP41HV51 SPI data in                                  |
-| 19   | Digipot SCK | Output    | MCP41HV51 SPI clock                                    |
-| 20   | Digipot CS  | Output    | MCP41HV51 SPI chip select                              |
 | 22   | F/R Forward | Input     | PC817 optocoupler, pull-up, active LOW                 |
 | 23   | F/R Reverse | Input     | PC817 optocoupler, pull-up, active LOW                 |
 
@@ -128,7 +127,7 @@ Each subsection covers production (on-cart) and bench wiring for Control ESP32 i
 | Interface                                 | Bench vs Production                                            |
 | ----------------------------------------- | -------------------------------------------------------------- |
 | CAN bus (SN65HVD230)                      | Same — see [root README](../README.md#can-bus-wiring)          |
-| Throttle system (MCP41HV51 + MY5NJ relay) | Same hardware — bench output unloaded (no Curtis controller)   |
+| Throttle system (MCP4728 + LM358 + MY5NJ) | Same hardware — bench: measure VOUTA directly (no op-amp needed) |
 | Pedal ADC                                 | Same — bench divider floating reads ~0mV (safe default)        |
 | F/R optocouplers (PC817)                  | Cart wiring only — production-style 48V switch wiring via 4.7k |
 | Status LED (WS2812)                       | Same                                                           |
@@ -148,96 +147,220 @@ GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver mo
 
 ### Throttle Box Connectors
 
-All throttle-related components (MCP41HV51 digipot, MY5NJ DPDT relay, 2N5551, PC817 optocouplers, pedal ADC voltage divider) are housed in a separate throttle box perfboard powered from the cart's 24V rail. The Control ESP32 connects to the throttle box via four cables:
+All throttle-related components (MCP4728 DAC, LM358 op-amp, MY5NJ DPDT relay, 2N5551, PC817 optocouplers, pedal ADC voltage divider) are housed in a separate throttle box perfboard powered from the cart's 24V rail. The Control ESP32 connects to the throttle box via four cables:
 
 **ESP32-side connectors:**
 
-| Label  | Connector    | Pin 1                           | Pin 2                       | Pin 3                     | Pin 4 |
-| ------ | ------------ | ------------------------------- | --------------------------- | ------------------------- | ----- |
-| **J1** | 3-pin JST-PH | Digipot SDI (GPIO 18) WHITE     | Digipot SCK (GPIO 19) YELLOW | Digipot CS (GPIO 20) GREEN |       |
-| **J2** | 2-pin JST-PH | DPDT Relay Base (GPIO 10) WHITE | Pedal ADC (GPIO 0) YELLOW   |                           |       |
-| **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE         | F/R Rev (GPIO 23) GREEN     |                           |       |
-| **J9** | 2-pin JST-PH | ESP32 GND BLACK                 | ESP32 3.3V (Digipot VL) RED |                           |       |
+| Label  | Connector    | Pin 1                           | Pin 2                       |
+| ------ | ------------ | ------------------------------- | --------------------------- |
+| **J1** | 2-pin JST-PH | DAC SDA (GPIO 6) GREEN          | DAC SCL (GPIO 7) WHITE      |
+| **J2** | 2-pin JST-PH | DPDT Relay Base (GPIO 10) WHITE | Pedal ADC (GPIO 0) YELLOW   |
+| **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE         | F/R Rev (GPIO 23) GREEN     |
+| **J9** | 2-pin JST-PH | ESP32 GND BLACK                 | ESP32 3.3V RED              |
 
-J9 carries ESP32 GND (signal reference for the throttle box GND bus) and ESP32 3.3V (digipot VL logic supply). On the perfboard, run a direct wire from J9 3.3V to the MCP41HV51 VL pin (pin 1) — this is the logic power supply. Then place a 100nF (0.1µF) ceramic decoupling cap from the VL pin to GND (not in series with the 3.3V supply — the cap goes to GND as a parallel bypass, close to the chip). Tie SHDN (pin 7) to VL (3.3V) to keep the potentiometer active, and WLAT (pin 6) to GND for immediate wiper updates on SPI write.
+J9 carries ESP32 GND (signal reference for the throttle box GND bus) and ESP32 3.3V (MCP4728 VDD + I2C pull-up supply). On the perfboard, connect J9 3.3V to the MCP4728 VDD pin. Place a 100nF (0.1µF) ceramic decoupling cap from VDD to GND close to the chip (parallel bypass, not in series with the supply). Add **4.7kΩ pull-up resistors** from J9 3.3V to each I2C line (SDA and SCL) at the throttle box end of the cable — these are required for reliable I2C over the ~7ft cable run. Tie the MCP4728 LDAC pin to GND for immediate output updates.
+
+**I2C pull-up placement:** The 4.7kΩ pull-ups go on the **perfboard** (throttle box end), not at the ESP32. Connect one 4.7kΩ resistor from the SDA pad (J1 Pin 1) to the 3.3V rail, and another 4.7kΩ from the SCL pad (J1 Pin 2) to the 3.3V rail. The ESP32's internal pull-ups (~45kΩ) are too weak for the cable capacitance. Twist the SDA and SCL wires together along the run to reduce EMI pickup.
 
 **Cart-side connectors (on the throttle box):**
 
-| Label  | Connector          | Pin 1                  | Pin 2                 | Pin 3          | Pin 4                 |
-| ------ | ------------------ | ---------------------- | --------------------- | -------------- | --------------------- |
-| **J4** | Anderson Powerpole | 24V+ RED               | GND BLACK             |                |                       |
-| **J5** | 4-pin JST-PH       | Curtis Pin 2 RED       | Curtis Pin 3 YELLOW   | Curtis B- BLUE | Pedal pot wiper GREEN |
-| **J6** | 2-pin JST-PH       | Bypass wire A YELLOW   | Bypass wire B WHITE   |                |                       |
-| **J7** | 2-pin JST-PH       | Anti-arc signal YELLOW | Anti-arc return GREEN |                |                       |
-| **J8** | 2-pin JST-PH       | Buzzer supply BLUE     | Buzzer signal WHITE   |                |                       |
+| Label  | Connector          | Pin 1                  | Pin 2                 | Pin 3 | Pin 4 |
+| ------ | ------------------ | ---------------------- | --------------------- | ----- | ----- |
+| **J4** | Anderson Powerpole | 24V+ RED               | GND BLACK             |       |       |
+| **J5** | 2-pin JST-PH       | Pedal pot wiper GREEN  | Curtis Pin 3 YELLOW   |       |       |
+| **J6** | 2-pin JST-PH       | Bypass wire A YELLOW   | Bypass wire B WHITE   |       |       |
+| **J7** | 2-pin JST-PH       | Anti-arc signal YELLOW | Anti-arc return GREEN |       |       |
+| **J8** | 2-pin JST-PH       | Buzzer supply BLUE     | Buzzer signal WHITE   |       |       |
 
-**Important:** J5 pin 3 (Curtis B-, blue wire) connects to digipot P0B — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
+J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
 
 **J5 internal throttle box connections:**
 
-The MY5NJ DPDT relay Pole 1 on the throttle box perfboard switches the Curtis throttle input (Pin 3) between the manual pedal pot and the MCP41HV51 digipot wiper. J5 connects the relay and digipot to the cart-side Curtis controller and pedal pot:
+The MY5NJ DPDT relay Pole 1 on the throttle box perfboard switches the Curtis throttle input (Pin 3) between the manual pedal pot and the DAC/op-amp output. J5 connects the relay to the cart-side Curtis controller and pedal pot:
 
-| J5 Pin | Cart-Side Signal                     | Throttle Box Internal Connection |
-| ------ | ------------------------------------ | -------------------------------- |
-| Pin 1  | Curtis Pin 2 (pot high ref) RED      | Digipot P0A                      |
-| Pin 2  | Curtis Pin 3 (throttle input) YELLOW | DPDT Relay Pole 1 COM (output)   |
-| Pin 3  | Curtis B- BLUE                       | Digipot P0B                      |
-| Pin 4  | Pedal pot wiper GREEN                | DPDT Relay Pole 1 NC (input)     |
+| J5 Pin | Cart-Side Signal                     | Throttle Box Internal Connection    |
+| ------ | ------------------------------------ | ----------------------------------- |
+| Pin 1  | Pedal pot wiper GREEN                | DPDT Relay Pole 1 NC (input)        |
+| Pin 2  | Curtis Pin 3 (throttle input) YELLOW | DPDT Relay Pole 1 COM (output)      |
 
-The relay switches Curtis Pin 3 between manual pedal pot (NC, de-energized) and digipot wiper (NO, energized). In manual mode, the pot wiper signal passes through NC → COM → Curtis Pin 3. In autonomous mode, the digipot wiper output passes through NO → COM → Curtis Pin 3.
+The relay switches Curtis Pin 3 between manual pedal pot (NC, de-energized) and DAC/op-amp output (NO, energized). In manual mode, the pot wiper signal passes through NC → COM → Curtis Pin 3. In autonomous mode, the op-amp output passes through NO → COM → Curtis Pin 3.
+
+Curtis Pin 2 and B- are no longer connected to the throttle box — they remain in their original cart wiring (Pin 2 to pedal pot high terminal, B- to pedal pot low terminal). The DAC + op-amp generates the throttle voltage independently.
 
 **Curtis controller pinout (1999 Club Car DS 48V):**
 
 | Curtis Pin | Function                   | Used by J5? |
 | ---------- | -------------------------- | ----------- |
 | Pin 1      | Key switch                 | No          |
-| Pin 2      | Pot high reference         | Yes (Pin 1) |
-| Pin 3      | Pot wiper / throttle input | Yes (Pin 2) |
-| B-         | Battery negative           | Yes (Pin 3) |
+| Pin 2      | Pot high reference         | No (original pot wiring only) |
+| Pin 3      | Pot wiper / throttle input | Yes (Pin 1) |
+| B-         | Battery negative           | No (original pot wiring only) |
 
 **J5 cart-side wiring procedure:**
 
 The original cart wiring connects the pedal pot wiper directly to Curtis Pin 3. To intercept this signal for the DPDT relay:
 
 1. **CUT** the original pedal pot wiper → Curtis Pin 3 wire:
+    - Pedal pot wiper side of the cut → J5 Pin 1 (GREEN)
     - Curtis Pin 3 side of the cut → J5 Pin 2 (YELLOW)
-    - Pedal pot wiper side of the cut → J5 Pin 4 (GREEN)
-2. **SPLICE** (do not cut) the Curtis Pin 2 wire:
-    - Original connection to pedal pot high terminal stays intact
-    - New branch → J5 Pin 1 (RED) for digipot P0A
-3. **SPLICE** (do not cut) the Curtis B- wire:
-    - Original connection stays intact
-    - New branch → J5 Pin 3 (BLUE) for digipot P0B
+2. Curtis Pin 2 and B- remain in their **original unmodified wiring** — no splices needed
 
-Curtis Pin 2 must remain connected to the pedal pot high terminal so the pot retains its reference voltage for manual mode.
+### Throttle System (MCP4728 DAC + LM358 Op-Amp + MY5NJ Relay)
 
-### Throttle System (MCP41HV51 Digipot + MY5NJ Relay)
+MCP4728 12-bit I2C DAC provides 4096 output levels (0-4095) on channel A using VDD as the voltage reference, producing 0-VDD (~3.3V) output. An LM358 op-amp in non-inverting configuration (gain ~2.47) scales this to 0-8.5V for the Curtis 1204 throttle input. The op-amp output connects to the MY5NJ DPDT relay Pole 1 NO terminal.
 
-MCP41HV51-502E/ST (5kΩ, TSSOP) high-voltage digital potentiometer provides 256 wiper positions (0-255) for continuous throttle level control. 5kΩ full-scale resistance matches the Curtis 1204 controller's 5kΩ throttle potentiometer. P0A connects to Curtis Pin 2 (8.5V reference), P0B to Curtis B- (ground reference), P0W (wiper) output to the MY5NJ DPDT relay Pole 1 NO terminal.
+**Signal chain:**
 
-**Power supply:** V+ powered from 24V rail (max 36V). V- and DGND both tied to throttle box GND bus. VL (digital logic) powered from ESP32 3.3V via J9 Pin 2. SHDN (pin 7) must be tied to VL (3.3V) to keep the potentiometer active. WLAT (pin 6) must be tied to GND for immediate wiper updates on SPI write. If WLAT is HIGH or floating, SPI writes succeed but the wiper position never changes. If SHDN is LOW or floating, the resistor network is disabled. SDO and NC may be left floating. SPI interface: SDI (GPIO 18), SCK (GPIO 19), CS (GPIO 20). SPI clock: 1 MHz, mode 0.
+```
+ESP32 (I2C) → MCP4728 Ch.A (0-VDD, ~3.3V) → LM358 (gain 2.47) → 0-8.5V → Relay NO → Curtis Pin 3
+```
 
-**Safe state:** Wiper position 0 (minimum throttle, near P0B). At wiper 0 the output voltage is approximately 0V — well within the Curtis controller's deadband, producing no movement.
+**MCP4728 DAC circuit (GY-MCP4728 breakout board):**
+
+The GY-MCP4728 breakout has onboard 8.2kΩ I2C pull-ups and a decoupling cap. External 4.7kΩ pull-ups are added in parallel for stronger drive over the ~7ft I2C cable run (effective combined pull-up: ~3kΩ). No external decoupling cap needed on VDD.
+
+Board pin labels: V G CL DA L R A B C D
+
+```
+J9 3.3V ──┬── V (VDD)
+           │
+           ├── R3 (4.7kΩ) ── J1 Pin 1 (SDA) ── DA
+           │
+           └── R4 (4.7kΩ) ── J1 Pin 2 (SCL) ── CL
+
+GND bus ──┬── G (VSS)
+           │
+           └── L (LDAC)
+
+A (VOUTA) ── LM358 Pin 3 (non-inverting input)
+R, B, C, D ── (floating)
+```
+
+| Board Pin | Full Name | Connect to |
+|-----------|-----------|-----------|
+| V | VDD | J9 3.3V rail |
+| G | GND | GND bus |
+| DA | SDA | J1 Pin 1 (GPIO 6) |
+| CL | SCL | J1 Pin 2 (GPIO 7) |
+| L | LDAC | GND bus (immediate update) |
+| A | VOUTA | LM358 pin 3 |
+| R | RDY/BSY | Floating |
+| B, C, D | VOUTB-D | Floating |
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| R3 (4.7kΩ) | External I2C SDA pull-up | J9 3.3V → J1 Pin 1 (SDA), on perfboard |
+| R4 (4.7kΩ) | External I2C SCL pull-up | J9 3.3V → J1 Pin 2 (SCL), on perfboard |
+
+Internal DAC config (set by driver): channel A, VDD reference, 1x gain → 0-VDD (~3.3V) output range (~0.8 mV/step, 4096 levels). Power-on reset outputs 0V (safe default).
+
+**LM358 op-amp circuit (non-inverting amplifier):**
+
+```
+MCP4728 VOUTA ── LM358 Pin 3 (IN+)
+
+                    LM358 Pin 1 (OUT) ──┬── Relay Pole 1 NO
+                                        │
+                                        ├── R5 (100kΩ) ── GND    (failsafe)
+                                        │
+                                        └── R1 (10kΩ + 4.7kΩ) ──┬── LM358 Pin 2 (IN-)
+                                                                 │
+                                                                 R2 (10kΩ) ── GND
+
+24V ──┬── LM358 Pin 8 (V+)
+      │
+      ├── C2 (100nF) ── GND             (decoupling, close to chip)
+      │
+      └── C3 (10µF) ── GND              (bulk decoupling, near chip)
+
+GND ──── LM358 Pin 4 (GND)
+
+LM358 Pins 5, 6, 7 ── (floating, unused channel B)
+```
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| LM358 Pin 1 (OUT_A) | Op-amp output | Relay Pole 1 NO + R5 + R1 |
+| LM358 Pin 2 (IN-_A) | Inverting input | Junction of R1 and R2 |
+| LM358 Pin 3 (IN+_A) | Non-inverting input | MCP4728 VOUTA |
+| LM358 Pin 4 (GND) | Ground | GND bus |
+| LM358 Pin 8 (V+) | Positive supply | 24V rail |
+| LM358 Pins 5-7 | Unused channel B | Floating |
+| R1 (10kΩ + 4.7kΩ) | Feedback resistor | LM358 pin 1 → LM358 pin 2 |
+| R2 (10kΩ) | Gain-set to GND | LM358 pin 2 → GND |
+| R5 (100kΩ) | Failsafe pull-down | LM358 pin 1 → GND (pulls output to 0V if DAC loses power) |
+| C2 (100nF ceramic) | HF decoupling | 24V → GND, close to LM358 pin 8 |
+| C3 (10µF electrolytic) | Bulk decoupling | 24V → GND, near LM358 (stripe/minus to GND) |
+
+Gain = 1 + (R1/R2) = 1 + (14.7kΩ / 10kΩ) = **2.47**. Max output = 3.3V × 2.47 = **8.15V** (varies slightly with VDD, software-capped at 8.5V).
+
+**Safe state:** DAC level 0 produces 0V on the op-amp output — well within the Curtis controller's deadband, producing no movement.
 
 **MY5NJ DPDT relay** (24V coil, driven via 2N5551 NPN transistor on GPIO 10):
 
-- Pole 1 switches Curtis Pin 3 between manual pedal pot (NC) and digipot wiper (NO)
+- Pole 1 switches Curtis Pin 3 between manual pedal pot (NC) and op-amp output (NO)
 - Pole 2 bypasses the pedal microswitch (NC = normal pedal operation, NO = bypassed)
 - Both poles switch simultaneously (DPDT)
 - De-energized = safe state (manual pedal control, no bypass)
-- 1N4007 flyback diode soldered across the relay coil terminals — cathode (striped end) toward 24V, anode toward the 2N5551 collector. Clamps back-EMF when the coil de-energizes to protect the transistor.
 
-**Production:** Digipot wiper feeds into the Curtis motor controller throttle input through the DPDT relay. The 256 wiper positions span the Curtis controller's full throttle range with fine granularity.
+**2N5551 relay driver circuit:**
 
-**Bench:** Same MCP41HV51 + MY5NJ relay hardware. The digipot output is unloaded (no Curtis controller connected). Useful for verifying SPI communication with a DMM on the wiper output. The relay will audibly click when energized — verifies GPIO 10 output.
+```
+J2 Pin 1 (GPIO 10) ── 680Ω ──┬── 2N5551 Base
+                               │
+                             10kΩ
+                               │
+                              GND
+
+                    24V ──┬── MY5NJ Coil+ ── Coil- ──┬── 2N5551 Collector
+                          │                           │
+                          │    1N4007 (flyback)       │
+                          └──── Cathode ── Anode ─────┘
+                                (stripe)
+
+                              2N5551 Emitter ── GND
+```
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| 680Ω resistor | Base current limiter | J2 Pin 1 (GPIO 10) → 2N5551 base |
+| 10kΩ resistor | Base pull-down (ensures relay off when GPIO floats) | 2N5551 base → GND |
+| 2N5551 NPN | Relay coil switch | Collector → relay coil low side, Emitter → GND |
+| MY5NJ coil | 24V DPDT relay | High side → 24V rail, Low side → 2N5551 collector |
+| 1N4007 diode | Flyback clamp | Cathode (stripe) → 24V rail, Anode → 2N5551 collector |
+
+When GPIO 10 goes HIGH, ~3.8mA flows through the 680Ω into the 2N5551 base, saturating the transistor and energizing the relay coil. The 10kΩ pull-down ensures the base is LOW (relay off) during ESP32 boot when GPIOs are floating. The 1N4007 clamps the inductive back-EMF spike when the coil de-energizes.
+
+**Production:** Op-amp output feeds into the Curtis motor controller throttle input through the DPDT relay. The 4096 DAC levels span the Curtis controller's full throttle range with ~2.0 mV per step.
+
+**Bench:** Without the op-amp, measure MCP4728 VOUTA directly (0-VDD, ~3.3V). With the op-amp, measure the output (0-8.5V). The relay will audibly click when energized — verifies GPIO 10 output.
 
 ### Pedal ADC
 
-GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider (220k/100k). Threshold for "pressed" is 500 mV.
+GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider (220kΩ/100kΩ). Threshold for "pressed" is 500 mV.
 
-**Production:** Voltage divider connected to the cart's accelerator pedal potentiometer wiper. Pedal pressed produces >500 mV; released reads ~0 mV.
+**Pedal ADC voltage divider circuit:**
 
-**Bench:** Same voltage divider. With no pedal connected, the floating input reads ~0 mV (treated as "not pressed" — safe default).
+```
+Pedal pot wiper (0-8.5V) ── 220kΩ ──┬── GPIO 0 (ADC1_CH0)
+                                      │
+                                    100kΩ
+                                      │
+                                     GND
+```
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| 220kΩ resistor | High-side divider | Pedal pot wiper (from relay Pole 1 NC / J5 Pin 2) → divider junction |
+| 100kΩ resistor | Low-side divider | Divider junction → GND bus |
+
+The divider scales the pedal pot's 0-8.5V range to 0-2.66V for the ESP32's 3.3V ADC. The divider junction connects to GPIO 0 via J2 Pin 2. The pedal pot wiper comes from the relay Pole 1 NC terminal (same wire as J5 Pin 2, pedal pot wiper side) — this reads the pedal position regardless of relay state since the divider taps before the relay.
+
+Note: the divider has high source impedance (~69kΩ = 220k||100k). The ESP32-C6 ADC handles this but readings may have slight noise. The 8-sample oversampling in the driver smooths this out.
+
+**Production:** Pedal pressed produces >500 mV; released reads ~0 mV.
+
+**Bench:** With no pedal connected, the floating input reads ~0 mV (treated as "not pressed" — safe default).
 
 ### F/R Optocouplers (PC817)
 
@@ -309,7 +432,7 @@ GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status L
 
 | Component                  | Description                                                      |
 | -------------------------- | ---------------------------------------------------------------- |
-| `digipot_mcp41hv51`        | MCP41HV51 SPI digital potentiometer for throttle level selection |
+| `dac_mcp4728`              | MCP4728 I2C DAC for throttle level (12-bit, 4096 levels)        |
 | `stepper_motor_uim2852`    | UIM2852CA closed-loop stepper motor control API                  |
 | `relay_dpdt_my5nj`         | MY5NJ DPDT relay driver (24V coil via 2N5551 NPN transistor)     |
 | `adc_12bitsar`             | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper        |
@@ -326,7 +449,7 @@ Not all components can detect physical absence at init or runtime. Components th
 
 | Component               | Detects absence? | Why                                                                                                                                                                                                                                                                                                                                                                                           |
 | ----------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `digipot_mcp41hv51`     | Partial          | SPI transaction success is verified, but no readback of actual wiper position. A disconnected digipot will report SPI success with no actual output.                                                                                                                                                                                                                                          |
+| `dac_mcp4728`           | Yes              | Every I2C write is followed by a read-back verification. I2C NACK detects disconnected device immediately.                                                                                                                                                                                                                                          |
 | `relay_dpdt_my5nj`      | No               | Output-only GPIO. Same readback pattern as before — verifies the MCU register, not whether the relay/transistor is physically present.                                                                                                                                                                                                                                                        |
 | `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled.                                                                                                                                                  |
 | `optocoupler_pc817`     | No (pre-bypass)  | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. Pre-bypass, NEUTRAL is expected (FORWARD reads as NEUTRAL when anti-arc switch can't conduct). Hardware absence is indistinguishable from "cart in FORWARD/NEUTRAL." Post-bypass (ACTIVE), the full truth table is readable and a disconnected optocoupler would read NEUTRAL, which zeroes throttle but does not fault. |
@@ -334,20 +457,22 @@ Not all components can detect physical absence at init or runtime. Components th
 
 ## Throttle Control
 
-The throttle system uses an MCP41HV51 digital potentiometer to provide 256 wiper positions (0-255) for continuous throttle level control:
+The throttle system uses an MCP4728 DAC + LM358 op-amp to provide 4096 output levels (0-4095) for continuous throttle level control:
 
-- Wiper 0: Off (near P0B, in Curtis deadband, no movement)
-- Low wiper values: Fine low-speed control
-- Wiper 255: Maximum throttle (near P0A, full reference voltage)
-- Slew rate limited: max 12 wiper steps per 100ms
+- Level 0: Off (0V output, in Curtis deadband, no movement)
+- Levels 0-~800: Within Curtis deadband, no wheel movement
+- Level ~800: First wheel movement (deadband exit, ~1.6V at op-amp output)
+- Levels ~800-4095: Proportional speed control (~2.0 mV per step)
+- Level 4095: Maximum throttle (~8.24V output)
+- Slew rate limited: max 200 DAC steps per 100ms
 
 Enable sequence (READY -> ACTIVE):
 
-1. Set digipot wiper to 0
+1. Set DAC output to level 0
 2. Wait 200ms enable dwell
 3. Enable steering and braking motors
-4. Energize DPDT relay (GPIO 10) — both poles switch: throttle source to digipot, pedal bypass active
-5. Enable digipot autonomous mode
+4. Energize DPDT relay (GPIO 10) — both poles switch: throttle source to DAC/op-amp, pedal bypass active
+5. Enable DAC autonomous mode
 
 ## Test Bypasses
 
@@ -362,7 +487,7 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Planner command timeout/stale checks                                             |
 | `CONFIG_BYPASS_INPUT_PEDAL_ADC`              | Skip pedal ADC readings (always not pressed, always re-armed)                            |
 | `CONFIG_BYPASS_INPUT_FR_SENSOR`              | Force F/R state to FORWARD (skip optocoupler channel reading)                            |
-| `CONFIG_BYPASS_ACTUATOR_THROTTLE`            | Skip digipot and DPDT relay control                                                      |
+| `CONFIG_BYPASS_ACTUATOR_THROTTLE`            | Skip DAC and DPDT relay control                                                          |
 | `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING`    | Skip steering stepper motor (node 7) init/configure/commands                             |
 | `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING`     | Skip braking stepper motor (node 6) init/configure/commands                              |
 
@@ -386,7 +511,7 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | `CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS` | on      | Log Safety heartbeat monitor lost/regained transitions        |
 | `CONFIG_LOG_CAN_RECOVERY`                  | off     | Log CAN bus recovery events (stop/start, reinstall, bus-off)  |
 | `CONFIG_LOG_RETRY_TWAI`                    | off     | Log repeated TWAI retry attempts (startup and runtime faults) |
-| `CONFIG_LOG_RETRY_DIGIPOT`                 | off     | Log digipot retry attempts while faulted                      |
+| `CONFIG_LOG_RETRY_DAC`                     | off     | Log DAC retry attempts while faulted                          |
 | `CONFIG_LOG_RETRY_DPDT_RELAY`              | off     | Log DPDT relay retry attempts while faulted                   |
 | `CONFIG_LOG_RETRY_PEDAL_INPUT`             | off     | Log pedal ADC retry attempts while faulted                    |
 | `CONFIG_LOG_RETRY_FR_INPUT`                | off     | Log F/R input retry attempts while faulted                    |
@@ -422,7 +547,7 @@ Retries are unbounded for failed required components, paced at 500ms intervals (
 
 | Flag                                     | Default | Effect                                              |
 | ---------------------------------------- | ------- | --------------------------------------------------- |
-| `CONFIG_LOG_ACTUATOR_DIGIPOT_WIPER`      | off     | Log digipot wiper position changes                  |
+| `CONFIG_LOG_ACTUATOR_DAC_LEVEL`          | off     | Log DAC throttle level changes                      |
 | `CONFIG_LOG_ACTUATOR_DPDT_RELAY`         | off     | Log DPDT relay energize/de-energize                 |
 | `CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX` | off     | Log stepper position commands sent over CAN         |
 | `CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX`  | off     | Log stepper motion commands (PA/PR/ST)              |

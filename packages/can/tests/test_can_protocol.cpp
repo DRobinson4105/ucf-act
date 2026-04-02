@@ -92,7 +92,7 @@ static void test_planner_command_roundtrip(void)
 	can_encode_planner_command(data, &cmd_in);
 
 	planner_command_t cmd_out = {};
-	assert(can_decode_planner_command(data, 5, &cmd_out));
+	assert(can_decode_planner_command(data, 6, &cmd_out));
 
 	assert(cmd_out.throttle == 5);
 	assert(cmd_out.steering_position == 720);
@@ -121,7 +121,7 @@ static void test_planner_command_extremes(void)
 {
 	planner_command_t cmd_in = {
 		.sequence = 255,
-		.throttle = 255,
+		.throttle = 4095,
 		.steering_position = 720,
 		.braking_position = 255,
 	};
@@ -130,9 +130,9 @@ static void test_planner_command_extremes(void)
 	can_encode_planner_command(data, &cmd_in);
 
 	planner_command_t cmd_out = {};
-	assert(can_decode_planner_command(data, 5, &cmd_out));
+	assert(can_decode_planner_command(data, 6, &cmd_out));
 
-	assert(cmd_out.throttle == 255);
+	assert(cmd_out.throttle == 4095);
 	assert(cmd_out.steering_position == 720);
 	assert(cmd_out.braking_position == 255);
 	assert(cmd_out.sequence == 255);
@@ -146,16 +146,17 @@ static void test_planner_command_wire_format(void)
 
 	// byte 0: sequence
 	assert(data[0] == 10);
-	// byte 1: throttle
-	assert(data[1] == 3);
-	// byte 2: steering MSB (300 = 0x012C -> MSB 0x01)
-	assert(data[2] == 0x01);
-	// byte 3: steering LSB (300 = 0x012C -> LSB 0x2C)
-	assert(data[3] == 0x2C);
-	// byte 4: braking
-	assert(data[4] == 2);
-	// bytes 5-7: reserved, should be zero
-	assert(data[5] == 0);
+	// byte 1: throttle MSB (3 = 0x0003 -> MSB 0x00)
+	assert(data[1] == 0x00);
+	// byte 2: throttle LSB (3 = 0x0003 -> LSB 0x03)
+	assert(data[2] == 0x03);
+	// byte 3: steering MSB (300 = 0x012C -> MSB 0x01)
+	assert(data[3] == 0x01);
+	// byte 4: steering LSB (300 = 0x012C -> LSB 0x2C)
+	assert(data[4] == 0x2C);
+	// byte 5: braking
+	assert(data[5] == 2);
+	// bytes 6-7: reserved, should be zero
 	assert(data[6] == 0);
 	assert(data[7] == 0);
 }
@@ -170,7 +171,7 @@ static void test_planner_command_decode_rejects_short_dlc(void)
 		.braking_position = 0xCC,
 	};
 
-	assert(!can_decode_planner_command(data, 4, &cmd_out));
+	assert(!can_decode_planner_command(data, 5, &cmd_out));
 	assert(cmd_out.sequence == 0xAA);
 	assert(cmd_out.throttle == 0xBB);
 	assert(cmd_out.steering_position == 0x1234);
@@ -181,17 +182,19 @@ static void test_planner_command_decode_full_byte_throttle(void)
 {
 	uint8_t data[8] = {};
 	data[0] = 42;
-	data[1] = 0xFF;
+	// throttle = 4095 = 0x0FFF MSB/LSB
+	data[1] = 0x0F;
+	data[2] = 0xFF;
 	// steering = 100 = 0x0064 MSB/LSB
-	data[2] = 0x00;
-	data[3] = 0x64;
+	data[3] = 0x00;
+	data[4] = 0x64;
 	// braking = 50
-	data[4] = 50;
+	data[5] = 50;
 
 	planner_command_t cmd_out = {};
-	assert(can_decode_planner_command(data, 5, &cmd_out));
+	assert(can_decode_planner_command(data, 6, &cmd_out));
 	assert(cmd_out.sequence == 42);
-	assert(cmd_out.throttle == 255);
+	assert(cmd_out.throttle == 4095);
 	assert(cmd_out.steering_position == 100);
 	assert(cmd_out.braking_position == 50);
 }

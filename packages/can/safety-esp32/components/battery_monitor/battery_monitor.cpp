@@ -47,6 +47,10 @@ constexpr float VOLTAGE_EMA_ALPHA = 0.05f;
 // EMA alpha for current: ~250ms time constant at 20 Hz (alpha ≈ 1/(20*0.25) = 0.2)
 constexpr float CURRENT_EMA_ALPHA = 0.2f;
 
+// Voltage-SOC blend alpha: continuously corrects coulomb counting drift.
+// At 20 Hz with alpha=0.001, time constant ≈ 50s (~2-3 min to converge).
+constexpr float VOLTAGE_SOC_BLEND_ALPHA = 0.001f;
+
 // ============================================================================
 // SOC Constants
 // ============================================================================
@@ -338,9 +342,9 @@ esp_err_t battery_monitor_init(const battery_monitor_config_t *config)
 
 	s_initialized = true;
 
-	ESP_LOGI(TAG, "Initialized: voltage_gpio=%d (ch%d) current_gpio=%d (ch%d) divider=%u capacity=%lumAh",
-	         config->voltage_gpio, s_voltage_channel, config->current_gpio, s_current_channel, config->divider_ratio,
-	         (unsigned long)config->capacity_mah);
+	ESP_LOGI(TAG, "Initialized: voltage_gpio=%d (ch%d) current_gpio=%d (ch%d) divider=%.2f capacity=%lumAh",
+	         config->voltage_gpio, s_voltage_channel, config->current_gpio, s_current_channel,
+	         (double)config->divider_ratio, (unsigned long)config->capacity_mah);
 
 	return ESP_OK;
 }
@@ -528,6 +532,13 @@ void battery_monitor_update(uint32_t now_ms)
 	// soc = base_soc - (mAh_used / capacity_mAh) × 100
 	float soc_delta_pct = (s_coulomb_mah_used / (float)s_config.capacity_mah) * 100.0f;
 	float soc_estimate = s_soc_coulomb_base - soc_delta_pct;
+
+	// ── Blend voltage-derived SOC to correct coulomb counting drift ─────
+	// Nudge coulomb base toward voltage SOC each tick so drift is
+	// corrected over ~2-3 minutes without requiring an idle period.
+	float voltage_soc = (float)voltage_to_soc((uint16_t)(s_voltage_filtered_mv + 0.5f));
+	s_soc_coulomb_base += VOLTAGE_SOC_BLEND_ALPHA * (voltage_soc - soc_estimate);
+	soc_estimate = s_soc_coulomb_base - soc_delta_pct;
 
 	// Clamp to 0-100
 	if (soc_estimate < 0.0f)

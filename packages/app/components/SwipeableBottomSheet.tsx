@@ -8,7 +8,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-const MIN_HEIGHT = 230;
+export const SHEET_MIN_HEIGHT = 230;
 const MAX_HEIGHT = SCREEN_HEIGHT * 0.85;
 const DRAG_THRESHOLD = 3;
 
@@ -29,7 +29,7 @@ export default function SwipeableBottomSheet({
   expandRef,
 }: SwipeableBottomSheetProps) {
   const insets = useSafeAreaInsets();
-  const INITIAL_OFFSET = MAX_HEIGHT - MIN_HEIGHT;
+  const INITIAL_OFFSET = MAX_HEIGHT - SHEET_MIN_HEIGHT;
   const translateY = useRef(
     new Animated.Value(initiallyExpanded ? 0 : INITIAL_OFFSET)
   ).current;
@@ -110,9 +110,21 @@ export default function SwipeableBottomSheet({
 
   return (
     <Animated.View
-      className="absolute bottom-0 left-0 right-0 bg-surface rounded-t-3xl z-50 shadow-2xl"
       style={[
         {
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: "#1A1A1A",
+          borderTopLeftRadius: 24,
+          borderTopRightRadius: 24,
+          zIndex: 50,
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: -4 },
+          shadowOpacity: 0.3,
+          shadowRadius: 12,
+          elevation: 16,
           height: MAX_HEIGHT,
           transform: [{ translateY }],
           paddingBottom: insets.bottom,
@@ -120,8 +132,8 @@ export default function SwipeableBottomSheet({
       ]}
       {...panResponder.panHandlers}
     >
-      <View className="items-center justify-center pt-4 pb-2">
-        <View className="w-14 h-1 bg-border rounded-full" />
+      <View style={{ alignItems: "center", justifyContent: "center", paddingTop: 16, paddingBottom: 8 }}>
+        <View style={{ width: 56, height: 4, backgroundColor: "#2A2A2A", borderRadius: 2 }} />
       </View>
       {children}
     </Animated.View>

@@ -129,20 +129,10 @@ private:
 
   template <typename GoalT> static void setProgressCheckerIdIfPresent(GoalT &, const std::string &) {}
 
-  static double clampDouble(double v, double lo, double hi) {
-    return std::max(lo, std::min(hi, v));
-  }
-
-  static double dist2(double ax, double ay, double bx, double by) {
-    const double dx = ax - bx;
-    const double dy = ay - by;
-    return dx * dx + dy * dy;
-  }
-
   static double dist(const geometry_msgs::msg::PoseStamped &a, const geometry_msgs::msg::PoseStamped &b) {
-    return std::sqrt(dist2(
-      a.pose.position.x, a.pose.position.y,
-      b.pose.position.x, b.pose.position.y));
+    return std::hypot(
+      a.pose.position.x - b.pose.position.x,
+      a.pose.position.y - b.pose.position.y);
   }
 
   static geometry_msgs::msg::Quaternion yawToQuaternion(double yaw) {
@@ -178,7 +168,7 @@ private:
     const double ak = std::abs(k);
     if (ak < kDeadband) return vMax;
     const double v = std::sqrt(std::max(0.0, aLatMax / ak));
-    return clampDouble(v, vMin, vMax);
+    return std::clamp(v, vMin, vMax);
   }
 
   static std::string makePathKey(const nav_msgs::msg::Path &path, double resolution_m) {
@@ -245,7 +235,6 @@ private:
     global_path_ = nav_msgs::msg::Path();
     clearActiveLocalPlan();
     monotonic_i_ = 0;
-    nearest_i_ = 0;
     active_follow_path_key_.clear();
     mode_ = go_to_start_ ? Mode::GO_TO_START : Mode::FOLLOW_ROUTE;
 
@@ -278,7 +267,6 @@ private:
       mode_ = Mode::GO_TO_START;
     } else {
       mode_ = Mode::FOLLOW_ROUTE;
-      nearest_i_ = 0;
     }
 
     monotonic_i_ = 0;
@@ -328,10 +316,15 @@ private:
     const size_t end = std::min(n - 1, from + window);
 
     size_t best = start;
-    double bestd = dist2(rx, ry, p.poses[start].pose.position.x, p.poses[start].pose.position.y);
+    const auto squared_distance = [&](size_t index) {
+      const double dx = rx - p.poses[index].pose.position.x;
+      const double dy = ry - p.poses[index].pose.position.y;
+      return dx * dx + dy * dy;
+    };
+    double bestd = squared_distance(start);
 
     for (size_t i = start + 1; i <= end; i++) {
-      const double d = dist2(rx, ry, p.poses[i].pose.position.x, p.poses[i].pose.position.y);
+      const double d = squared_distance(i);
       if (d < bestd) {
         bestd = d;
         best = i;
@@ -359,9 +352,9 @@ private:
 
   void updateStuck(const geometry_msgs::msg::PoseStamped &pose) {
     const auto t = now();
-    const double d = std::sqrt(dist2(
-      pose.pose.position.x, pose.pose.position.y,
-      last_pose_.pose.position.x, last_pose_.pose.position.y));
+    const double d = std::hypot(
+      pose.pose.position.x - last_pose_.pose.position.x,
+      pose.pose.position.y - last_pose_.pose.position.y);
 
     if ((t - last_pose_time_).seconds() >= stuck_time_s_) {
       stuck_ = (d < stuck_dist_m_);
@@ -383,7 +376,7 @@ private:
   double computePathPreviewDistance(double v_meas) const {
     const double preview = v_meas * speed_limit_reaction_time_s_ +
       (v_meas * v_meas) / (2.0 * std::max(1e-6, speed_limit_comfort_decel_mps2_)) + 4.0;
-    return clampDouble(preview, path_speed_preview_min_m_, path_speed_preview_max_m_);
+    return std::clamp(preview, path_speed_preview_min_m_, path_speed_preview_max_m_);
   }
 
   double computePathSpeedCap(size_t route_index, double preview_m) const {
@@ -482,7 +475,7 @@ private:
       if (seg_len < 1e-9) continue;
 
       while (next_sample <= traveled + seg_len + 1e-9) {
-        const double local_s = clampDouble(next_sample - traveled, 0.0, seg_len);
+        const double local_s = std::clamp(next_sample - traveled, 0.0, seg_len);
         const double ratio = local_s / seg_len;
         const double wx = a.x + dx * ratio;
         const double wy = a.y + dy * ratio;
@@ -512,7 +505,7 @@ private:
     const double reaction_term = a * std::max(0.0, speed_limit_reaction_time_s_);
     const double L = std::max(0.0, free_distance - speed_limit_buffer_m_);
     const double v = -reaction_term + std::sqrt(reaction_term * reaction_term + 2.0 * a * L);
-    return clampDouble(v, 0.0, speed_limit_max_mps_);
+    return std::clamp(v, 0.0, speed_limit_max_mps_);
   }
 
   double rateLimitSpeedCapIncrease(double target) {
@@ -799,7 +792,6 @@ private:
 
   Mode mode_{Mode::GO_TO_START};
 
-  size_t nearest_i_{0};
   size_t monotonic_i_{0};
   FollowGoalHandle::SharedPtr active_follow_;
   std::string active_follow_path_key_;

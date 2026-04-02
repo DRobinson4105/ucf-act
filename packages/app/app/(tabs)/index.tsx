@@ -510,12 +510,12 @@ const styles = StyleSheet.create({
   boardBtn: {
     backgroundColor: Colors.accent,
     borderRadius: 14,
-    paddingVertical: 15,
+    paddingVertical: 16,
     alignItems: "center",
     marginBottom: 10,
   },
   boardBtnText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "700",
     color: Colors.black,
   },
@@ -525,10 +525,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderWidth: 1,
     borderColor: "rgba(239,68,68,0.35)",
-    backgroundColor: "rgba(239,68,68,0.06)",
+    backgroundColor: "transparent",
   },
   cancelBtnText: {
     fontSize: 14,
@@ -612,7 +612,7 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.55)",
+    backgroundColor: "rgba(17,17,17,0.55)",
   },
   modalSheet: {
     backgroundColor: Colors.surface,
@@ -673,7 +673,7 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: {
     backgroundColor: Colors.border,
-    opacity: 0.6,
+    opacity: 0.5,
   },
   submitBtnText: {
     fontSize: 16,

@@ -5,7 +5,7 @@
  * Single DPDT relay handles both throttle source switching and pedal
  * microswitch bypass. Both poles switch together:
  *   - Pole 1: switches Curtis throttle input between manual pedal (NC)
- *             and digipot wiper (NO)
+ *             and DAC/op-amp output (NO)
  *   - Pole 2: bypasses pedal microswitch (NC = normal operation,
  *             NO = bypassed)
  */
@@ -34,13 +34,13 @@ extern "C"
 //   - 1N4007 flyback diode across coil protects transistor from back-EMF
 //   - Pole 1 (throttle source):
 //       NC: manual pedal drives Curtis throttle input
-//       NO: digipot wiper drives Curtis throttle input
+//       NO: DAC/op-amp output drives Curtis throttle input
 //   - Pole 2 (pedal microswitch):
 //       NC: normal pedal operation - microswitch must be closed
 //       NO: microswitch bypassed - throttle always enabled
 //   - Both poles switch together (DPDT)
 //   - De-energized (NC): safe state - manual pedal control, no bypass
-//   - Energized (NO): autonomous mode - digipot throttle, pedal bypassed
+//   - Energized (NO): autonomous mode - DAC throttle, pedal bypassed
 //
 // Safety:
 //   - Default state is de-energized (manual pedal control)
@@ -88,8 +88,8 @@ esp_err_t relay_dpdt_my5nj_init(const relay_dpdt_my5nj_config_t *config);
  *        the pedal microswitch.
  *
  * Drives the transistor base HIGH, energizing the MY5NJ relay coil.
- * Pole 1 switches throttle source from manual pedal (NC) to digipot
- * wiper (NO). Pole 2 bypasses the pedal microswitch (NO), allowing
+ * Pole 1 switches throttle source from manual pedal (NC) to DAC/op-amp
+ * output (NO). Pole 2 bypasses the pedal microswitch (NO), allowing
  * the Curtis motor controller to accept autonomous throttle input.
  *
  * @return ESP_OK on success, or an error code if GPIO write fails

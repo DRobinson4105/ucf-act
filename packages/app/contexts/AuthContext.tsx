@@ -118,16 +118,12 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       .finally(() => setOnboardingLoaded(true));
   }, []);
 
-  // Reset onboarding and storeUser gate when auth is lost
+  // Reset storeUser gate when auth is lost
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
       storeUserCalledRef.current = false;
-      if (hasCompletedOnboarding) {
-        setHasCompletedOnboarding(false);
-        AsyncStorage.removeItem(ONBOARDING_STORAGE_KEY).catch(() => {});
-      }
     }
-  }, [authLoading, isAuthenticated, hasCompletedOnboarding]);
+  }, [authLoading, isAuthenticated]);
 
   // Create/update the Convex user record as soon as the SDK confirms auth.
   // useConvexAuth().isAuthenticated is only true AFTER the server has validated

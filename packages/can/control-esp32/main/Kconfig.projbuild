@@ -18,7 +18,7 @@ config THROTTLE_TEST_MODE
         Safety/Planner dependencies entirely.
 
         Useful for validating throttle hardware wiring on the cart
-        (MCP41HV51 digipot, MY5NJ DPDT relay, F/R optocouplers,
+        (MCP4728 DAC, LM358 op-amp, MY5NJ DPDT relay, F/R optocouplers,
         pedal ADC) without the full system operational.
 
         Controls (via idf.py monitor or serial terminal):
@@ -280,10 +280,11 @@ menu "Test Bypasses"
     menu "Actuators"
 
         config BYPASS_ACTUATOR_THROTTLE
-            bool "Bypass throttle actuator (digipot + DPDT relay)"
+            bool "Bypass throttle actuator (DAC + DPDT relay)"
             default n
             help
-                Skip MCP41HV51 digital potentiometer and MY5NJ DPDT relay control.
+                Skip MCP4728 DAC and MY5NJ DPDT relay control.
+
 
         config BYPASS_ACTUATOR_STEPPER_STEERING
             bool "Bypass steering stepper actuator"
@@ -407,11 +408,11 @@ menu "Debug Logging"
                 Log each failed TWAI retry while TWAI is unavailable.
                 Rate-limited: first attempt + every 20th.
 
-        config LOG_RETRY_DIGIPOT
-            bool "Log digipot retry attempts"
+        config LOG_RETRY_DAC
+            bool "Log DAC retry attempts"
             default n
             help
-                Log each failed MCP41HV51 digipot re-initialization attempt.
+                Log each failed MCP4728 DAC re-initialization attempt.
                 Rate-limited: first attempt + every 20th.
 
         config LOG_RETRY_DPDT_RELAY
@@ -552,11 +553,11 @@ menu "Debug Logging"
 
     menu "Actuators"
 
-        config LOG_ACTUATOR_DIGIPOT_WIPER
-            bool "Log digipot wiper changes"
+        config LOG_ACTUATOR_DAC_LEVEL
+            bool "Log DAC level changes"
             default n
             help
-                Log each MCP41HV51 digipot wiper position change.
+                Log each MCP4728 DAC throttle level change.
 
         config LOG_ACTUATOR_DPDT_RELAY
             bool "Log DPDT relay state changes"

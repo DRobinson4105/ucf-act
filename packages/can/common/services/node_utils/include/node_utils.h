@@ -88,7 +88,7 @@ static inline void node_task_wdt_reset_or_log(const char *tag, const char *task_
 /**
  * @brief Log that a component has been lost (transition to unhealthy).
  * @param tag     ESP_LOG tag
- * @param name    Component name (e.g. "DIGIPOT")
+ * @param name    Component name (e.g. "DAC")
  * @param detail  Optional detail string (may be NULL or empty)
  */
 static inline void node_log_component_lost(const char *tag, const char *name, const char *detail)

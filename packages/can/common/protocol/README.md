@@ -65,14 +65,15 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 
 ### Planner Command (0x111)
 
-| Byte | Field    | Type  | Description           |
-| ---- | -------- | ----- | --------------------- |
-| 0    | sequence | uint8 | Rolling counter 0-255 |
-| 1    | throttle | uint8 | Throttle level 0-255  |
-| 2    | steer_hi | uint8 | Steering MSB (0-720)  |
-| 3    | steer_lo | uint8 | Steering LSB (0-720)  |
-| 4    | braking  | uint8 | Braking value         |
-| 5-7  | reserved | -     | Zero-filled           |
+| Byte | Field       | Type   | Description                                     |
+| ---- | ----------- | ------ | ----------------------------------------------- |
+| 0    | sequence    | uint8  | Rolling counter 0-255                           |
+| 1    | throttle_hi | uint8  | Throttle MSB (0-4095, deadband below ~800)      |
+| 2    | throttle_lo | uint8  | Throttle LSB                                    |
+| 3    | steer_hi    | uint8  | Steering MSB (0-720)                            |
+| 4    | steer_lo    | uint8  | Steering LSB (0-720)                            |
+| 5    | braking     | uint8  | Braking value                                   |
+| 6-7  | reserved    | -      | Zero-filled                                     |
 
 ## Unified Node States (NODE*STATE*\*)
 
@@ -182,7 +183,7 @@ Control tracks the Planner command sequence number. If the same sequence is seen
 | Immediate heartbeat     | On state change | Both Safety and Control send immediately when state changes |
 | Heartbeat timeout       | 500ms           | Node considered dead after 500ms silence                    |
 | Enable sequence settle  | 200ms           | Delay before completing autonomous enable                   |
-| Throttle slew rate      | 12 steps/100ms  | Max 12 wiper steps per 100ms interval (0-255 range)         |
+| Throttle slew rate      | 200 steps/100ms | Max 200 DAC steps per 100ms interval (0-4095 range, deadband below ~800) |
 | Pedal re-arm time       | 500ms           | Pedal must be released 500ms to re-arm                      |
 | F/R debounce            | 20ms            | Switch debounce time                                        |
 | Planner command timeout | 500ms           | Control zeros throttle if no command within window          |
