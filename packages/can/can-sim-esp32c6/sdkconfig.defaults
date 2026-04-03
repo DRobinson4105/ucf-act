@@ -1,0 +1,15 @@
+# Target
+CONFIG_IDF_TARGET="esp32c6"
+
+# Flash configuration
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_SPI_FLASH_SUPPORT_GD_CHIP=y
+
+# Task watchdog and stack overflow detection
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+
+# Panic handler: print panic and reboot to return to a known-safe state
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
