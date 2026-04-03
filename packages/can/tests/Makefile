@@ -27,7 +27,9 @@ MOCK_INCLUDES = -Imocks \
                 -I../control-esp32/components/stepper_motor_uim2852/include
 
 # Components with unused TAG variable when logging is mocked out
-MOTOR_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
+MOTOR_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable \
+                 -DCONFIG_STEPPER_PT_FRAME_TIME_MS=100 \
+                 -DCONFIG_STEPPER_PT_LOW_WATER_MARK=1
 DRIVER_INPUTS_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 RELAY_CXXFLAGS = $(CXXFLAGS) -Wno-unused-variable
 

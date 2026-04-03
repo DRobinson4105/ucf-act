@@ -533,8 +533,8 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 	uint8_t data[8];
 	uint16_t row = 0;
 	bool start_now = false;
-	int32_t rx_position = 0;
-	int32_t rx_speed = 0;
+	[[maybe_unused]] int32_t rx_position = 0;
+	[[maybe_unused]] int32_t rx_speed = 0;
 
 	taskENTER_CRITICAL(&motor->lock);
 	row = motor->pt_write_index;

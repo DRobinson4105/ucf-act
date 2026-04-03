@@ -564,29 +564,9 @@ void battery_monitor_update(uint32_t now_ms)
 #endif
 }
 
-void battery_monitor_get_status(battery_status_t *out)
+uint8_t battery_monitor_get_soc(void)
 {
-	if (!out)
-		return;
-
-	out->voltage_mv = s_filters_primed ? (uint16_t)(s_voltage_filtered_mv + 0.5f) : 0;
-
-	// Convert current mA to 10mA units (round toward nearest, matching voltage rounding)
-	out->current_10ma =
-		s_filters_primed ? (int16_t)(s_current_filtered_ma / 10.0f + (s_current_filtered_ma >= 0 ? 0.5f : -0.5f)) : 0;
-
-	out->soc_pct = s_soc_pct;
-
-	// Build flags
-	out->flags = 0;
-	if (s_current_filtered_ma < -500.0f)
-		out->flags |= BATTERY_FLAG_CHARGING;
-	if (s_soc_pct <= 20)
-		out->flags |= BATTERY_FLAG_LOW_WARNING;
-	if (s_soc_pct <= 10)
-		out->flags |= BATTERY_FLAG_CRITICAL;
-	if (!battery_monitor_is_healthy())
-		out->flags |= BATTERY_FLAG_SENSOR_FAULT;
+	return s_soc_pct;
 }
 
 bool battery_monitor_is_healthy(void)

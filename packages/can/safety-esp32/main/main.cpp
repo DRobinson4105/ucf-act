@@ -260,6 +260,7 @@ portMUX_TYPE g_safety_hb_seq_lock = portMUX_INITIALIZER_UNLOCKED;
 // Safety heartbeat cause channels.
 volatile node_stop_t g_stop_flags = NODE_STOP_NONE;
 volatile node_fault_t g_fault_flags = NODE_FAULT_NONE;
+volatile uint8_t g_battery_soc = 0;
 
 // Component health tracking.
 volatile bool g_push_button_init_ok = false;
@@ -681,6 +682,7 @@ void retry_failed_components(void)
 				.fault_flags = g_fault_flags,
 				.status_flags = 0,
 				.stop_flags = g_stop_flags,
+				.soc_pct = g_battery_soc,
 			};
 			can_encode_heartbeat(probe_data, &probe_hb);
 			(void)can_twai_send(CAN_ID_SAFETY_HEARTBEAT, probe_data, pdMS_TO_TICKS(50));
@@ -835,12 +837,14 @@ void send_safety_heartbeat(bool log_as_change)
 	node_state_t target_state = NODE_STATE_NOT_READY;
 	node_fault_t fault_flags = NODE_FAULT_NONE;
 	node_stop_t stop_flags = NODE_STOP_NONE;
+	uint8_t soc = 0;
 	taskENTER_CRITICAL(&g_safety_hb_seq_lock);
 	seq = g_safety_hb_seq;
 	g_safety_hb_seq = (node_seq_t)(seq + 1);
 	target_state = g_target_state;
 	fault_flags = g_fault_flags;
 	stop_flags = g_stop_flags;
+	soc = g_battery_soc;
 	taskEXIT_CRITICAL(&g_safety_hb_seq_lock);
 	node_heartbeat_t hb = {
 		.sequence = seq,
@@ -848,6 +852,7 @@ void send_safety_heartbeat(bool log_as_change)
 		.fault_flags = fault_flags,
 		.status_flags = 0,
 		.stop_flags = stop_flags,
+		.soc_pct = soc,
 	};
 	can_encode_heartbeat(data, &hb);
 	esp_err_t err = can_twai_send(CAN_ID_SAFETY_HEARTBEAT, data, pdMS_TO_TICKS(10));
@@ -1258,10 +1263,13 @@ void safety_task(void *param)
 #endif
 
 		// Update battery monitor (non-safety-critical, informational only)
-#ifndef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
+		g_battery_soc = 50;
+#else
 		if (g_battery_monitor_init_ok)
 		{
 			battery_monitor_update(now_ms);
+			g_battery_soc = battery_monitor_get_soc();
 		}
 #endif
 
@@ -1581,55 +1589,6 @@ void heartbeat_task(void *param)
 
 		// Send Safety heartbeat (periodic)
 		send_safety_heartbeat(false);
-
-		// Send battery status at 1 Hz (every 10th heartbeat tick = 10 × 100ms)
-		{
-			static uint8_t battery_tx_divider = 0;
-			if (++battery_tx_divider >= 10)
-			{
-				battery_tx_divider = 0;
-
-				battery_status_t bat = {};
-#ifdef CONFIG_BYPASS_INPUT_BATTERY_MONITOR
-				bat.voltage_mv = 48000;
-				bat.current_10ma = 0;
-				bat.soc_pct = 50;
-				bat.flags = 0;
-#else
-				if (g_battery_monitor_init_ok)
-				{
-					battery_monitor_get_status(&bat);
-				}
-				else
-				{
-					bat.flags = BATTERY_FLAG_SENSOR_FAULT;
-				}
-#endif
-
-#ifndef CONFIG_BYPASS_CAN_TWAI
-				uint8_t bat_data[8] = {};
-				can_encode_battery_status(bat_data, &bat);
-
-				taskENTER_CRITICAL(&g_can_tx_lock);
-				bool can_send = g_twai_ready && !g_can_recovery_in_progress && g_can_tx_in_flight < UINT8_MAX;
-				if (can_send)
-					g_can_tx_in_flight++;
-				taskEXIT_CRITICAL(&g_can_tx_lock);
-
-				if (can_send)
-				{
-					esp_err_t err = can_twai_send(CAN_ID_SAFETY_BATTERY_STATUS, bat_data, pdMS_TO_TICKS(10));
-
-					taskENTER_CRITICAL(&g_can_tx_lock);
-					if (g_can_tx_in_flight > 0)
-						g_can_tx_in_flight--;
-					taskEXIT_CRITICAL(&g_can_tx_lock);
-
-					track_can_tx(err);
-				}
-#endif
-			}
-		}
 
 		vTaskDelay(HEARTBEAT_SEND_INTERVAL);
 	}

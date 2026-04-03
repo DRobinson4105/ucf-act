@@ -211,6 +211,7 @@ static void test_safety_heartbeat_roundtrip_advancing(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -232,6 +233,7 @@ static void test_safety_heartbeat_roundtrip_retreating(void)
 		.fault_flags = NODE_FAULT_SAFETY_PLANNER_TIMEOUT,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_PUSH_BUTTON,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -254,12 +256,13 @@ static void test_safety_heartbeat_reserved_bytes_zero(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 	uint8_t data[8];
 	memset(data, 0xFF, 8);
 	can_encode_heartbeat(data, &hb);
 
-	// byte 4 = stop_flags, bytes 5-7 reserved
+	// byte 4 = stop_flags, byte 5 = soc_pct, bytes 6-7 reserved
 	assert(data[4] == 0);
 	assert(data[5] == 0);
 	assert(data[6] == 0);
@@ -278,6 +281,7 @@ static void test_heartbeat_roundtrip_basic(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 72,
 	};
 
 	uint8_t data[8];
@@ -290,6 +294,7 @@ static void test_heartbeat_roundtrip_basic(void)
 	assert(hb_out.state == NODE_STATE_ACTIVE);
 	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 	assert(hb_out.status_flags == 0);
+	assert(hb_out.soc_pct == 72);
 }
 
 static void test_heartbeat_roundtrip_with_fault(void)
@@ -300,6 +305,7 @@ static void test_heartbeat_roundtrip_with_fault(void)
 		.fault_flags = NODE_FAULT_PLANNER_PERCEPTION,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -322,6 +328,7 @@ static void test_heartbeat_roundtrip_enable_complete(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = NODE_STATUS_FLAG_ENABLE_COMPLETE,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -344,6 +351,7 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = NODE_STATUS_FLAG_AUTONOMY_REQUEST,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -366,6 +374,7 @@ static void test_heartbeat_roundtrip_stop_flags(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_OPERATOR_REVERSE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -390,6 +399,7 @@ static void test_heartbeat_roundtrip_reserved_bit2(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0x04,
 		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -412,12 +422,13 @@ static void test_heartbeat_reserved_bytes_zero(void)
 		.fault_flags = NODE_FAULT_NONE,
 		.status_flags = 0,
 		.stop_flags = NODE_STOP_REMOTE,
+		.soc_pct = 0,
 	};
 	uint8_t data[8];
 	memset(data, 0xFF, 8);
 	can_encode_heartbeat(data, &hb);
 
-	// byte 4 = stop_flags, bytes 5-7 reserved
+	// byte 4 = stop_flags, byte 5 = soc_pct, bytes 6-7 reserved
 	assert(data[4] == NODE_STOP_REMOTE);
 	assert(data[5] == 0);
 	assert(data[6] == 0);
@@ -433,13 +444,14 @@ static void test_heartbeat_decode_rejects_short_dlc(void)
 		.fault_flags = 0xCC,
 		.status_flags = 0xDD,
 		.stop_flags = 0x11,
+		.soc_pct = 0x22,
 	};
 
 	assert(!can_decode_heartbeat(data, 3, &hb_out));
-	assert(!can_decode_heartbeat(data, 4, &hb_out));
-	assert(can_decode_heartbeat(data, 5, &hb_out));  // minimum valid DLC
+	assert(!can_decode_heartbeat(data, 5, &hb_out));
+	assert(can_decode_heartbeat(data, 6, &hb_out));  // minimum valid DLC
 	// Reset hb_out to sentinel values for the remaining checks
-	hb_out = {.sequence = 0xAA, .state = 0xBB, .fault_flags = 0xCC, .status_flags = 0xDD, .stop_flags = 0x11};
+	hb_out = {.sequence = 0xAA, .state = 0xBB, .fault_flags = 0xCC, .status_flags = 0xDD, .stop_flags = 0x11, .soc_pct = 0x22};
 	assert(!can_decode_heartbeat(data, 0, &hb_out));
 	assert(hb_out.sequence == 0xAA);
 	assert(hb_out.state == 0xBB);
@@ -510,92 +522,6 @@ static void test_fault_classification_helpers(void)
 	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_BRAKE));
 	assert(!node_stop_has_operator_intervention(NODE_STOP_PUSH_BUTTON));
 	assert(!node_stop_has_operator_intervention(NODE_STOP_NONE));
-}
-
-// ============================================================================
-// Battery status encode/decode
-// ============================================================================
-
-static void test_battery_status_roundtrip(void)
-{
-	battery_status_t bat_in = {
-		.voltage_mv = 48700,
-		.current_10ma = 150, // 1.5A discharge
-		.soc_pct = 72,
-		.flags = BATTERY_FLAG_CHARGING,
-	};
-
-	uint8_t data[8];
-	can_encode_battery_status(data, &bat_in);
-
-	battery_status_t bat_out = {};
-	assert(can_decode_battery_status(data, 8, &bat_out));
-	assert(bat_out.voltage_mv == 48700);
-	assert(bat_out.current_10ma == 150);
-	assert(bat_out.soc_pct == 72);
-	assert(bat_out.flags == BATTERY_FLAG_CHARGING);
-}
-
-static void test_battery_status_negative_current(void)
-{
-	battery_status_t bat_in = {
-		.voltage_mv = 50400,
-		.current_10ma = -200, // 2A charge
-		.soc_pct = 95,
-		.flags = BATTERY_FLAG_CHARGING,
-	};
-
-	uint8_t data[8];
-	can_encode_battery_status(data, &bat_in);
-
-	battery_status_t bat_out = {};
-	assert(can_decode_battery_status(data, 8, &bat_out));
-	assert(bat_out.voltage_mv == 50400);
-	assert(bat_out.current_10ma == -200);
-	assert(bat_out.soc_pct == 95);
-	assert(bat_out.flags == BATTERY_FLAG_CHARGING);
-}
-
-static void test_battery_status_all_flags(void)
-{
-	battery_status_t bat_in = {
-		.voltage_mv = 42000,
-		.current_10ma = 0,
-		.soc_pct = 5,
-		.flags = BATTERY_FLAG_LOW_WARNING | BATTERY_FLAG_CRITICAL | BATTERY_FLAG_SENSOR_FAULT,
-	};
-
-	uint8_t data[8];
-	can_encode_battery_status(data, &bat_in);
-
-	battery_status_t bat_out = {};
-	assert(can_decode_battery_status(data, 8, &bat_out));
-	assert(bat_out.flags == (BATTERY_FLAG_LOW_WARNING | BATTERY_FLAG_CRITICAL | BATTERY_FLAG_SENSOR_FAULT));
-}
-
-static void test_battery_status_reserved_bytes_zero(void)
-{
-	battery_status_t bat_in = {
-		.voltage_mv = 48000,
-		.current_10ma = 100,
-		.soc_pct = 60,
-		.flags = 0,
-	};
-
-	uint8_t data[8];
-	memset(data, 0xFF, 8); // fill with junk
-	can_encode_battery_status(data, &bat_in);
-	assert(data[6] == 0);
-	assert(data[7] == 0);
-}
-
-static void test_battery_status_decode_rejects_short_dlc(void)
-{
-	uint8_t data[8] = {};
-	battery_status_t bat_out = {};
-	assert(!can_decode_battery_status(data, 5, &bat_out));
-	assert(can_decode_battery_status(data, 6, &bat_out)); // minimum valid
-	assert(can_decode_battery_status(data, 8, &bat_out)); // full frame
 }
 
 // ============================================================================
@@ -743,14 +669,6 @@ int main(void)
 	TEST(test_node_state_all_values);
 	TEST(test_node_fault_all_values);
 	TEST(test_fault_classification_helpers);
-
-	// Battery status encode/decode (5)
-	printf("\n--- Battery status encode/decode ---\n");
-	TEST(test_battery_status_roundtrip);
-	TEST(test_battery_status_negative_current);
-	TEST(test_battery_status_all_flags);
-	TEST(test_battery_status_reserved_bytes_zero);
-	TEST(test_battery_status_decode_rejects_short_dlc);
 
 	// String helper reentrant variants (5)
 	printf("\n--- String helpers (reentrant) ---\n");

@@ -19,7 +19,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "can_protocol.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -67,14 +66,11 @@ void battery_monitor_deinit(void);
 void battery_monitor_update(uint32_t now_ms);
 
 /**
- * @brief Get the latest battery status for CAN transmission.
+ * @brief Get the latest battery state of charge.
  *
- * Copies the most recent voltage, current, SOC, and flags into
- * the provided battery_status_t struct.
- *
- * @param out  Destination struct (must not be NULL)
+ * @return SOC percentage 0-100
  */
-void battery_monitor_get_status(battery_status_t *out);
+uint8_t battery_monitor_get_soc(void);
 
 /**
  * @brief Check if the battery monitor ADC is functioning.

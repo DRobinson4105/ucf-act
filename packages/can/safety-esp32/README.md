@@ -74,8 +74,7 @@ The Safety ESP32 continuously monitors:
 
 | ID    | Name                  | Rate                              | Description                                                                                           |
 | ----- | --------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| 0x100 | SAFETY_HEARTBEAT      | 100ms + immediate on state change | System target state + Safety `fault_flags`/`stop_flags` (same `node_heartbeat_t` format as all nodes) |
-| 0x101 | SAFETY_BATTERY_STATUS | 1 Hz (every 10th heartbeat tick)  | Pack voltage, current, SOC, and battery flags (`battery_status_t`)                                    |
+| 0x100 | SAFETY_HEARTBEAT      | 100ms + immediate on state change | System target state, `fault_flags`, `stop_flags`, battery SOC (`node_heartbeat_t`) |
 
 Safety's heartbeat `state` field = system target state (`NODE_STATE_*`). Its `fault_flags` field = Safety fault bitmask (`NODE_FAULT_SAFETY_*`), and `stop_flags` field = non-fault stop bitmask (`NODE_STOP_*`).
 

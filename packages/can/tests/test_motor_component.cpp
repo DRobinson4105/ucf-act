@@ -39,7 +39,13 @@ static twai_message_t make_motor_response(uint8_t node_id, uint8_t cw, const uin
 	twai_message_t msg;
 	memset(&msg, 0, sizeof(msg));
 	msg.extd = 1;
-	msg.identifier = stepper_uim2852_make_can_id(node_id, cw);
+	// Build a CAN ID where parse_can_id extracts producer_id=node_id.
+	// make_can_id encodes node_id as consumer (always producing producer_id=4),
+	// but a motor response has the motor's own node_id as producer. Construct
+	// the 29-bit ID directly so the SID/EID fields decode correctly.
+	uint16_t sid = ((node_id & 0x1F) << 6) | 0x0100;
+	uint32_t eid = (((uint32_t)(node_id >> 5) & 0x03) << 11) | (cw & 0xFF);
+	msg.identifier = ((uint32_t)sid << 18) | eid;
 	msg.data_length_code = dl;
 	if (data && dl > 0)
 		memcpy(msg.data, data, dl > 8 ? 8 : dl);

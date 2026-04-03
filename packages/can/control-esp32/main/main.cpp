@@ -949,6 +949,7 @@ void retry_failed_components(void)
 				.fault_flags = g_fault_flags,
 				.status_flags = g_heartbeat_status_flags,
 				.stop_flags = g_stop_flags,
+				.soc_pct = 0,
 			};
 			can_encode_heartbeat(probe_data, &probe_hb);
 			(void)can_twai_send(CAN_ID_CONTROL_HEARTBEAT, probe_data, pdMS_TO_TICKS(50));
@@ -1327,6 +1328,7 @@ void send_control_heartbeat(void)
 		.fault_flags = fault_flags,
 		.status_flags = status_flags,
 		.stop_flags = stop_flags,
+		.soc_pct = 0,
 	};
 	can_encode_heartbeat(hb_data, &hb_msg);
 

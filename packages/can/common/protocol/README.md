@@ -32,7 +32,7 @@ Cause reporting is split into two heartbeat channels:
 
 | ID    | Name              | Sender  | Receiver         | Rate              | Description                                                              |
 | ----- | ----------------- | ------- | ---------------- | ----------------- | ------------------------------------------------------------------------ |
-| 0x100 | SAFETY_HEARTBEAT  | Safety  | Control, Planner | 100ms + on change | System target state, `fault_flags`, `stop_flags`                         |
+| 0x100 | SAFETY_HEARTBEAT  | Safety  | Control, Planner | 100ms + on change | System target state, `fault_flags`, `stop_flags`, battery SOC            |
 | 0x110 | PLANNER_HEARTBEAT | Planner | Safety           | 100ms             | Planner alive signal (seq, state, fault_flags, status_flags)             |
 | 0x111 | PLANNER_COMMAND   | Planner | Control          | Continuous        | Throttle, steering, braking commands                                     |
 | 0x120 | CONTROL_HEARTBEAT | Control | Safety           | 100ms + on change | Control alive signal (seq, state, fault_flags, stop_flags, status_flags) |
@@ -61,7 +61,8 @@ All nodes use the same wire format. The consumer knows the source by CAN ID and 
 | 2    | fault_flags  | uint8 | NODE*FAULT*\* (node-specific fault bitmask, 0 when clear)                             |
 | 3    | status_flags | uint8 | NODE*STATUS_FLAG*\* bitmask                                                           |
 | 4    | stop_flags   | uint8 | NODE*STOP*\* bitmask (non-fault stop causes)                                          |
-| 5-7  | reserved     | -     | Zero-filled                                                                           |
+| 5    | soc_pct      | uint8 | Battery state of charge 0-100% (Safety heartbeat only, 0 on others)                   |
+| 6-7  | reserved     | -     | Zero-filled                                                                           |
 
 ### Planner Command (0x111)
 
