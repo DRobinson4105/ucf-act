@@ -13,7 +13,7 @@ config THROTTLE_TEST_MODE
     default n
     help
         Replace the normal CAN-based control loop with a standalone
-        throttle test task. Type a wiper value 0-255 and press
+        throttle test task. Type a DAC level 0-4095 and press
         space or enter to commit. Skips CAN, steppers, and
         Safety/Planner dependencies entirely.
 
@@ -22,13 +22,13 @@ config THROTTLE_TEST_MODE
         pedal ADC) without the full system operational.
 
         Controls (via idf.py monitor or serial terminal):
-          0-255 + space/enter  Set throttle wiper position
-          r                    Toggle DPDT relay (MY5NJ)
-          q                    Quit (shutdown all actuators)
+          0-4095 + space/enter  Set DAC level
+          r                     Toggle DPDT relay (MY5NJ)
+          q                     Quit (shutdown all actuators)
 
         Safety behavior: requires F/R not in Reverse to arm.
         Disables DPDT relay if F/R moves to Reverse or pedal
-        is pressed. Zeros throttle wiper if F/R is in Neutral.
+        is pressed. Zeros DAC output if F/R is in Neutral.
         Auto-recovers when pedal is rearmed and F/R is not in
         Reverse.
 
@@ -552,12 +552,6 @@ menu "Debug Logging"
     endmenu
 
     menu "Actuators"
-
-        config LOG_ACTUATOR_DAC_LEVEL
-            bool "Log DAC level changes"
-            default n
-            help
-                Log each MCP4728 DAC throttle level change.
 
         config LOG_ACTUATOR_DPDT_RELAY
             bool "Log DPDT relay state changes"

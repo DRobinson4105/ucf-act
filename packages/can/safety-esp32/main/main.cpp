@@ -444,7 +444,10 @@ void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbe
 #endif
 
 #ifdef CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS
-	ESP_LOGW(TAG_INIT, "CONTROL: BYPASSED: liveness/state checks disabled");
+	ESP_LOGW(TAG_INIT, "CONTROL: BYPASSED: liveness checks disabled (alive forced true, faults/stops cleared)");
+#endif
+#ifdef CONFIG_BYPASS_CONTROL_STATE_MIRROR
+	ESP_LOGW(TAG_INIT, "CONTROL: BYPASSED: state mirror active (control state simulated)");
 #endif
 
 	if (heartbeat_ready)
@@ -1318,21 +1321,22 @@ void safety_task(void *param)
 		};
 
 		// Planner bypass: simulate a cooperative Planner for bench bring-up.
-		// Bootstrap behavior:
-		// - When Safety target is NOT_READY/READY, force Planner READY so
-		//   Safety can advance NOT_READY -> READY without a real Planner.
-		// - When Safety target is ENABLE/ACTIVE, force Planner ENABLE and
-		//   enable_complete so Safety can continue ENABLE -> ACTIVE.
+		// Mirror Safety's own target so the state machine sees a node that
+		// tracks Safety through every phase: READY, ENABLE, and ACTIVE.
 #ifdef CONFIG_BYPASS_PLANNER_STATE_MIRROR
-		if (g_target_state == NODE_STATE_ACTIVE || g_target_state == NODE_STATE_ENABLE)
+		if (g_target_state == NODE_STATE_ACTIVE)
+			ss_in.planner_state = NODE_STATE_ACTIVE;
+		else if (g_target_state == NODE_STATE_ENABLE)
 			ss_in.planner_state = NODE_STATE_ENABLE;
 		else
 			ss_in.planner_state = NODE_STATE_READY;
 		ss_in.planner_enable_complete = true;
 #endif
-		// Control bypass: same bootstrap-aware mirroring for Control.
+		// Control bypass: same mirroring for Control.
 #ifdef CONFIG_BYPASS_CONTROL_STATE_MIRROR
-		if (g_target_state == NODE_STATE_ACTIVE || g_target_state == NODE_STATE_ENABLE)
+		if (g_target_state == NODE_STATE_ACTIVE)
+			ss_in.control_state = NODE_STATE_ACTIVE;
+		else if (g_target_state == NODE_STATE_ENABLE)
 			ss_in.control_state = NODE_STATE_ENABLE;
 		else
 			ss_in.control_state = NODE_STATE_READY;
