@@ -434,7 +434,13 @@ void log_startup_device_status(bool twai_ready, bool relay_init_ok, bool heartbe
 #endif
 
 #ifdef CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS
-	ESP_LOGW(TAG_INIT, "PLANNER: BYPASSED: liveness/state/autonomy checks disabled");
+	ESP_LOGW(TAG_INIT, "PLANNER: BYPASSED: liveness checks disabled (alive forced true, faults/stops cleared)");
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_STATE_MIRROR
+	ESP_LOGW(TAG_INIT, "PLANNER: BYPASSED: state mirror active (planner state simulated)");
+#endif
+#ifdef CONFIG_BYPASS_PLANNER_AUTONOMY_GATE
+	ESP_LOGW(TAG_INIT, "PLANNER: BYPASSED: autonomy gate disabled (request/hold forced true)");
 #endif
 
 #ifdef CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS

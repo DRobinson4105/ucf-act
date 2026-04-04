@@ -308,6 +308,9 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config)
 
 	ultrasonic_a02yyuw_reset_parser_state();
 
+	// Discard stale bytes left in HW FIFO from a prior session / mid-byte reset
+	uart_flush_input(config->uart_num);
+
 	// Start background task to continuously read sensor (uses internal config copy)
 	s_stop_requested = false;
 	BaseType_t task_ok = xTaskCreate(ultrasonic_a02yyuw_uart_rx_task, "ultrasonic_a02yyuw_rx", RX_TASK_STACK,
