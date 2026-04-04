@@ -59,13 +59,11 @@ const RIDE_OPTIONS: RideOption[] = [
 interface RideTrackingContentProps {
   pickupLocation: { name: string } | null;
   dropoffLocation: { name: string } | null | undefined;
-  onBack: () => void;
 }
 
 function RideTrackingContent({
   pickupLocation,
   dropoffLocation,
-  onBack,
 }: RideTrackingContentProps) {
   const { currentRide, cancelRide, boardRide } = useRide();
 
@@ -86,7 +84,6 @@ function RideTrackingContent({
 
   const handleCancelRide = () => {
     cancelRide();
-    onBack();
   };
 
   const statusInfo = getStatusInfo();
@@ -320,28 +317,36 @@ export default function PlanRideScreen() {
   };
 
   const prevRideIdRef = useRef<string | undefined>(undefined);
+  const prevRideStatusRef = useRef<string | undefined>(undefined);
 
-  useEffect(() => {
-    if (!currentRide) return;
-    // If opened with an active ride (e.g. from "Track Ride" button), go straight to tracking
-    if (viewMode === "planning" || viewMode === "finding") {
-      setViewMode("tracking");
-    }
-    if (viewMode === "tracking" && currentRide.status === "cancelled") {
-      setViewMode("planning");
-    }
-  }, [viewMode, currentRide?.status]);
-
-  // Watch for ride completion (active ride disappears → dismiss plan-ride, review modal handles itself)
+  // Sync viewMode with ride lifecycle:
+  // - Ride appears while on planning/finding → switch to tracking
+  // - Ride disappears after in_progress (completed) → dismiss screen
+  // - Ride disappears otherwise (cancelled) → back to planning
   const { rideHistory } = useRide();
   useEffect(() => {
-    if (viewMode !== "tracking") return;
-    if (!prevRideIdRef.current && currentRide) {
+    if (currentRide) {
       prevRideIdRef.current = currentRide.id;
+      prevRideStatusRef.current = currentRide.status;
+      if (viewMode === "planning" || viewMode === "finding") {
+        setViewMode("tracking");
+      }
+      return;
     }
-    if (prevRideIdRef.current && !currentRide) {
+
+    // currentRide is null — ride ended
+    if (prevRideIdRef.current) {
+      const wasInProgress = prevRideStatusRef.current === "in_progress";
       prevRideIdRef.current = undefined;
-      router.dismiss();
+      prevRideStatusRef.current = undefined;
+
+      if (wasInProgress) {
+        // Completed ride → dismiss to home (review modal handles itself)
+        router.dismiss();
+      } else if (viewMode === "tracking" || viewMode === "finding") {
+        // Cancelled ride → back to planning
+        setViewMode("planning");
+      }
     }
   }, [viewMode, currentRide, rideHistory]);
 
@@ -499,7 +504,6 @@ export default function PlanRideScreen() {
           <RideTrackingContent
             pickupLocation={pickupLocationObj}
             dropoffLocation={dropoffLocationObj}
-            onBack={() => setViewMode("planning")}
           />
         ) : viewMode === "choosing" ? (
           <ScrollView

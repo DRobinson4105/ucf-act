@@ -43,6 +43,7 @@ export const [RideProvider, useRide] = createContextHook(() => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
   const prevStatusRef = useRef<RideStatus | null>(null);
+  const prevLAStatusRef = useRef<RideStatus | null>(null);
   const prevRideRef = useRef<Ride | null>(null);
 
   // Map Convex activeRide to the local Ride type consumed by UI components
@@ -153,22 +154,25 @@ export const [RideProvider, useRide] = createContextHook(() => {
     }
   }, [currentRide?.status]);
 
-  // Trigger Live Activity updates on status transitions
+  // Trigger Live Activity updates on status transitions (uses its own ref to
+  // avoid the race where the notification effect above already updated prevStatusRef)
   useEffect(() => {
-    const status = currentRide?.status;
+    const status = currentRide?.status ?? null;
+    const prev = prevLAStatusRef.current;
+    if (status === prev) return;
+    prevLAStatusRef.current = status;
+
     if (!status) {
-      if (prevStatusRef.current) {
-        endRideActivity();
-      }
+      if (prev) endRideActivity();
       return;
     }
 
-    if (status === "assigned" && prevStatusRef.current !== "assigned") {
+    if (status === "assigned") {
       const pickupLoc = CAMPUS_LOCATIONS.find(
-        (l) => l.id === currentRide.pickupLocationId
+        (l) => l.id === currentRide!.pickupLocationId
       );
       const dropoffLoc = CAMPUS_LOCATIONS.find(
-        (l) => l.id === currentRide.dropoffLocationId
+        (l) => l.id === currentRide!.dropoffLocationId
       );
       startRideActivity({
         cartName: "ACT-001",

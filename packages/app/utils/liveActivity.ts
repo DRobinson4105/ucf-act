@@ -37,8 +37,6 @@ export async function startRideActivity(params: {
     const state = {
       title: statusText,
       subtitle: `${params.pickupName} → ${params.dropoffName}`,
-      imageName: "cart_icon",
-      dynamicIslandImageName: "cart_icon",
     };
 
     const config = {

@@ -97,14 +97,19 @@ function NavigationWrapper() {
           const { status } = await Notifications.requestPermissionsAsync();
           finalStatus = status;
         }
-        if (finalStatus !== "granted") return;
+        if (finalStatus !== "granted") {
+          console.warn("Push notification permission not granted:", finalStatus);
+          return;
+        }
 
         const tokenData = await Notifications.getExpoPushTokenAsync({
           projectId: "81150332-57e1-4e4a-b2cd-a854a8aaf6ea",
         });
+        console.log("Expo push token:", tokenData.data);
         await updatePushToken({ expoPushToken: tokenData.data });
+        console.log("Push token stored successfully");
       } catch (e) {
-        console.log("Push token registration skipped:", e);
+        console.error("Push token registration failed:", e);
       }
     })();
   }, [isAuthenticated, updatePushToken]);
