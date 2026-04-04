@@ -15,17 +15,31 @@ export const sendPush = internalAction({
       userId: args.userId,
     });
 
-    if (!user?.expoPushToken) {
-      console.log(`No push token for user ${args.userId}, skipping`);
+    if (!user) {
+      console.error(`[push] User ${args.userId} not found`);
+      return;
+    }
+
+    if (!user.expoPushToken) {
+      console.warn(
+        `[push] No push token for user ${args.userId} (${user.name}), skipping`
+      );
+      return;
+    }
+
+    const token = user.expoPushToken;
+    if (!token.startsWith("ExponentPushToken[")) {
+      console.error(`[push] Invalid token format for user ${args.userId}: ${token}`);
       return;
     }
 
     const message = {
-      to: user.expoPushToken,
-      sound: "default",
+      to: token,
+      sound: "default" as const,
       title: args.title,
       body: args.body,
       data: { type: "ride-update" },
+      priority: "high" as const,
     };
 
     try {
@@ -39,10 +53,35 @@ export const sendPush = internalAction({
         body: JSON.stringify(message),
       });
 
+      if (!response.ok) {
+        console.error(
+          `[push] Expo API returned ${response.status}: ${await response.text()}`
+        );
+        return;
+      }
+
       const result = await response.json();
-      console.log("Push notification sent:", result);
+
+      // Expo returns { data: { status, id?, message?, details? } }
+      const ticket = result.data;
+      if (ticket?.status === "error") {
+        console.error(
+          `[push] Expo ticket error: ${ticket.message} (${ticket.details?.error ?? "unknown"})`
+        );
+        // If the token is invalid, clear it so we don't keep retrying
+        if (ticket.details?.error === "DeviceNotRegistered") {
+          console.warn(`[push] Clearing invalid token for user ${args.userId}`);
+          await ctx.runMutation(internal.users.clearPushToken, {
+            userId: args.userId,
+          });
+        }
+      } else {
+        console.log(
+          `[push] Sent to ${user.name}: "${args.title}" (ticket: ${ticket?.id ?? "ok"})`
+        );
+      }
     } catch (error) {
-      console.error("Failed to send push notification:", error);
+      console.error("[push] Network error sending push notification:", error);
     }
   },
 });

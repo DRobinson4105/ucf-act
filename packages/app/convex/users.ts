@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalQuery, mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 
 export const storeUser = mutation({
   args: {
@@ -104,5 +104,15 @@ export const getUserById = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.userId);
+  },
+});
+
+export const clearPushToken = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (user) {
+      await ctx.db.patch(user._id, { expoPushToken: undefined });
+    }
   },
 });

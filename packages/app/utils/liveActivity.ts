@@ -22,6 +22,10 @@ const STATUS_TEXT: Record<string, string> = {
 
 let currentActivityId: string | null = null;
 
+export function hasActiveActivity(): boolean {
+  return currentActivityId !== null;
+}
+
 export async function startRideActivity(params: {
   cartName: string;
   pickupName: string;
@@ -33,16 +37,21 @@ export async function startRideActivity(params: {
 
   try {
     const statusText = STATUS_TEXT[params.status] ?? "Ride active";
+    const targetName =
+      params.status === "in_progress"
+        ? params.dropoffName
+        : params.pickupName;
 
     const state = {
       title: statusText,
-      subtitle: `${params.pickupName} → ${params.dropoffName}`,
+      subtitle: targetName,
     };
 
     const config = {
       backgroundColor: "#111111",
-      titleColor: "#2DD4BF",
+      titleColor: "#F5F5F5",
       subtitleColor: "#A1A1AA",
+      progressViewTint: "#2DD4BF",
       deepLinkUrl: "/plan-ride",
     };
 
@@ -53,14 +62,35 @@ export async function startRideActivity(params: {
   }
 }
 
-export async function updateRideActivity(status: string): Promise<void> {
+export async function updateRideActivity(
+  status: string,
+  distanceInfo?: {
+    distanceMiles: number;
+    progress: number;
+    destinationName: string;
+  }
+): Promise<void> {
   const LA = await getLiveActivity();
   if (!LA || !currentActivityId) return;
 
   try {
-    LA.updateActivity(currentActivityId, {
-      title: STATUS_TEXT[status] ?? "Ride active",
-    });
+    const statusText = STATUS_TEXT[status] ?? "Ride active";
+
+    const state: {
+      title: string;
+      subtitle?: string;
+      progressBar?: { progress: number };
+    } = { title: statusText };
+
+    if (distanceInfo) {
+      const d = distanceInfo.distanceMiles;
+      const distStr = d < 0.1 ? `${Math.round(d * 5280)} ft` : `${d.toFixed(1)} mi`;
+      // "0.3 mi · Engineering I" — Swift widget parses distance vs destination
+      state.subtitle = `${distStr} \u00B7 ${distanceInfo.destinationName}`;
+      state.progressBar = { progress: distanceInfo.progress };
+    }
+
+    LA.updateActivity(currentActivityId, state);
   } catch (e) {
     console.log("Failed to update Live Activity:", e);
   }

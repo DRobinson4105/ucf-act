@@ -2,7 +2,7 @@ import { CAMPUS_LOCATIONS, CampusLocation } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRide } from "@/contexts/RideContext";
-import { useDebouncedNavigation } from "@/hooks/useDebouncedNavigation";
+import { useRouter } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   BookOpen,
@@ -61,7 +61,7 @@ export default function HomeScreen() {
     currentRide, cancelRide, boardRide, rideHistory,
     pendingReview, submitReview, dismissReview,
   } = useRide();
-  const router = useDebouncedNavigation();
+  const router = useRouter();
   const [reviewRating, setReviewRating] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
@@ -141,7 +141,7 @@ export default function HomeScreen() {
           style={[styles.searchBar, isTracking && styles.searchBarDisabled]}
           onPress={() => router.push("/plan-ride")}
           activeOpacity={isTracking ? 1 : 0.75}
-          disabled={router.isNavigating || isTracking}
+          disabled={isTracking}
         >
           <Search size={20} color={isTracking ? Colors.textSecondary : Colors.accent} />
           <Text style={[styles.searchText, isTracking && styles.searchTextDisabled]}>
@@ -221,7 +221,6 @@ export default function HomeScreen() {
                   onPress={() =>
                     router.push({ pathname: "/plan-ride", params: { destinationId: loc.id } })
                   }
-                  disabled={router.isNavigating}
                   activeOpacity={0.7}
                 >
                   <View style={styles.chipIcon}>
@@ -243,7 +242,7 @@ export default function HomeScreen() {
                     onPress={() =>
                       router.push({ pathname: "/plan-ride", params: { destinationId: loc.id } })
                     }
-                    disabled={router.isNavigating}
+                    disabled={false}
                     activeOpacity={0.7}
                   >
                     <View style={styles.recentIconWrap}>
