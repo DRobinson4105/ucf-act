@@ -93,7 +93,7 @@ function RideTrackingContent({
     ["requested", "assigned", "arriving", "in_progress"].includes(currentRide.status);
 
   return (
-    <ScrollView style={styles.sheetContent} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.sheetContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       <View style={styles.statusCard}>
         <Text style={styles.statusTitle}>{statusInfo.title}</Text>
         <Text style={styles.statusSubtitle}>{statusInfo.subtitle}</Text>
@@ -470,15 +470,16 @@ export default function PlanRideScreen() {
               ? "planning"
               : "none"
         }
+        overlay={
+          <Pressable
+            style={[styles.backButton, { top: insets.top + 12 }]}
+            onPress={() => router.back()}
+            hitSlop={8}
+          >
+            <ArrowLeft size={24} color={Colors.text} />
+          </Pressable>
+        }
       />
-
-      <Pressable
-        style={[styles.backButton, { top: insets.top + 12 }]}
-        onPress={() => router.back()}
-        hitSlop={8}
-      >
-        <ArrowLeft size={24} color={Colors.text} />
-      </Pressable>
 
       <SwipeableBottomSheet
         initiallyExpanded={false}
@@ -511,6 +512,7 @@ export default function PlanRideScreen() {
           <ScrollView
             style={styles.sheetContent}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           >
             <TouchableOpacity
               style={styles.backButtonInline}

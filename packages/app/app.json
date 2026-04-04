@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "ACT - Campus Taxi",
 		"slug": "act-campus-taxi",
-		"version": "9.0.0",
+		"version": "9.1.0",
 		"orientation": "portrait",
 		"icon": "./assets/images/icon.png",
 		"scheme": "myapp",

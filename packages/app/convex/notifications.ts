@@ -9,6 +9,7 @@ export const sendPush = internalAction({
     userId: v.id("users"),
     title: v.string(),
     body: v.string(),
+    rideStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await ctx.runQuery(internal.users.getUserById, {
@@ -38,7 +39,7 @@ export const sendPush = internalAction({
       sound: "default" as const,
       title: args.title,
       body: args.body,
-      data: { type: "ride-update" },
+      data: { type: "ride-update", rideStatus: args.rideStatus },
       priority: "high" as const,
     };
 

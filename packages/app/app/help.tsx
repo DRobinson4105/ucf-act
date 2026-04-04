@@ -71,6 +71,7 @@ export default function HelpScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <Text style={styles.sectionTitle}>FREQUENTLY ASKED QUESTIONS</Text>
 

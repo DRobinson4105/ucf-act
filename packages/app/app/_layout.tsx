@@ -133,7 +133,14 @@ function NavigationWrapper() {
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
         if (data?.type === "ride-update") {
-          router.push("/plan-ride");
+          const status = data.rideStatus as string | undefined;
+          if (status === "cancelled" || status === "completed") {
+            // Ride ended — dismiss any stacked screens (plan-ride map etc.) and go home
+            router.dismissAll();
+          } else {
+            // Active ride update — open tracking
+            router.navigate("/plan-ride");
+          }
         }
       });
 

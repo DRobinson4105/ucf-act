@@ -59,6 +59,7 @@ export default function NotificationsScreen() {
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {notifications.length === 0 ? (
           <View style={styles.emptyState}>

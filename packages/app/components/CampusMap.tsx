@@ -35,6 +35,7 @@ interface CampusMapProps {
   hideUserLocation?: boolean; // hide blue user dot (e.g. during in_progress — use cart as reference instead)
   convexRoute?: Array<{ latitude: number; longitude: number }>; // live route from Convex (cart bridge) — overrides local A* pathfinding
   rideStatus?: "none" | "planning" | "assigned" | "arriving" | "in_progress";
+  overlay?: React.ReactNode; // absolutely-positioned elements rendered ABOVE the native MapView
 }
 
 export default function CampusMap({
@@ -56,6 +57,7 @@ export default function CampusMap({
   hideUserLocation = false,
   convexRoute,
   rideStatus = "none",
+  overlay,
 }: CampusMapProps) {
   const assignedCart = cartId ? allCarts?.find((c) => c._id === cartId) : null;
   const vehiclePosition = assignedCart?.location ?? vehiclePositionProp;
@@ -603,6 +605,8 @@ export default function CampusMap({
             <Navigation size={24} color={Colors.text} />
           </TouchableOpacity>
         )}
+
+        {overlay}
       </View>
 
       {!showRoute && !fullScreen && (

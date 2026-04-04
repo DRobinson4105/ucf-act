@@ -109,6 +109,7 @@ export const cancelRide = mutation({
       userId: ride.userId,
       title: "Ride Cancelled",
       body: "Your ride has been cancelled.",
+      rideStatus: "cancelled",
     });
   },
 });
@@ -163,6 +164,7 @@ export const updateStatus = internalMutation({
         userId: ride.userId,
         title: msg.title,
         body: msg.body,
+        rideStatus: args.status,
       });
     }
   },

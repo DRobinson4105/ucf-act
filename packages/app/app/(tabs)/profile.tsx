@@ -74,6 +74,7 @@ export default function ProfileScreen() {
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.profileSection}>
           <View style={styles.avatarContainer}>

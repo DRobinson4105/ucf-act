@@ -60,6 +60,7 @@ export default function TermsScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {activeTab === "terms" ? <TermsContent /> : <PrivacyContent />}
         <Text style={styles.lastUpdated}>Last updated: March 2026</Text>
