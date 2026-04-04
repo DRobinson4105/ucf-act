@@ -34,6 +34,86 @@ config THROTTLE_TEST_MODE
 
 menu "Motor Limits"
 
+    choice STEERING_ACTUATOR_MODE
+        prompt "Steering actuator backend"
+        default STEERING_ACTUATOR_STEPPER
+        help
+            Select which hardware backend drives the steering command path.
+            The planner and control logic still produce the same signed
+            steering target; only the actuator transport changes.
+
+        config STEERING_ACTUATOR_STEPPER
+            bool "CAN stepper motor (node 7)"
+            help
+                Use the existing UIM2852 steering stepper on the CAN bus.
+
+        config STEERING_ACTUATOR_PWM
+            bool "LEDC PWM output"
+            help
+                Drive steering through an ESP32 LEDC PWM output pin instead
+                of sending CAN commands to node 7.
+
+    endchoice
+
+    menu "Steering PWM Output"
+        depends on STEERING_ACTUATOR_PWM
+
+        config STEERING_PWM_GPIO
+            int "PWM output GPIO"
+            range 0 30
+            default 21
+            help
+                ESP32 GPIO used for the steering PWM output.
+
+        config STEERING_PWM_FREQ_HZ
+            int "PWM frequency (Hz)"
+            range 1 40000
+            default 50
+            help
+                LEDC PWM frequency for the steering output.
+
+        config STEERING_PWM_RESOLUTION_BITS
+            int "PWM resolution (bits)"
+            range 1 20
+            default 16
+            help
+                LEDC timer duty resolution in bits.
+
+        config STEERING_PWM_MIN_US
+            int "Minimum pulse width (us)"
+            range 1 1000000
+            default 500
+            help
+                Pulse width produced at the configured steering minimum.
+
+        config STEERING_PWM_NEUTRAL_US
+            int "Neutral pulse width (us)"
+            range 1 1000000
+            default 1500
+            help
+                Pulse width produced for a neutral steering command (0).
+
+        config STEERING_PWM_MAX_US
+            int "Maximum pulse width (us)"
+            range 1 1000000
+            default 2500
+            help
+                Pulse width produced at the configured steering maximum.
+
+        config STEERING_PWM_MAX_DELTA_US
+            int "Max pulse width change per update (us, 0=disabled)"
+            range 0 1000000
+            default 50
+            help
+                Maximum allowed change in pulse width between consecutive
+                PWM updates (microseconds). Clamps the step size so the
+                servo cannot slew faster than this value per control tick.
+                At 50 Hz this limits full-range traversal to roughly
+                (MAX_US - MIN_US) / MAX_DELTA_US ticks.
+                Set to 0 to disable rate limiting entirely.
+
+    endmenu
+
     menu "Steering Motor"
 
         config STEERING_LM0_MAX_SPEED
@@ -279,6 +359,19 @@ menu "Test Bypasses"
 
     menu "Actuators"
 
+        config BYPASS_CAN_BUS_HEALTH
+            bool "Bypass CAN bus health gating"
+            default n
+            help
+                Ignore consecutive TX-failure bus-health gating in the TWAI
+                transport. When enabled, failed CAN transmissions no longer
+                mark TWAI unavailable or trigger background recovery solely
+                because the bus is judged unhealthy.
+
+                Use for bench testing when you want local actuator testing to
+                continue even if the CAN bus is disconnected or unstable.
+                Do not enable on the vehicle.
+
         config BYPASS_ACTUATOR_THROTTLE
             bool "Bypass throttle actuator (DAC + DPDT relay)"
             default n
@@ -290,8 +383,9 @@ menu "Test Bypasses"
             bool "Bypass steering stepper actuator"
             default n
             help
-                Skip steering stepper motor (node 7) initialization,
-                configuration, and CAN commands.
+                Skip the selected steering actuator backend. In stepper mode
+                this skips steering node 7 init/config/CAN commands; in PWM
+                mode it skips PWM init/output.
 
         config BYPASS_ACTUATOR_STEPPER_BRAKING
             bool "Bypass braking stepper actuator"
@@ -303,6 +397,7 @@ menu "Test Bypasses"
         config BYPASS_SOFTWARE_LIMITS_STEERING
             bool "Disable steering software limits (IC[7]=0)"
             default n
+            depends on STEERING_ACTUATOR_STEPPER
             depends on !BYPASS_ACTUATOR_STEPPER_STEERING
             help
                 Send IC[7]=0 instead of IC[7]=1 during steering software
@@ -564,6 +659,16 @@ menu "Debug Logging"
             default n
             help
                 Log MY5NJ DPDT relay energize/de-energize transitions.
+
+        config LOG_ACTUATOR_STEERING_PWM_SIGNAL
+            bool "Log steering PWM output every 3 seconds"
+            default n
+            depends on STEERING_ACTUATOR_PWM
+            help
+                Log the currently applied LEDC steering PWM signal every
+                3 seconds while the PWM steering backend is enabled.
+                Reports the last applied pulse width in microseconds and
+                the configured PWM frequency.
 
     endmenu
 

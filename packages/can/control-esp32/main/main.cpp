@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/twai.h"
 
 #include "esp_heap_caps.h"
@@ -57,6 +58,9 @@
 #endif
 #ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
 #error "PRODUCTION_BUILD: CONFIG_BYPASS_INPUT_FR_SENSOR must be disabled"
+#endif
+#ifdef CONFIG_BYPASS_CAN_BUS_HEALTH
+#error "PRODUCTION_BUILD: CONFIG_BYPASS_CAN_BUS_HEALTH must be disabled"
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_THROTTLE
 #error "PRODUCTION_BUILD: CONFIG_BYPASS_ACTUATOR_THROTTLE must be disabled"
@@ -190,6 +194,19 @@ constexpr adc_channel_t PEDAL_ADC_CHANNEL = ADC_CHANNEL_0; // GPIO 0
 constexpr gpio_num_t FR_FORWARD_GPIO = GPIO_NUM_22; // forward contact optocoupler
 constexpr gpio_num_t FR_REVERSE_GPIO = GPIO_NUM_23; // reverse contact optocoupler
 
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+constexpr gpio_num_t STEERING_PWM_GPIO = static_cast<gpio_num_t>(CONFIG_STEERING_PWM_GPIO);
+constexpr uint32_t STEERING_PWM_FREQ_HZ = CONFIG_STEERING_PWM_FREQ_HZ;
+constexpr uint32_t STEERING_PWM_RESOLUTION_BITS = CONFIG_STEERING_PWM_RESOLUTION_BITS;
+constexpr ledc_timer_t STEERING_PWM_TIMER = LEDC_TIMER_0;
+constexpr ledc_channel_t STEERING_PWM_CHANNEL = LEDC_CHANNEL_0;
+constexpr ledc_mode_t STEERING_PWM_MODE = LEDC_LOW_SPEED_MODE;
+constexpr uint32_t STEERING_PWM_MIN_US = CONFIG_STEERING_PWM_MIN_US;
+constexpr uint32_t STEERING_PWM_NEUTRAL_US = CONFIG_STEERING_PWM_NEUTRAL_US;
+constexpr uint32_t STEERING_PWM_MAX_US = CONFIG_STEERING_PWM_MAX_US;
+constexpr uint32_t STEERING_PWM_MAX_DELTA_US = CONFIG_STEERING_PWM_MAX_DELTA_US;
+#endif
+
 // ============================================================================
 // Component Configurations
 // ============================================================================
@@ -215,6 +232,20 @@ optocoupler_pc817_config_t g_fr_pc817_cfg = {
 	.forward_gpio = FR_FORWARD_GPIO,
 	.reverse_gpio = FR_REVERSE_GPIO,
 };
+
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+struct steering_pwm_state_t
+{
+	bool initialized;
+	uint32_t last_pulse_us;
+};
+
+steering_pwm_state_t g_steering_pwm = {};
+
+#ifdef CONFIG_LOG_ACTUATOR_STEERING_PWM_SIGNAL
+constexpr uint32_t STEERING_PWM_LOG_INTERVAL_MS = 3000;
+#endif
+#endif
 
 // ============================================================================
 // Thread-Safe Shared State (CAN RX task -> Control/Heartbeat tasks)
@@ -289,6 +320,7 @@ uint8_t g_can_tx_in_flight = 0;
 volatile bool g_twai_ready = false;
 volatile bool g_dac_ready = false;
 volatile bool g_dpdt_relay_ready = false;
+volatile bool g_steering_actuator_ready = false;
 volatile bool g_stepper_steering_ready = false;
 volatile bool g_stepper_braking_ready = false;
 
@@ -549,6 +581,160 @@ fr_state_t fr_state_debounced(void)
 	return optocoupler_pc817_get_state();
 }
 
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+static ledc_timer_bit_t steering_pwm_resolution_enum(void)
+{
+	switch (STEERING_PWM_RESOLUTION_BITS)
+	{
+	case 1:
+		return LEDC_TIMER_1_BIT;
+	case 2:
+		return LEDC_TIMER_2_BIT;
+	case 3:
+		return LEDC_TIMER_3_BIT;
+	case 4:
+		return LEDC_TIMER_4_BIT;
+	case 5:
+		return LEDC_TIMER_5_BIT;
+	case 6:
+		return LEDC_TIMER_6_BIT;
+	case 7:
+		return LEDC_TIMER_7_BIT;
+	case 8:
+		return LEDC_TIMER_8_BIT;
+	case 9:
+		return LEDC_TIMER_9_BIT;
+	case 10:
+		return LEDC_TIMER_10_BIT;
+	case 11:
+		return LEDC_TIMER_11_BIT;
+	case 12:
+		return LEDC_TIMER_12_BIT;
+	case 13:
+		return LEDC_TIMER_13_BIT;
+	case 14:
+		return LEDC_TIMER_14_BIT;
+	case 15:
+		return LEDC_TIMER_15_BIT;
+	case 16:
+		return LEDC_TIMER_16_BIT;
+	case 17:
+		return LEDC_TIMER_17_BIT;
+	case 18:
+		return LEDC_TIMER_18_BIT;
+	case 19:
+		return LEDC_TIMER_19_BIT;
+	case 20:
+	default:
+		return LEDC_TIMER_20_BIT;
+	}
+}
+
+static uint32_t steering_command_to_pwm_us(int32_t steering_position)
+{
+	int32_t clamped = control_clamp_command(steering_position, STEERING_POSITION_MIN, STEERING_POSITION_MAX);
+	int64_t planner_position = 360;
+
+	if (STEERING_POSITION_MAX > 0)
+		planner_position = 360 + ((int64_t)clamped * 360) / (int64_t)STEERING_POSITION_MAX;
+
+	if (planner_position <= 180)
+		return STEERING_PWM_MIN_US;
+	if (planner_position >= 540)
+		return STEERING_PWM_MAX_US;
+	if (planner_position == 360)
+		return STEERING_PWM_NEUTRAL_US;
+
+	if (planner_position < 360)
+	{
+		int64_t pulse_span = (int64_t)STEERING_PWM_NEUTRAL_US - (int64_t)STEERING_PWM_MIN_US;
+		return (uint32_t)((int64_t)STEERING_PWM_MIN_US + ((planner_position - 180) * pulse_span) / 180);
+	}
+
+	int64_t pulse_span = (int64_t)STEERING_PWM_MAX_US - (int64_t)STEERING_PWM_NEUTRAL_US;
+	return (uint32_t)((int64_t)STEERING_PWM_NEUTRAL_US + ((planner_position - 360) * pulse_span) / 180);
+}
+
+static esp_err_t steering_pwm_apply_pulse_us(uint32_t pulse_us)
+{
+	if (!g_steering_pwm.initialized)
+		return ESP_ERR_INVALID_STATE;
+
+	if (STEERING_PWM_MAX_DELTA_US > 0 && g_steering_pwm.last_pulse_us != 0)
+	{
+		int32_t delta = (int32_t)pulse_us - (int32_t)g_steering_pwm.last_pulse_us;
+		int32_t max_delta = (int32_t)STEERING_PWM_MAX_DELTA_US;
+		if (delta > max_delta)
+			delta = max_delta;
+		else if (delta < -max_delta)
+			delta = -max_delta;
+		pulse_us = (uint32_t)((int32_t)g_steering_pwm.last_pulse_us + delta);
+	}
+
+	uint64_t period_us = 1000000ULL / (uint64_t)STEERING_PWM_FREQ_HZ;
+	if (period_us == 0)
+		return ESP_ERR_INVALID_ARG;
+
+	uint64_t max_duty = (1ULL << STEERING_PWM_RESOLUTION_BITS) - 1ULL;
+	uint64_t duty = ((uint64_t)pulse_us * max_duty) / period_us;
+	if (duty > max_duty)
+		duty = max_duty;
+
+	esp_err_t err = ledc_set_duty(STEERING_PWM_MODE, STEERING_PWM_CHANNEL, duty);
+	if (err != ESP_OK)
+		return err;
+
+	err = ledc_update_duty(STEERING_PWM_MODE, STEERING_PWM_CHANNEL);
+	if (err == ESP_OK)
+		g_steering_pwm.last_pulse_us = pulse_us;
+	return err;
+}
+
+static esp_err_t steering_pwm_set_position(int32_t steering_position)
+{
+	return steering_pwm_apply_pulse_us(steering_command_to_pwm_us(steering_position));
+}
+
+static esp_err_t steering_pwm_set_neutral(void)
+{
+	return steering_pwm_apply_pulse_us(STEERING_PWM_NEUTRAL_US);
+}
+
+static esp_err_t steering_pwm_init(void)
+{
+	if (STEERING_PWM_MIN_US >= STEERING_PWM_NEUTRAL_US || STEERING_PWM_NEUTRAL_US >= STEERING_PWM_MAX_US)
+		return ESP_ERR_INVALID_ARG;
+
+	ledc_timer_config_t timer_cfg = {};
+	timer_cfg.speed_mode = STEERING_PWM_MODE;
+	timer_cfg.timer_num = STEERING_PWM_TIMER;
+	timer_cfg.duty_resolution = steering_pwm_resolution_enum();
+	timer_cfg.freq_hz = STEERING_PWM_FREQ_HZ;
+	timer_cfg.clk_cfg = LEDC_AUTO_CLK;
+
+	esp_err_t err = ledc_timer_config(&timer_cfg);
+	if (err != ESP_OK)
+		return err;
+
+	ledc_channel_config_t channel_cfg = {};
+	channel_cfg.gpio_num = STEERING_PWM_GPIO;
+	channel_cfg.speed_mode = STEERING_PWM_MODE;
+	channel_cfg.channel = STEERING_PWM_CHANNEL;
+	channel_cfg.intr_type = LEDC_INTR_DISABLE;
+	channel_cfg.timer_sel = STEERING_PWM_TIMER;
+	channel_cfg.duty = 0;
+	channel_cfg.hpoint = 0;
+
+	err = ledc_channel_config(&channel_cfg);
+	if (err != ESP_OK)
+		return err;
+
+	g_steering_pwm.initialized = true;
+	g_steering_pwm.last_pulse_us = 0;
+	return steering_pwm_set_neutral();
+}
+#endif
+
 #ifndef CONFIG_THROTTLE_TEST_MODE
 /**
  * @brief Log the initialization status of all Control ESP32 peripherals.
@@ -562,12 +748,12 @@ fr_state_t fr_state_debounced(void)
  * @param dpdt_relay_ready        MY5NJ DPDT relay initialized
  * @param pedal_ready             Pedal ADC initialized and validated
  * @param fr_ready                F/R optocoupler initialized and valid
- * @param stepper_steering_ready  Steering stepper initialized and configured
+ * @param steering_ready          Selected steering actuator initialized
  * @param stepper_braking_ready   Braking stepper initialized and configured
  * @param heartbeat_ready         WS2812 status LED initialized
  */
 void log_startup_device_status(bool twai_ready, bool DAC_ready, bool dpdt_relay_ready, bool pedal_ready,
-                               bool fr_ready, bool stepper_steering_ready, bool stepper_braking_ready,
+                               bool fr_ready, bool steering_ready, bool stepper_braking_ready,
                                bool heartbeat_ready)
 {
 	if (twai_ready)
@@ -635,9 +821,24 @@ void log_startup_device_status(bool twai_ready, bool DAC_ready, bool dpdt_relay_
 #endif
 
 #ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-	ESP_LOGW(TAG_INIT, "STEPPER_STEERING: BYPASSED: actuator disabled (node_id=%u)", (unsigned)UIM2852_NODE_STEERING);
+	ESP_LOGW(TAG_INIT, "STEERING_ACTUATOR: BYPASSED: active steering backend disabled");
 #else
-	if (stepper_steering_ready)
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+	if (steering_ready)
+	{
+		ESP_LOGI(TAG_INIT,
+		         "STEERING_PWM: OK: gpio=%d freq=%luHz resolution=%lub neutral=%luus range=[%lu,%lu]us",
+		         STEERING_PWM_GPIO, (unsigned long)STEERING_PWM_FREQ_HZ,
+		         (unsigned long)STEERING_PWM_RESOLUTION_BITS, (unsigned long)STEERING_PWM_NEUTRAL_US,
+		         (unsigned long)STEERING_PWM_MIN_US, (unsigned long)STEERING_PWM_MAX_US);
+	}
+	else
+	{
+		ESP_LOGE(TAG_INIT, "STEERING_PWM: FAILED: gpio=%d freq=%luHz resolution=%lub", STEERING_PWM_GPIO,
+		         (unsigned long)STEERING_PWM_FREQ_HZ, (unsigned long)STEERING_PWM_RESOLUTION_BITS);
+	}
+#else
+	if (steering_ready)
 	{
 		ESP_LOGI(TAG_INIT, "STEPPER_STEERING: OK: node_id=%u init_check=passed", (unsigned)UIM2852_NODE_STEERING);
 	}
@@ -645,6 +846,7 @@ void log_startup_device_status(bool twai_ready, bool DAC_ready, bool dpdt_relay_
 	{
 		ESP_LOGE(TAG_INIT, "STEPPER_STEERING: FAILED: node_id=%u init_check=failed", (unsigned)UIM2852_NODE_STEERING);
 	}
+#endif
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	ESP_LOGW(TAG_INIT, "STEPPER_BRAKING: BYPASSED: actuator disabled (node_id=%u)", (unsigned)UIM2852_NODE_BRAKING);
@@ -695,6 +897,10 @@ bool all_required_components_ready(void)
 	if (!g_fr_inputs_ready)
 		ready = false;
 #endif
+#if defined(CONFIG_STEERING_ACTUATOR_PWM) && !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING)
+	if (!g_steering_actuator_ready)
+		ready = false;
+#endif
 	return ready;
 }
 
@@ -719,6 +925,10 @@ node_fault_t primary_fault_from_component_health(void)
 #if !defined(CONFIG_BYPASS_INPUT_PEDAL_ADC) || !defined(CONFIG_BYPASS_INPUT_FR_SENSOR)
 	if (!g_pedal_input_ready || !g_fr_inputs_ready)
 		return NODE_FAULT_CONTROL_SENSOR_INVALID;
+#endif
+#if defined(CONFIG_STEERING_ACTUATOR_PWM) && !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING)
+	if (!g_steering_actuator_ready)
+		return NODE_FAULT_CONTROL_MOTOR_COMM;
 #endif
 	return NODE_FAULT_NONE;
 }
@@ -869,7 +1079,11 @@ void update_control_state_from_component_health(void)
 		return;
 	}
 
-	if (g_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT || g_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT)
+	if (g_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT || g_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT
+#if defined(CONFIG_STEERING_ACTUATOR_PWM) && !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING)
+	    || g_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM
+#endif
+	)
 	{
 		taskENTER_CRITICAL(&g_hb_seq_lock);
 		g_fault_flags = NODE_FAULT_NONE;
@@ -1092,6 +1306,34 @@ void retry_failed_components(void)
 // Motor Initialization Phase — retry braking before steering, matches startup init order.
 [[maybe_unused]] bool braking_needs_limits = false;
 [[maybe_unused]] bool steering_needs_limits = false;
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+	if (!g_steering_actuator_ready)
+	{
+		[[maybe_unused]] static uint16_t s_retry_count = 0;
+		esp_err_t err = steering_pwm_init();
+		bool recovered = (err == ESP_OK);
+#ifdef CONFIG_LOG_RETRY_STEPPER_STEERING
+		if (!recovered)
+		{
+			s_retry_count++;
+			if (s_retry_count == 1 || (s_retry_count % RETRY_LOG_EVERY_N) == 0)
+			{
+				ESP_LOGW(TAG, "STEERING_PWM retry failed (%u attempts): %s", s_retry_count, esp_err_to_name(err));
+			}
+		}
+#endif
+		if (recovered)
+		{
+			s_retry_count = 0;
+			log_component_regained("STEERING_PWM");
+		}
+		g_steering_actuator_ready = recovered;
+	}
+#else
+	g_steering_actuator_ready = true;
+#endif
+#else
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	if (!g_stepper_braking_ready)
 	{
@@ -1178,9 +1420,11 @@ void retry_failed_components(void)
 		                                                 STEERING_POSITION_MIN, STEERING_POSITION_MAX,
 		                                                 STEERING_MAX_ACCEL, steering_enforce_limits);
 		g_stepper_steering_ready = (err == ESP_OK);
+		g_steering_actuator_ready = g_stepper_steering_ready;
 		if (g_stepper_steering_ready)
 			log_component_regained("STEPPER_STEERING");
 	}
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	if (braking_needs_limits)
@@ -1257,6 +1501,11 @@ void track_can_tx(esp_err_t err)
 
 	if (trigger_recovery)
 	{
+#ifdef CONFIG_BYPASS_CAN_BUS_HEALTH
+		// Bench-test bypass: keep TWAI logically available even when the bus
+		// health probe says the transport is unhealthy after repeated TX errors.
+		return;
+#else
 #ifdef CONFIG_LOG_CAN_RECOVERY
 		ESP_LOGE(TAG, "CAN bus unhealthy after %d TX failures", CAN_TX_CONSEC_FAIL_THRESHOLD);
 #endif
@@ -1265,6 +1514,7 @@ void track_can_tx(esp_err_t err)
 		// Recovery handled by retry_failed_components() at 500ms pace.
 		g_can_recovery_in_progress = false;
 		taskEXIT_CRITICAL(&g_can_tx_lock);
+#endif
 	}
 }
 
@@ -1521,14 +1771,25 @@ void disable_autonomous_actuators(void)
 	// Stop PT interpolation before emergency stop (clears FIFO consumption).
 	// Best-effort: errors are ignored since emergency stop follows immediately.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+	handle_runtime_error(steering_pwm_set_neutral(), &g_steering_actuator_ready, "STEERING_PWM",
+	                     "set neutral command failed");
+#else
 	(void)stepper_motor_uim2852_pt_stop(&g_steering_stepper);
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	(void)stepper_motor_uim2852_pt_stop(&g_braking_stepper);
 #endif
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+	handle_runtime_error(steering_pwm_set_neutral(), &g_steering_actuator_ready, "STEERING_PWM",
+	                     "set neutral command failed");
+#else
 	stepper_shutdown(&g_steering_stepper, &g_stepper_steering_ready, "STEPPER_STEERING");
+	g_steering_actuator_ready = g_stepper_steering_ready;
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	stepper_shutdown(&g_braking_stepper, &g_stepper_braking_ready, "STEPPER_BRAKING");
@@ -1606,6 +1867,10 @@ void execute_start_enable()
 #ifndef CONFIG_BYPASS_ACTUATOR_THROTTLE
 	handle_runtime_error(dac_mcp4728_set_level(0), &g_dac_ready, "DAC", "set level command failed");
 #endif
+#if defined(CONFIG_STEERING_ACTUATOR_PWM) && !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING)
+	handle_runtime_error(steering_pwm_set_neutral(), &g_steering_actuator_ready, "STEERING_PWM",
+	                     "set neutral command failed");
+#endif
 }
 
 /**
@@ -1626,12 +1891,16 @@ void execute_complete_enable()
 	esp_err_t brake_err = ESP_OK;
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+	steer_err = steering_pwm_set_neutral();
+#else
 	steer_err = stepper_motor_uim2852_enable(&g_steering_stepper);
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
 	if (steer_err != ESP_OK)
 		ESP_LOGI(TAG, "Steering enable failed: %s", esp_err_to_name(steer_err));
 #endif
 	vTaskDelay(pdMS_TO_TICKS(5));
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	brake_err = stepper_motor_uim2852_enable(&g_braking_stepper);
@@ -1646,7 +1915,9 @@ void execute_complete_enable()
 	{
 		ESP_LOGE(TAG, "Stepper enable failed, aborting autonomous enable");
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 		stepper_motor_uim2852_disable(&g_steering_stepper);
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 		stepper_motor_uim2852_disable(&g_braking_stepper);
@@ -1664,9 +1935,11 @@ void execute_complete_enable()
 	// begins feeding position commands.
 	esp_err_t pt_err = ESP_OK;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 	pt_err = stepper_motor_uim2852_pt_configure(&g_steering_stepper);
 	if (pt_err == ESP_OK)
 		pt_err = stepper_motor_uim2852_pt_start(&g_steering_stepper);
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	if (pt_err == ESP_OK)
@@ -1678,7 +1951,9 @@ void execute_complete_enable()
 	{
 		ESP_LOGE(TAG, "PT mode setup failed: %s — aborting enable", esp_err_to_name(pt_err));
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 		stepper_motor_uim2852_disable(&g_steering_stepper);
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 		stepper_motor_uim2852_disable(&g_braking_stepper);
@@ -1799,6 +2074,7 @@ void can_rx_task(void *param)
 			}
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 			if (stepper_motor_uim2852_process_frame(&g_steering_stepper, &msg))
 			{
 				matched = true;
@@ -1817,6 +2093,7 @@ void can_rx_task(void *param)
 					taskEXIT_CRITICAL(&g_cmd_lock);
 				}
 			}
+#endif
 #endif
 			(void)matched;
 			continue;
@@ -1920,8 +2197,8 @@ void control_task(void *param)
 #endif
 	int32_t last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
 	int32_t last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
-	TickType_t next_steering_pt_feed_tick = 0;
-	TickType_t next_braking_pt_feed_tick = 0;
+	[[maybe_unused]] TickType_t next_steering_pt_feed_tick = 0;
+	[[maybe_unused]] TickType_t next_braking_pt_feed_tick = 0;
 
 	g_throttle_current = 0;
 
@@ -1956,7 +2233,14 @@ void control_task(void *param)
 
 		if (cmd_local.motor_fault_code == NODE_FAULT_CONTROL_MOTOR_COMM)
 		{
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+			mark_component_lost(&g_steering_actuator_ready, "STEERING_PWM", "runtime communication fault");
+#endif
+#else
 			mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "runtime communication fault");
+			g_steering_actuator_ready = g_stepper_steering_ready;
+#endif
 			mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "runtime communication fault");
 		}
 
@@ -2037,11 +2321,13 @@ void control_task(void *param)
 		bool steering_pos_err = false;
 		bool braking_pos_err = false;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 		if (g_stepper_steering_ready && !stepper_motor_uim2852_is_motion_in_progress(&g_steering_stepper))
 		{
 			steering_pos_err =
 				(stepper_motor_uim2852_position_error(&g_steering_stepper) > STEPPER_POSITION_ERROR_THRESHOLD);
 		}
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 		if (g_stepper_braking_ready && !stepper_motor_uim2852_is_motion_in_progress(&g_braking_stepper))
@@ -2132,7 +2418,7 @@ void control_task(void *param)
 		{
 			bool steppers_ready_for_enable = true;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
-			steppers_ready_for_enable = steppers_ready_for_enable && g_stepper_steering_ready;
+			steppers_ready_for_enable = steppers_ready_for_enable && g_steering_actuator_ready;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 			steppers_ready_for_enable = steppers_ready_for_enable && g_stepper_braking_ready;
@@ -2193,6 +2479,30 @@ void control_task(void *param)
 		// planner-derived target. If Planner skips a cycle, we repeat the last
 		// target so the FIFO does not run dry.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+		if (g_steering_actuator_ready && step.new_state == NODE_STATE_ACTIVE && step.send_steering)
+		{
+			esp_err_t err = steering_pwm_set_position(step.steering_position);
+			if (err != ESP_OK)
+				step.new_last_steering = last_steering_sent;
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+			if (err != ESP_OK)
+			{
+				ESP_LOGI(TAG_TX, "Steering PWM apply failed: %s", esp_err_to_name(err));
+			}
+			else
+			{
+				ESP_LOGI(TAG_TX, "Steering PWM -> %ld (%luus)", (long)step.steering_position,
+				         (unsigned long)steering_command_to_pwm_us(step.steering_position));
+			}
+#endif
+			handle_runtime_error(err, &g_steering_actuator_ready, "STEERING_PWM", "set position command failed");
+		}
+		else
+		{
+			next_steering_pt_feed_tick = 0;
+		}
+#else
 		if (g_stepper_steering_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
 			bool fed_frame = false;
@@ -2221,6 +2531,22 @@ void control_task(void *param)
 			next_steering_pt_feed_tick = 0;
 		}
 #endif
+#endif
+
+#if defined(CONFIG_STEERING_ACTUATOR_PWM) && defined(CONFIG_LOG_ACTUATOR_STEERING_PWM_SIGNAL)
+		{
+			static uint32_t last_pwm_log_ms = 0;
+			if (g_steering_pwm.initialized &&
+			    (last_pwm_log_ms == 0 || (now_ms - last_pwm_log_ms) >= STEERING_PWM_LOG_INTERVAL_MS))
+			{
+				last_pwm_log_ms = now_ms;
+				ESP_LOGI(TAG, "Steering PWM output: pulse=%luus freq=%uHz state=%s",
+				         (unsigned long)g_steering_pwm.last_pulse_us, (unsigned)STEERING_PWM_FREQ_HZ,
+				         node_state_to_string(step.new_state));
+			}
+		}
+#endif
+
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 		if (g_stepper_braking_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
@@ -2303,7 +2629,14 @@ void control_task(void *param)
 		}
 		if (step.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM)
 		{
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+			mark_component_lost(&g_steering_actuator_ready, "STEERING_PWM", "runtime actuator fault");
+#endif
+#else
 			mark_component_lost(&g_stepper_steering_ready, "STEPPER_STEERING", "runtime motor communication fault");
+			g_steering_actuator_ready = g_stepper_steering_ready;
+#endif
 			mark_component_lost(&g_stepper_braking_ready, "STEPPER_BRAKING", "runtime motor communication fault");
 		}
 
@@ -2316,7 +2649,11 @@ void control_task(void *param)
 			new_state = g_control_state;
 			taskEXIT_CRITICAL(&g_hb_seq_lock);
 		}
-		else if (g_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT || g_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT)
+		else if (g_fault_flags == NODE_FAULT_CONTROL_THROTTLE_INIT || g_fault_flags == NODE_FAULT_CONTROL_RELAY_INIT
+#if defined(CONFIG_STEERING_ACTUATOR_PWM) && !defined(CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING)
+		         || g_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM
+#endif
+		)
 		{
 			taskENTER_CRITICAL(&g_hb_seq_lock);
 			g_fault_flags = NODE_FAULT_NONE;
@@ -2981,6 +3318,9 @@ void main_task(void *param)
 	braking_init_err = ESP_OK;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifdef CONFIG_STEERING_ACTUATOR_PWM
+	steering_init_err = steering_pwm_init();
+#else
 	{
 		stepper_motor_uim2852_config_t s_cfg = STEPPER_MOTOR_UIM2852_CONFIG_DEFAULT();
 		s_cfg.node_id       = UIM2852_NODE_STEERING;
@@ -2998,26 +3338,31 @@ void main_task(void *param)
 		if (steering_init_err == ESP_OK)
 			(void)stepper_motor_uim2852_query_position(&g_steering_stepper);
 	}
+#endif
 #else
 	steering_init_err = ESP_OK;
 #endif
 
 	// Software Limit Initialization Phase
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 #ifdef CONFIG_BYPASS_SOFTWARE_LIMITS_STEERING
 	constexpr bool steering_enforce_limits = false;
 #else
 	constexpr bool steering_enforce_limits = true;
 #endif
+#endif
 #ifdef CONFIG_BYPASS_SOFTWARE_LIMITS_BRAKING
-	constexpr bool braking_enforce_limits = false;
+	[[maybe_unused]] constexpr bool braking_enforce_limits = false;
 #else
-	constexpr bool braking_enforce_limits = true;
+	[[maybe_unused]] constexpr bool braking_enforce_limits = true;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+#ifndef CONFIG_STEERING_ACTUATOR_PWM
 	if (steering_init_err == ESP_OK)
 		steering_init_err = stepper_motor_uim2852_set_limits(&g_steering_stepper, STEERING_MAX_SPEED,
 		                                                     STEERING_POSITION_MIN, STEERING_POSITION_MAX,
 		                                                     STEERING_MAX_ACCEL, steering_enforce_limits);
+#endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	if (braking_init_err == ESP_OK)
@@ -3027,9 +3372,13 @@ void main_task(void *param)
 #endif
 	g_stepper_braking_ready = (braking_init_err == ESP_OK);
 	g_stepper_steering_ready = (steering_init_err == ESP_OK);
+	g_steering_actuator_ready = g_stepper_steering_ready;
+#ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
+	g_steering_actuator_ready = true;
+#endif
 
 	log_startup_device_status(g_twai_ready, g_dac_ready, g_dpdt_relay_ready, g_pedal_input_ready, g_fr_inputs_ready,
-	                          g_stepper_steering_ready, g_stepper_braking_ready, heartbeat_ready);
+	                          g_steering_actuator_ready, g_stepper_braking_ready, heartbeat_ready);
 
 	// Log all active test bypasses at boot so they are visible on the serial console.
 	// Any active bypass is a WARNING — this firmware should not be deployed to the vehicle.
@@ -3061,6 +3410,10 @@ void main_task(void *param)
 #endif
 #ifdef CONFIG_BYPASS_INPUT_FR_SENSOR
 		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: INPUT_FR_SENSOR (forcing FORWARD)");
+		any_bypass = true;
+#endif
+#ifdef CONFIG_BYPASS_CAN_BUS_HEALTH
+		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: CAN_BUS_HEALTH (ignoring TWAI bus-health gating)");
 		any_bypass = true;
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_THROTTLE

@@ -2,6 +2,8 @@
 
 ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (Jetson AGX Orin) over CAN and controls/monitors throttle, steering, and braking actuators. Follows the system target state broadcast by Safety ESP32.
 
+Steering can be built against either the existing UIM2852 CAN stepper backend or a local LEDC PWM output backend selected in `idf.py menuconfig` under `Motor Limits -> Steering actuator backend`.
+
 ## State Machine
 
 Control follows Safety's target state (`NOT_READY`/`READY`/`ENABLE`/`ACTIVE`) and reports retreat causes via heartbeat `stop_flags` (non-fault interventions) and `fault_flags` (issues).
@@ -90,7 +92,7 @@ Control tracks the Planner command sequence number. If the same sequence is seen
 
 | Motor    | Node ID | Description                         |
 | -------- | ------- | ----------------------------------- |
-| Steering | 7       | Linear actuator for steering column |
+| Steering | 7       | Linear actuator for steering column when `Steering actuator backend = CAN stepper motor` |
 | Braking  | 6       | Linear actuator for brake pedal     |
 
 See `stepper_protocol_uim2852.h` for CAN ID encoding.
@@ -108,6 +110,8 @@ See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | 10   | DPDT Relay  | Output    | 2N5551 base via 680R (10k pull-down), MY5NJ 24V coil   |
 | 22   | F/R Forward | Input     | PC817 optocoupler, pull-up, active LOW                 |
 | 23   | F/R Reverse | Input     | PC817 optocoupler, pull-up, active LOW                 |
+
+When `Steering actuator backend = LEDC PWM output`, steering also uses the configurable `STEERING_PWM_GPIO` pin. Default timing is 50 Hz, 16-bit resolution, and a 500/1500/2500 us min/neutral/max pulse range.
 
 ### LED Behavior
 
@@ -487,6 +491,7 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Planner command timeout/stale checks                                             |
 | `CONFIG_BYPASS_INPUT_PEDAL_ADC`              | Skip pedal ADC readings (always not pressed, always re-armed)                            |
 | `CONFIG_BYPASS_INPUT_FR_SENSOR`              | Force F/R state to FORWARD (skip optocoupler channel reading)                            |
+| `CONFIG_BYPASS_CAN_BUS_HEALTH`               | Ignore TWAI consecutive-TX-failure bus-health gating (do not force TWAI recovery/down)   |
 | `CONFIG_BYPASS_ACTUATOR_THROTTLE`            | Skip DAC and DPDT relay control                                                          |
 | `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING`    | Skip steering stepper motor (node 7) init/configure/commands                             |
 | `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING`     | Skip braking stepper motor (node 6) init/configure/commands                              |
@@ -549,6 +554,7 @@ Retries are unbounded for failed required components, paced at 500ms intervals (
 | ---------------------------------------- | ------- | --------------------------------------------------- |
 | `CONFIG_LOG_ACTUATOR_DAC_LEVEL`          | off     | Log DAC throttle level changes                      |
 | `CONFIG_LOG_ACTUATOR_DPDT_RELAY`         | off     | Log DPDT relay energize/de-energize                 |
+| `CONFIG_LOG_ACTUATOR_STEERING_PWM_SIGNAL` | off    | Log current steering PWM output every 3 seconds     |
 | `CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX` | off     | Log stepper position commands sent over CAN         |
 | `CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX`  | off     | Log stepper motion commands (PA/PR/ST)              |
 | `CONFIG_LOG_ACTUATOR_STEPPER_RX`         | off     | Log parsed stepper CAN RX frames (MS, params, ACKs) |
