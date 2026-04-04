@@ -9,11 +9,11 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConvexProviderWithAuth, ConvexReactClient, useMutation } from "convex/react";
 import { Stack, useRouter, useSegments } from "expo-router";
+import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import * as SplashScreen from "expo-splash-screen";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { Platform } from "react-native";
 import React, { useEffect, useRef } from "react";
 import "../global.css";
 
@@ -22,7 +22,6 @@ SplashScreen.preventAutoHideAsync();
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
     shouldShowBanner: true,
@@ -102,9 +101,15 @@ function NavigationWrapper() {
           return;
         }
 
-        const tokenData = await Notifications.getExpoPushTokenAsync({
-          projectId: "81150332-57e1-4e4a-b2cd-a854a8aaf6ea",
-        });
+        const projectId =
+          Constants.expoConfig?.extra?.eas?.projectId ??
+          (Constants as any).easConfig?.projectId;
+        if (!projectId) {
+          console.error("Push notifications: EAS projectId not found in Constants");
+          return;
+        }
+
+        const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
         console.log("Expo push token:", tokenData.data);
         await updatePushToken({ expoPushToken: tokenData.data });
         console.log("Push token stored successfully");
@@ -114,9 +119,16 @@ function NavigationWrapper() {
     })();
   }, [isAuthenticated, updatePushToken]);
 
-  // Handle notification tap — navigate to ride tracking
+  // Handle incoming notifications & taps
+  const notificationListener = useRef<Notifications.EventSubscription | undefined>(undefined);
   const notificationResponseListener = useRef<Notifications.EventSubscription | undefined>(undefined);
   useEffect(() => {
+    // Log received notifications for debugging
+    notificationListener.current =
+      Notifications.addNotificationReceivedListener((notification) => {
+        console.log("Push notification received:", notification.request.content.title);
+      });
+
     notificationResponseListener.current =
       Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data;
@@ -126,6 +138,7 @@ function NavigationWrapper() {
       });
 
     return () => {
+      notificationListener.current?.remove();
       notificationResponseListener.current?.remove();
     };
   }, [router]);

@@ -198,23 +198,30 @@ export const [RideProvider, useRide] = createContextHook(() => {
       return;
     }
 
-    if (status === "assigned") {
+    if (status === "requested" || status === "assigned") {
       const pickupLoc = CAMPUS_LOCATIONS.find(
         (l) => l.id === currentRide!.pickupLocationId
       );
       const dropoffLoc = CAMPUS_LOCATIONS.find(
         (l) => l.id === currentRide!.dropoffLocationId
       );
-      startRideActivity({
-        cartName: "ACT-001",
-        pickupName: pickupLoc?.shortName ?? "Pickup",
-        dropoffName: dropoffLoc?.shortName ?? "Destination",
-        status: "assigned",
-      });
+      if (!hasActiveActivity()) {
+        startRideActivity({
+          cartName: "ACT-001",
+          pickupName: pickupLoc?.shortName ?? "Pickup",
+          dropoffName: dropoffLoc?.shortName ?? "Destination",
+          status,
+        });
+      } else {
+        // LA already running (requested → assigned) — just update text
+        updateRideActivity(status);
+      }
+    } else if (status === "arriving" || status === "in_progress") {
+      // Update status text immediately; distance effect will follow with progress
+      updateRideActivity(status);
     } else if (status === "completed" || status === "cancelled") {
       endRideActivity();
     }
-    // "arriving" and "in_progress" are handled by the distance-tracking effect below
   }, [currentRide?.status, currentRide?.pickupLocationId, currentRide?.dropoffLocationId]);
 
   // Update Live Activity with distance/progress whenever cart position changes

@@ -30,7 +30,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -271,83 +270,82 @@ export default function HomeScreen() {
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={{ flex: 1 }}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.modalBackdrop}>
-              <TouchableWithoutFeedback>
-                <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
-                  <View style={styles.handle} />
+          <View style={styles.modalBackdrop}>
+            {/* Backdrop dismiss — only covers area ABOVE the sheet */}
+            <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss} />
 
-                  <Text style={styles.reviewTitle}>How was your ride?</Text>
-                  {pendingReview && (
-                    <Text style={styles.reviewRoute}>
-                      {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.pickupLocationId)?.name ?? "Pickup"}
-                      {" → "}
-                      {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.dropoffLocationId)?.name ?? "Dropoff"}
-                    </Text>
-                  )}
+            <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
+              <View style={styles.handle} />
 
-                  <View style={styles.starsRow}>
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <Pressable
-                        key={n}
-                        onPress={() => setReviewRating(n)}
-                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                      >
-                        <Star
-                          size={40}
-                          color={n <= reviewRating ? Colors.accent : Colors.border}
-                          fill={n <= reviewRating ? Colors.accent : "transparent"}
-                        />
-                      </Pressable>
-                    ))}
-                  </View>
+              <Text style={styles.reviewTitle}>How was your ride?</Text>
+              {pendingReview && (
+                <Text style={styles.reviewRoute}>
+                  {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.pickupLocationId)?.name ?? "Pickup"}
+                  {" → "}
+                  {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.dropoffLocationId)?.name ?? "Dropoff"}
+                </Text>
+              )}
 
-                  {reviewRating === 0 ? (
-                    <Text style={styles.starHint}>Tap a star to rate your ride</Text>
-                  ) : (
-                    <View style={{ height: 16 }} />
-                  )}
-
-                  <TextInput
-                    placeholder="Add a comment (optional)"
-                    placeholderTextColor={Colors.textSecondary}
-                    value={reviewComment}
-                    onChangeText={setReviewComment}
-                    multiline
-                    numberOfLines={3}
-                    style={styles.commentInput}
-                  />
-
-                  <TouchableOpacity
-                    style={[styles.submitBtn, reviewRating === 0 && styles.submitBtnDisabled]}
-                    onPress={() => {
-                      if (reviewRating === 0) return;
-                      submitReview(reviewRating, reviewComment.trim() || undefined);
-                      setReviewRating(0);
-                      setReviewComment("");
-                    }}
-                    activeOpacity={reviewRating === 0 ? 1 : 0.8}
+              <View style={styles.starsRow}>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Pressable
+                    key={n}
+                    onPress={() => setReviewRating(n)}
+                    hitSlop={16}
                   >
-                    <Text style={[styles.submitBtnText, reviewRating === 0 && styles.submitBtnTextDisabled]}>
-                      Submit Review
-                    </Text>
-                  </TouchableOpacity>
+                    <Star
+                      size={40}
+                      color={n <= reviewRating ? Colors.accent : Colors.border}
+                      fill={n <= reviewRating ? Colors.accent : "transparent"}
+                    />
+                  </Pressable>
+                ))}
+              </View>
 
-                  <TouchableOpacity
-                    style={styles.skipBtn}
-                    onPress={() => {
-                      dismissReview();
-                      setReviewRating(0);
-                      setReviewComment("");
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.skipText}>Skip for now</Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableWithoutFeedback>
+              {reviewRating === 0 ? (
+                <Text style={styles.starHint}>Tap a star to rate your ride</Text>
+              ) : (
+                <View style={{ height: 16 }} />
+              )}
+
+              <TextInput
+                placeholder="Add a comment (optional)"
+                placeholderTextColor={Colors.textSecondary}
+                value={reviewComment}
+                onChangeText={setReviewComment}
+                multiline
+                numberOfLines={3}
+                style={styles.commentInput}
+              />
+
+              <TouchableOpacity
+                style={[styles.submitBtn, reviewRating === 0 && styles.submitBtnDisabled]}
+                onPress={() => {
+                  if (reviewRating === 0) return;
+                  submitReview(reviewRating, reviewComment.trim() || undefined);
+                  setReviewRating(0);
+                  setReviewComment("");
+                }}
+                activeOpacity={reviewRating === 0 ? 1 : 0.8}
+              >
+                <Text style={[styles.submitBtnText, reviewRating === 0 && styles.submitBtnTextDisabled]}>
+                  Submit Review
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.skipBtn}
+                onPress={() => {
+                  dismissReview();
+                  setReviewRating(0);
+                  setReviewComment("");
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.skipText}>Skip for now</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         </KeyboardAvoidingView>
       </Modal>
     </View>

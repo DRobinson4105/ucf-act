@@ -15,6 +15,7 @@ async function getLiveActivity() {
 }
 
 const STATUS_TEXT: Record<string, string> = {
+  requested: "Finding your cart\u2026",
   assigned: "Cart on the way",
   arriving: "Cart arrived!",
   in_progress: "On your way",

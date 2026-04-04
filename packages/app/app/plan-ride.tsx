@@ -21,6 +21,7 @@ import {
     Dimensions,
     FlatList,
     Keyboard,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
@@ -471,12 +472,13 @@ export default function PlanRideScreen() {
         }
       />
 
-      <TouchableOpacity
+      <Pressable
         style={[styles.backButton, { top: insets.top + 12 }]}
         onPress={() => router.back()}
+        hitSlop={8}
       >
         <ArrowLeft size={24} color={Colors.text} />
-      </TouchableOpacity>
+      </Pressable>
 
       <SwipeableBottomSheet
         initiallyExpanded={false}

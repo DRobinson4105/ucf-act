@@ -305,7 +305,7 @@ export default function CampusMap({
   };
 
   return (
-    <View style={fullScreen ? { flex: 1, width: "100%", height: "100%" } : { marginHorizontal: 16 }}>
+    <View pointerEvents="box-none" style={fullScreen ? { flex: 1, width: "100%", height: "100%" } : { marginHorizontal: 16 }}>
       <View style={fullScreen ? { width: "100%", height: "100%" } : { width: "100%", height: 400, borderRadius: 16, overflow: "hidden" }}>
         <MapView
           ref={mapRef}
