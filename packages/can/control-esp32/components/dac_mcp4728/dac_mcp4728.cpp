@@ -5,8 +5,10 @@
 
 #include "dac_mcp4728.h"
 
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_log.h"
+#include "rom/ets_sys.h"
 
 namespace
 {
@@ -40,6 +42,51 @@ uint16_t s_current_level = 0;
 bool s_autonomous = false;
 i2c_master_bus_handle_t s_bus_handle = nullptr;
 i2c_master_dev_handle_t s_dev_handle = nullptr;
+
+/**
+ * @brief Bit-bang I2C bus recovery before driver init.
+ *
+ * If the ESP32 was reset mid-transaction, the slave may still be holding
+ * SDA low waiting to finish a byte.  Clocking SCL 9 times lets the slave
+ * finish and release SDA, then a STOP condition resets the bus to idle.
+ * Must be called BEFORE i2c_new_master_bus() — the pins are not yet owned
+ * by the I2C peripheral.
+ */
+void recover_bus(gpio_num_t sda, gpio_num_t scl)
+{
+	// Configure SCL as open-drain output (high), SDA as open-drain input
+	gpio_set_direction(scl, GPIO_MODE_INPUT_OUTPUT_OD);
+	gpio_set_direction(sda, GPIO_MODE_INPUT_OUTPUT_OD);
+	gpio_set_level(scl, 1);
+	gpio_set_level(sda, 1);
+	ets_delay_us(5);
+
+	// Clock 9 SCL pulses to free a stuck slave
+	for (int i = 0; i < 9; i++)
+	{
+		gpio_set_level(scl, 0);
+		ets_delay_us(5);
+		gpio_set_level(scl, 1);
+		ets_delay_us(5);
+
+		if (gpio_get_level(sda))
+			break; // SDA released, bus is free
+	}
+
+	// Generate STOP condition: SDA low→high while SCL is high
+	gpio_set_level(scl, 0);
+	ets_delay_us(5);
+	gpio_set_level(sda, 0);
+	ets_delay_us(5);
+	gpio_set_level(scl, 1);
+	ets_delay_us(5);
+	gpio_set_level(sda, 1);
+	ets_delay_us(5);
+
+	// Release pins so I2C driver can claim them
+	gpio_reset_pin(sda);
+	gpio_reset_pin(scl);
+}
 
 /**
  * @brief Release I2C resources and reset module state.
@@ -132,6 +179,9 @@ esp_err_t dac_mcp4728_init(const dac_mcp4728_config_t *config)
 		release_resources();
 
 	s_config = *config;
+
+	// Free the bus in case a slave is stuck from a prior mid-transaction reset
+	recover_bus(config->sda, config->scl);
 
 	// Initialize I2C master bus
 	i2c_master_bus_config_t bus_cfg = {};
