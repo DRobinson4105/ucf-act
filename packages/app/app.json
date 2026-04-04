@@ -1,99 +1,99 @@
 {
-  "expo": {
-    "name": "ACT - Campus Taxi",
-    "slug": "act-campus-taxi",
-    "version": "7.1.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/images/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#111111"
-    },
-    "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.ucf.act",
-      "icon": "./assets/images/icon.png",
-      "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsArbitraryLoads": true
-        },
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-        "NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-        "NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-        "UIBackgroundModes": [
-          "location",
-          "remote-notification"
-        ],
-        "ITSAppUsesNonExemptEncryption": false,
-        "NSSupportsLiveActivities": true
-      }
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png",
-        "backgroundColor": "#111111"
-      },
-      "permissions": [
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION"
-      ],
-      "package": "com.ucf.act"
-    },
-    "plugins": [
-      "expo-router",
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "deploymentTarget": "17.0"
-          }
-        }
-      ],
-      [
-        "expo-location",
-        {
-          "locationAlwaysAndWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
-          "locationAlwaysPermission": "ACT needs your location to show your position on the map and provide ride services.",
-          "locationWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
-          "isIosBackgroundLocationEnabled": true,
-          "isAndroidBackgroundLocationEnabled": true,
-          "isAndroidForegroundServiceEnabled": true
-        }
-      ],
-      "expo-secure-store",
-      "expo-apple-authentication",
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/images/ucf_act_logo_notext.png",
-          "color": "#2DD4BF"
-        }
-      ],
-      [
-        "expo-live-activity",
-        {
-          "enablePushNotifications": true
-        }
-      ]
-    ],
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "81150332-57e1-4e4a-b2cd-a854a8aaf6ea"
-      }
-    }
-  }
+	"expo": {
+		"name": "ACT - Campus Taxi",
+		"slug": "act-campus-taxi",
+		"version": "7.2.0",
+		"orientation": "portrait",
+		"icon": "./assets/images/icon.png",
+		"scheme": "myapp",
+		"userInterfaceStyle": "dark",
+		"newArchEnabled": true,
+		"splash": {
+			"image": "./assets/images/splash-icon.png",
+			"resizeMode": "contain",
+			"backgroundColor": "#111111"
+		},
+		"ios": {
+			"supportsTablet": true,
+			"bundleIdentifier": "com.ucf.act",
+			"icon": "./assets/images/icon.png",
+			"infoPlist": {
+				"NSAppTransportSecurity": {
+					"NSAllowsArbitraryLoads": true
+				},
+				"NSLocationAlwaysAndWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
+				"NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
+				"NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
+				"UIBackgroundModes": [
+					"location",
+					"remote-notification"
+				],
+				"ITSAppUsesNonExemptEncryption": false,
+				"NSSupportsLiveActivities": true
+			}
+		},
+		"android": {
+			"adaptiveIcon": {
+				"foregroundImage": "./assets/images/android-icon-foreground.png",
+				"monochromeImage": "./assets/images/android-icon-monochrome.png",
+				"backgroundColor": "#111111"
+			},
+			"permissions": [
+				"android.permission.ACCESS_COARSE_LOCATION",
+				"android.permission.ACCESS_FINE_LOCATION",
+				"android.permission.ACCESS_BACKGROUND_LOCATION",
+				"android.permission.FOREGROUND_SERVICE",
+				"android.permission.FOREGROUND_SERVICE_LOCATION",
+				"android.permission.ACCESS_COARSE_LOCATION",
+				"android.permission.ACCESS_FINE_LOCATION",
+				"android.permission.ACCESS_BACKGROUND_LOCATION",
+				"android.permission.FOREGROUND_SERVICE",
+				"android.permission.FOREGROUND_SERVICE_LOCATION"
+			],
+			"package": "com.ucf.act"
+		},
+		"plugins": [
+			"expo-router",
+			[
+				"expo-build-properties",
+				{
+					"ios": {
+						"deploymentTarget": "17.0"
+					}
+				}
+			],
+			[
+				"expo-location",
+				{
+					"locationAlwaysAndWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
+					"locationAlwaysPermission": "ACT needs your location to show your position on the map and provide ride services.",
+					"locationWhenInUsePermission": "ACT needs your location to show your position on the map and provide ride services.",
+					"isIosBackgroundLocationEnabled": true,
+					"isAndroidBackgroundLocationEnabled": true,
+					"isAndroidForegroundServiceEnabled": true
+				}
+			],
+			"expo-secure-store",
+			"expo-apple-authentication",
+			[
+				"expo-notifications",
+				{
+					"icon": "./assets/images/ucf_act_logo_notext.png",
+					"color": "#2DD4BF"
+				}
+			],
+			[
+				"expo-live-activity",
+				{
+					"enablePushNotifications": true
+				}
+			]
+		],
+		"extra": {
+			"router": {},
+			"eas": {
+				"projectId": "81150332-57e1-4e4a-b2cd-a854a8aaf6ea"
+			}
+		}
+	}
 }
