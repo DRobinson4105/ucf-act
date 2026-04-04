@@ -323,8 +323,8 @@ export default function PlanRideScreen() {
 
   useEffect(() => {
     if (!currentRide) return;
-    // As soon as any ride record exists, leave the "finding" spinner
-    if (viewMode === "finding") {
+    // If opened with an active ride (e.g. from "Track Ride" button), go straight to tracking
+    if (viewMode === "planning" || viewMode === "finding") {
       setViewMode("tracking");
     }
     if (viewMode === "tracking" && currentRide.status === "cancelled") {

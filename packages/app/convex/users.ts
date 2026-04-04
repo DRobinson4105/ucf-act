@@ -16,15 +16,16 @@ export const storeUser = mutation({
       )
       .unique();
 
-    const name = args.name || identity.name || identity.email?.split("@")[0] || "ACT User";
-
     if (existing !== null) {
-      if (existing.name !== name) {
-        await ctx.db.patch(existing._id, { name });
+      // Only update name if an explicit name was provided (e.g. during onboarding).
+      // Never overwrite a user's custom name with the OIDC fallback.
+      if (args.name && existing.name !== args.name) {
+        await ctx.db.patch(existing._id, { name: args.name });
       }
       return existing._id;
     }
 
+    const name = args.name || identity.name || identity.email?.split("@")[0] || "ACT User";
     return await ctx.db.insert("users", {
       name,
       tokenIdentifier: identity.tokenIdentifier,

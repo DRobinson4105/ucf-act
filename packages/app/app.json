@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "ACT - Campus Taxi",
 		"slug": "act-campus-taxi",
-		"version": "7.0.0",
+		"version": "7.1.0",
 		"orientation": "portrait",
 		"icon": "./assets/images/icon.png",
 		"scheme": "myapp",
@@ -66,6 +66,12 @@
 				{
 					"icon": "./assets/images/ucf_act_logo_notext.png",
 					"color": "#2DD4BF"
+				}
+			],
+			[
+				"expo-live-activity",
+				{
+					"enablePushNotifications": true
 				}
 			]
 		],

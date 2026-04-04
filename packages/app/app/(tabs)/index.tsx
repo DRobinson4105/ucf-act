@@ -8,6 +8,7 @@ import {
   BookOpen,
   Building2,
   MapPin,
+  Navigation,
   ParkingSquare,
   Search,
   Star,
@@ -185,6 +186,15 @@ export default function HomeScreen() {
                 <Text style={styles.boardBtnText}>I'm Here</Text>
               </TouchableOpacity>
             )}
+
+            <TouchableOpacity
+              style={styles.trackBtn}
+              onPress={() => router.push("/plan-ride")}
+              activeOpacity={0.8}
+            >
+              <Navigation size={15} color={Colors.accent} />
+              <Text style={styles.trackBtnText}>Track Ride</Text>
+            </TouchableOpacity>
 
             {canCancel && (
               <TouchableOpacity style={styles.cancelBtn} onPress={cancelRide} activeOpacity={0.8}>
@@ -518,6 +528,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: Colors.black,
+  },
+  trackBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 12,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    backgroundColor: "transparent",
+    marginBottom: 8,
+  },
+  trackBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.accent,
   },
   cancelBtn: {
     flexDirection: "row",

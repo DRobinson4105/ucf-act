@@ -9,11 +9,12 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConvexProviderWithAuth, ConvexReactClient, useMutation } from "convex/react";
 import { Stack, useRouter, useSegments } from "expo-router";
+import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import * as SplashScreen from "expo-splash-screen";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Platform } from "react-native";
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import "../global.css";
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
@@ -80,13 +81,23 @@ function NavigationWrapper() {
 
   const updatePushToken = useMutation(api.users.updatePushToken);
 
+  // Register push token
   useEffect(() => {
     if (!isAuthenticated) return;
+    if (!Device.isDevice) {
+      console.log("Push notifications require a physical device");
+      return;
+    }
 
     (async () => {
       try {
-        const { status } = await Notifications.getPermissionsAsync();
-        if (status !== "granted") return;
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        if (existingStatus !== "granted") {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        if (finalStatus !== "granted") return;
 
         const tokenData = await Notifications.getExpoPushTokenAsync({
           projectId: "81150332-57e1-4e4a-b2cd-a854a8aaf6ea",
@@ -97,6 +108,22 @@ function NavigationWrapper() {
       }
     })();
   }, [isAuthenticated, updatePushToken]);
+
+  // Handle notification tap — navigate to ride tracking
+  const notificationResponseListener = useRef<Notifications.EventSubscription | undefined>(undefined);
+  useEffect(() => {
+    notificationResponseListener.current =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        const data = response.notification.request.content.data;
+        if (data?.type === "ride-update") {
+          router.push("/plan-ride");
+        }
+      });
+
+    return () => {
+      notificationResponseListener.current?.remove();
+    };
+  }, [router]);
 
   return <RootLayoutNav />;
 }
