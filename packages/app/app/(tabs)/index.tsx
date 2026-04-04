@@ -3,10 +3,10 @@ import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRide } from "@/contexts/RideContext";
 import { useDebouncedNavigation } from "@/hooks/useDebouncedNavigation";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   BookOpen,
   Building2,
-  Car,
   MapPin,
   ParkingSquare,
   Search,
@@ -131,7 +131,7 @@ export default function HomeScreen() {
             <Text style={styles.greetingSub}>UCF Autonomous Campus Transit</Text>
           </View>
           <View style={styles.logoMark}>
-            <Car size={22} color={Colors.accent} />
+            <MaterialCommunityIcons name="golf-cart" size={22} color={Colors.accent} />
           </View>
         </View>
 
@@ -172,7 +172,7 @@ export default function HomeScreen() {
             {/* Cart row */}
             <View style={styles.cartRow}>
               <View style={styles.cartIcon}>
-                <Car size={20} color={Colors.accent} />
+                <MaterialCommunityIcons name="golf-cart" size={20} color={Colors.accent} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.cartName}>ACT-001</Text>

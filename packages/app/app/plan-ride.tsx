@@ -6,9 +6,9 @@ import { useRide } from "@/contexts/RideContext";
 import { api } from "@/convex/_generated/api";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
     ArrowLeft,
-    Car,
     Clock,
     MapPin,
     Navigation,
@@ -115,7 +115,7 @@ function RideTrackingContent({
             <Text style={styles.autonomousLabel}>Autonomous · Free</Text>
           </View>
           <View style={styles.vehicleIcon}>
-            <Car size={28} color={Colors.accent} />
+            <MaterialCommunityIcons name="golf-cart" size={28} color={Colors.accent} />
           </View>
         </View>
       </View>
@@ -527,7 +527,7 @@ export default function PlanRideScreen() {
                   onPress={() => setSelectedRide(option.id)}
                 >
                   <View style={styles.rideIconContainer}>
-                    <Car size={32} color={Colors.accent} />
+                    <MaterialCommunityIcons name="golf-cart" size={32} color={Colors.accent} />
                     <View style={styles.capacityBadge}>
                       <Text style={styles.capacityText}>{option.capacity}</Text>
                     </View>

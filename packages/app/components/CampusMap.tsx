@@ -4,7 +4,8 @@ import { SHEET_MIN_HEIGHT } from "./SwipeableBottomSheet";
 import { findPath, PathNode } from "@/utils/pathfinding";
 import { useAnimatedPolyline } from "@/utils/animatePolyline";
 import * as Location from "expo-location";
-import { Car, Navigation } from "lucide-react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { Navigation } from "lucide-react-native";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -257,7 +258,10 @@ export default function CampusMap({
       }
     });
 
-    setVehiclePath(fullVehiclePathRef.current.slice(nearestIdx));
+    // Start from the waypoint AFTER the nearest one so the polyline
+    // begins at the edge of the cart marker instead of under it
+    const startIdx = Math.min(nearestIdx + 1, fullVehiclePathRef.current.length - 1);
+    setVehiclePath(fullVehiclePathRef.current.slice(startIdx));
   }, [vehiclePosition]);
 
   const handleMarkerPress = (locationId: string) => {
@@ -330,7 +334,7 @@ export default function CampusMap({
             <Polyline
               coordinates={animatedVehiclePath}
               strokeColor={Colors.accent}
-              strokeWidth={5}
+              strokeWidth={3}
               lineCap="round"
               lineJoin="round"
             />
@@ -340,7 +344,7 @@ export default function CampusMap({
             <Polyline
               coordinates={animatedWalkingPath}
               strokeColor={`rgba(45,212,191,${animatedOpacity})`}
-              strokeWidth={5}
+              strokeWidth={3}
               lineCap="round"
               lineJoin="round"
             />
@@ -523,26 +527,26 @@ export default function CampusMap({
                 borderColor: Colors.border,
                 overflow: "hidden",
               }}>
-                <Car size={20} color={Colors.accent} />
+                <MaterialCommunityIcons name="golf-cart" size={20} color={Colors.accent} />
               </View>
             </Marker>
           ))}
 
           {/* Assigned cart — shown after a ride is matched */}
           {vehiclePosition && (
-            <Marker coordinate={vehiclePosition} title="Your Cart">
+            <Marker coordinate={vehiclePosition} title="Your Cart" tracksViewChanges={false}>
               <View style={{
-                width: 50,
-                height: 50,
-                borderRadius: 25,
-                backgroundColor: "rgba(45,212,191,0.15)",
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: "rgba(26,26,26,0.95)",
                 alignItems: "center",
                 justifyContent: "center",
-                borderWidth: 3,
+                borderWidth: 2,
                 borderColor: Colors.accent,
                 overflow: "hidden",
               }}>
-                <Car size={24} color={Colors.accent} />
+                <MaterialCommunityIcons name="golf-cart" size={22} color={Colors.accent} />
               </View>
             </Marker>
           )}

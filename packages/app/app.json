@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "ACT - Campus Taxi",
 		"slug": "act-campus-taxi",
-		"version": "6.0.0",
+		"version": "7.0.0",
 		"orientation": "portrait",
 		"icon": "./assets/images/icon.png",
 		"scheme": "myapp",
@@ -24,14 +24,17 @@
 				"NSLocationAlwaysAndWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
 				"NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
 				"NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
-				"UIBackgroundModes": ["location"],
+				"UIBackgroundModes": [
+					"location"
+				],
 				"ITSAppUsesNonExemptEncryption": false,
 				"NSSupportsLiveActivities": true
 			}
 		},
 		"android": {
 			"adaptiveIcon": {
-				"foregroundImage": "./assets/images/icon.png",
+				"foregroundImage": "./assets/images/android-icon-foreground.png",
+				"monochromeImage": "./assets/images/android-icon-monochrome.png",
 				"backgroundColor": "#111111"
 			}
 		},
