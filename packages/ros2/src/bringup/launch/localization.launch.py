@@ -34,6 +34,13 @@ def generate_launch_description():
             output="screen"
         ),
         Node(
+            package="localization",
+            executable="gps_local_fusion_node",
+            name="gps_local_fusion_node",
+            parameters=[params],
+            output="screen"
+        ),
+        Node(
             package="robot_localization",
             executable="ekf_node",
             name="ekf_global_node",
