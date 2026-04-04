@@ -1,9 +1,10 @@
 import { Scene3D } from './components/Scene3D'
 import { MapView } from './components/MapView'
 import { RouteInstructions } from './components/RouteInstructions'
+import { SpotifyPlayer } from './components/SpotifyPlayer'
 import { useCartData } from './hooks/useVehicleStatus'
 import {
-  Battery, Wifi, WifiOff, Music, SkipBack, SkipForward, Play,
+  Battery, Wifi, WifiOff,
   MapPin, Navigation, Clock, CheckCircle2,
 } from 'lucide-react'
 
@@ -187,21 +188,7 @@ function App() {
           )}
         </div>
 
-        {/* Music dock */}
-        <div className="absolute bottom-8 right-8 w-96 bg-[#1a1a1a]/90 backdrop-blur-md rounded-xl shadow-2xl border border-gray-800 p-4 flex items-center gap-4">
-          <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center">
-            <Music size={20} className="text-gray-400" />
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <h4 className="font-medium text-white truncate">Usseewa</h4>
-            <p className="text-xs text-gray-400 truncate">Ado · Kyogen</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <SkipBack size={20} className="text-gray-400" />
-            <Play size={24} fill="currentColor" className="text-white" />
-            <SkipForward size={20} className="text-gray-400" />
-          </div>
-        </div>
+        <SpotifyPlayer />
       </div>
     </div>
   )
