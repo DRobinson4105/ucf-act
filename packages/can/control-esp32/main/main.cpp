@@ -12,6 +12,9 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/twai.h"
+#ifdef CONFIG_PLANNER_SERIAL_RX
+#include "driver/uart.h"
+#endif
 
 #include "esp_heap_caps.h"
 #include "esp_task_wdt.h"
@@ -106,6 +109,10 @@ constexpr int HEARTBEAT_TASK_STACK = 8192;
 constexpr UBaseType_t CAN_RX_TASK_PRIO = 7;
 constexpr UBaseType_t CONTROL_TASK_PRIO = 6;
 constexpr UBaseType_t HEARTBEAT_TASK_PRIO = 4;
+#ifdef CONFIG_PLANNER_SERIAL_RX
+constexpr int SERIAL_PLANNER_RX_TASK_STACK = 4096;
+constexpr UBaseType_t SERIAL_PLANNER_RX_TASK_PRIO = 7; // same as CAN RX — avoid dropping frames
+#endif
 
 // ============================================================================
 // Timing Constants
@@ -127,6 +134,13 @@ constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;            // throttle slew 
 constexpr int16_t THROTTLE_SLEW_STEP = 200;                    // throttle: max DAC level delta per interval (0-4095 range)
 constexpr TickType_t PLANNER_CMD_TIMEOUT = pdMS_TO_TICKS(500); // stale planner command cutoff
 constexpr uint8_t PLANNER_CMD_STALE_COUNT = 10;                // same sequence seen this many cycles = stale
+#ifdef CONFIG_PLANNER_SERIAL_RX
+constexpr uart_port_t PLANNER_UART_PORT = UART_NUM_0;
+constexpr uint32_t PLANNER_UART_BAUD = 1000000;
+constexpr uint8_t PLANNER_SERIAL_SYNC = 0xAA; // frame sync byte preceding 6-byte payload
+constexpr int PLANNER_SERIAL_PAYLOAD_LEN = 6; // matches can_encode_planner_command wire format
+constexpr int PLANNER_UART_RX_BUF = 256;
+#endif
 constexpr uint16_t PEDAL_ADC_THRESHOLD_MV = 500;               // pedal override trigger threshold
 constexpr uint32_t PEDAL_REARM_MS = 500;                       // pedal must stay released this long to re-arm
 constexpr uint8_t PEDAL_ADC_OVERSAMPLE_COUNT = 8;              // samples averaged per pedal read
@@ -1408,11 +1422,6 @@ void retry_failed_components(void)
 #else
 	[[maybe_unused]] constexpr bool steering_enforce_limits = true;
 #endif
-#ifdef CONFIG_BYPASS_SOFTWARE_LIMITS_BRAKING
-	[[maybe_unused]] constexpr bool braking_enforce_limits = false;
-#else
-	[[maybe_unused]] constexpr bool braking_enforce_limits = true;
-#endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
 	if (steering_needs_limits)
 	{
@@ -1425,6 +1434,11 @@ void retry_failed_components(void)
 			log_component_regained("STEPPER_STEERING");
 	}
 #endif
+#endif
+#ifdef CONFIG_BYPASS_SOFTWARE_LIMITS_BRAKING
+	[[maybe_unused]] constexpr bool braking_enforce_limits = false;
+#else
+	[[maybe_unused]] constexpr bool braking_enforce_limits = true;
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 	if (braking_needs_limits)
@@ -2004,6 +2018,85 @@ void execute_abort_enable(abort_reason_t reason)
 
 #ifndef CONFIG_THROTTLE_TEST_MODE
 // ============================================================================
+// Serial Planner RX Task
+// ============================================================================
+
+#ifdef CONFIG_PLANNER_SERIAL_RX
+/**
+ * @brief FreeRTOS task that receives Planner commands over UART1 at 1 Mbaud.
+ *
+ * Runs at highest priority (7).  Reads 7-byte frames: sync byte (0xAA)
+ * followed by the 6-byte planner command payload in the same wire format
+ * used by CAN (sequence, throttle MSB, throttle LSB, steering MSB,
+ * steering LSB, braking).  Updates g_cmd under g_cmd_lock with the same
+ * logic as the CAN 0x111 path.
+ *
+ * @param param  Unused (NULL)
+ */
+void serial_planner_rx_task(void *param)
+{
+	(void)param;
+	task_wdt_add_self_or_log("serial_planner_rx_task");
+	bool wdt_reset_failed = false;
+	uint8_t buf[PLANNER_SERIAL_PAYLOAD_LEN];
+
+	while (true)
+	{
+		task_wdt_reset_or_log("serial_planner_rx_task", &wdt_reset_failed);
+
+		// Block waiting for the sync byte.
+		uint8_t sync = 0;
+		int n = uart_read_bytes(PLANNER_UART_PORT, &sync, 1, pdMS_TO_TICKS(100));
+		if (n <= 0)
+			continue;
+		if (sync != PLANNER_SERIAL_SYNC)
+			continue;
+
+		// Read the 6-byte payload (block up to 50 ms for the rest of the frame).
+		n = uart_read_bytes(PLANNER_UART_PORT, buf, PLANNER_SERIAL_PAYLOAD_LEN, pdMS_TO_TICKS(50));
+		if (n != PLANNER_SERIAL_PAYLOAD_LEN)
+		{
+			ESP_LOGW(TAG, "SERIAL RX: short frame (got %d bytes)", n);
+			continue;
+		}
+
+		planner_command_t cmd;
+		if (!can_decode_planner_command(buf, (uint8_t)PLANNER_SERIAL_PAYLOAD_LEN, &cmd))
+		{
+			ESP_LOGW(TAG, "SERIAL RX: decode failed");
+			continue;
+		}
+
+		ESP_LOGI(TAG, "SERIAL RX 0x111: seq=%u thr=%u steer=%u brake=%u",
+		         cmd.sequence, cmd.throttle, cmd.steering_position, cmd.braking_position);
+
+		int16_t throttle_level = (int16_t)cmd.throttle;
+
+		taskENTER_CRITICAL(&g_cmd_lock);
+		g_cmd.last_planner_cmd_tick = xTaskGetTickCount();
+
+		if (cmd.sequence == g_cmd.planner_cmd_last_seq)
+		{
+			if (g_cmd.planner_cmd_stale_count < 255)
+				g_cmd.planner_cmd_stale_count = (uint8_t)(g_cmd.planner_cmd_stale_count + 1);
+		}
+		else
+		{
+			g_cmd.planner_cmd_last_seq = cmd.sequence;
+			g_cmd.planner_cmd_stale_count = 0;
+		}
+
+		g_cmd.throttle_cmd = throttle_level;
+		g_cmd.steering_cmd = ((int32_t)cmd.steering_position - 360) * (3200 * 50) / 360;
+		g_cmd.braking_cmd = (cmd.braking_position == 0)
+			                    ? BRAKING_PLANNER_ZERO_POSITION
+			                    : ((3 - (int32_t)cmd.braking_position) * BRAKE_RELEASE_POSITION) / 3;
+		taskEXIT_CRITICAL(&g_cmd_lock);
+	}
+}
+#endif // CONFIG_PLANNER_SERIAL_RX
+
+// ============================================================================
 // CAN RX Task
 // ============================================================================
 
@@ -2103,14 +2196,21 @@ void can_rx_task(void *param)
 			continue;
 #endif
 
-		// Process Planner command (0x111)
+#ifndef CONFIG_PLANNER_SERIAL_RX
+		// Process Planner command (0x111) — only when not using serial RX path
 		if (msg.identifier == CAN_ID_PLANNER_COMMAND)
 		{
 			planner_command_t cmd;
 			if (!can_decode_planner_command(msg.data, msg.data_length_code, &cmd))
 			{
+				ESP_LOGW(TAG, "CAN RX 0x111: decode failed (dlc=%d)", msg.data_length_code);
 				continue;
 			}
+
+#ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
+			ESP_LOGI(TAG, "CAN RX 0x111: seq=%u thr=%u steer=%u brake=%u",
+			         cmd.sequence, cmd.throttle, cmd.steering_position, cmd.braking_position);
+#endif
 
 			int16_t throttle_level = (int16_t)cmd.throttle;
 
@@ -2140,6 +2240,11 @@ void can_rx_task(void *param)
 
 		// Process Safety heartbeat (0x100)
 		else if (msg.identifier == CAN_ID_SAFETY_HEARTBEAT)
+#else
+		// CONFIG_PLANNER_SERIAL_RX: planner commands come via serial_planner_rx_task;
+		// CAN RX only processes Safety heartbeats and stepper responses here.
+		if (msg.identifier == CAN_ID_SAFETY_HEARTBEAT)
+#endif
 		{
 			node_heartbeat_t hb;
 			if (!can_decode_heartbeat(msg.data, msg.data_length_code, &hb))
@@ -2303,6 +2408,16 @@ void control_task(void *param)
 
 		if (planner_cmd_stale)
 		{
+#ifdef CONFIG_LOG_CAN_PLANNER_COMMAND_RX
+			if (planner_age > PLANNER_CMD_TIMEOUT)
+				ESP_LOGW(TAG, "Planner cmd STALE: timeout (%lu ms, last seq=%u)",
+				         (unsigned long)pdTICKS_TO_MS(planner_age),
+				         (unsigned)cmd_local.planner_cmd_last_seq);
+			else
+				ESP_LOGW(TAG, "Planner cmd STALE: repeated seq=%u (%u times)",
+				         (unsigned)cmd_local.planner_cmd_last_seq,
+				         (unsigned)cmd_local.planner_cmd_stale_count);
+#endif
 			cmd_local.throttle_cmd = 0;
 			// Keep last steering/braking (don't jerk)
 		}
@@ -2480,7 +2595,7 @@ void control_task(void *param)
 		// target so the FIFO does not run dry.
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
 #ifdef CONFIG_STEERING_ACTUATOR_PWM
-		if (g_steering_actuator_ready && step.new_state == NODE_STATE_ACTIVE && step.send_steering)
+		if (g_steering_actuator_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
 			esp_err_t err = steering_pwm_set_position(step.steering_position);
 			if (err != ESP_OK)
@@ -2490,7 +2605,7 @@ void control_task(void *param)
 			{
 				ESP_LOGI(TAG_TX, "Steering PWM apply failed: %s", esp_err_to_name(err));
 			}
-			else
+			else if (step.send_steering)
 			{
 				ESP_LOGI(TAG_TX, "Steering PWM -> %ld (%luus)", (long)step.steering_position,
 				         (unsigned long)steering_command_to_pwm_us(step.steering_position));
@@ -3264,6 +3379,36 @@ void main_task(void *param)
 	heartbeat_monitor_init(&g_hb_monitor, &hb_cfg);
 	g_node_safety = heartbeat_monitor_register(&g_hb_monitor, "Safety", HEARTBEAT_TIMEOUT_MS);
 
+#ifdef CONFIG_PLANNER_SERIAL_RX
+	{
+		uart_config_t uart_cfg = {};
+		uart_cfg.baud_rate = (int)PLANNER_UART_BAUD;
+		uart_cfg.data_bits = UART_DATA_8_BITS;
+		uart_cfg.parity = UART_PARITY_DISABLE;
+		uart_cfg.stop_bits = UART_STOP_BITS_1;
+		uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+		uart_cfg.source_clk = UART_SCLK_DEFAULT;
+		esp_err_t uart_err = uart_param_config(PLANNER_UART_PORT, &uart_cfg);
+		if (uart_err == ESP_OK)
+			uart_err = uart_driver_install(PLANNER_UART_PORT, PLANNER_UART_RX_BUF * 2, 0, 0, nullptr, 0);
+		if (uart_err != ESP_OK)
+		{
+			ESP_LOGE(TAG_INIT, "Planner UART init failed: %s — restarting", esp_err_to_name(uart_err));
+			esp_restart();
+		}
+		ESP_LOGI(TAG_INIT, "Planner UART0 ready: %lu baud (default pins)",
+		         (unsigned long)PLANNER_UART_BAUD);
+
+		if (xTaskCreate(serial_planner_rx_task, "serial_planner_rx",
+		                SERIAL_PLANNER_RX_TASK_STACK, nullptr,
+		                SERIAL_PLANNER_RX_TASK_PRIO, nullptr) != pdPASS)
+		{
+			ESP_LOGE(TAG_INIT, "Failed to create serial_planner_rx_task, restarting");
+			esp_restart();
+		}
+	}
+#endif // CONFIG_PLANNER_SERIAL_RX
+
 	// Start CAN RX first so stepper init checks can receive responses.
 	if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, &g_can_rx_task_handle) !=
 	    pdPASS)
@@ -3426,6 +3571,10 @@ void main_task(void *param)
 #endif
 #ifdef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 		ESP_LOGW(TAG_INIT, "BYPASS ACTIVE: ACTUATOR_STEPPER_BRAKING (braking skipped)");
+		any_bypass = true;
+#endif
+#ifdef CONFIG_PLANNER_SERIAL_RX
+		ESP_LOGW(TAG_INIT, "PLANNER_SERIAL_RX ACTIVE: planner commands via UART1 (not CAN 0x111)");
 		any_bypass = true;
 #endif
 		if (any_bypass)

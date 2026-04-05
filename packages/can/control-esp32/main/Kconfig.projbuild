@@ -337,6 +337,16 @@ menu "Test Bypasses"
                 Disable Planner command timeout and stale-sequence checks.
                 Useful when Planner command cadence is irregular in bench tests.
 
+        config PLANNER_SERIAL_RX
+            bool "Receive Planner commands over UART instead of CAN"
+            default n
+            help
+                Replace CAN (0x111) as the planner command source with a UART
+                port running at 1 Mbaud. Frames are 7 bytes: sync byte 0xAA
+                followed by the 6-byte CAN wire format (sequence, throttle MSB,
+                throttle LSB, steering MSB, steering LSB, braking). Safety
+                heartbeats (0x100) continue to be received over CAN.
+
     endmenu
 
     menu "Sensor Inputs"
@@ -470,6 +480,17 @@ menu "Debug Logging"
                 Exclude Control ESP32 heartbeat frames (CAN ID 0x120) from
                 the raw frame log. Useful to mute self-generated heartbeats
                 when debugging inbound traffic.
+
+        config LOG_CAN_PLANNER_COMMAND_RX
+            bool "Log every received Planner command and stale/timeout warnings"
+            default n
+            help
+                Log each decoded Planner command as it arrives (CAN 0x111 or
+                UART serial when PLANNER_SERIAL_RX is enabled): sequence,
+                throttle, steering, and braking values. Also logs a warning
+                when the command goes stale (timeout or repeated sequence).
+                Expect one line per command at the Planner's send cadence
+                (~10 Hz). Disable in production to reduce log noise.
 
     endmenu
 
@@ -647,6 +668,14 @@ menu "Debug Logging"
     endmenu
 
     menu "Actuators"
+
+        config LOG_ACTUATOR_STEPPER_COMMAND_TX
+            bool "Log stepper motor position commands (PT feed)"
+            default n
+            help
+                Log each position command fed to the steering and braking
+                stepper motor PT FIFO streams, including failures. Also
+                logs repeat feeds when the target position has not changed.
 
         config LOG_ACTUATOR_DAC_LEVEL
             bool "Log DAC level changes"
