@@ -2088,9 +2088,8 @@ void serial_planner_rx_task(void *param)
 
 		g_cmd.throttle_cmd = throttle_level;
 		g_cmd.steering_cmd = ((int32_t)cmd.steering_position - 360) * (3200 * 50) / 360;
-		g_cmd.braking_cmd = (cmd.braking_position == 0)
-			                    ? BRAKING_PLANNER_ZERO_POSITION
-			                    : ((3 - (int32_t)cmd.braking_position) * BRAKE_RELEASE_POSITION) / 3;
+		// Serial brake scale: 0 = released (motor at home/0), 3 = fully applied (motor at min).
+		g_cmd.braking_cmd = ((int32_t)cmd.braking_position * BRAKING_POSITION_MIN) / 3;
 		taskEXIT_CRITICAL(&g_cmd_lock);
 	}
 }
