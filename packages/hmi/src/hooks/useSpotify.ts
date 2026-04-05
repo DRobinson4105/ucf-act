@@ -72,8 +72,11 @@ function generateCodeVerifier(length = 128): string {
 async function generateCodeChallenge(verifier: string): Promise<string> {
   const data   = new TextEncoder().encode(verifier)
   const digest = await crypto.subtle.digest('SHA-256', data)
-  return btoa(String.fromCharCode(...new Uint8Array(digest)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
+  // Use reduce instead of spread to avoid stack overflow on large buffers
+  const base64 = btoa(
+    Array.from(new Uint8Array(digest)).reduce((s, b) => s + String.fromCharCode(b), ''),
+  )
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')
 }
 
 // ─── Token helpers ────────────────────────────────────────────────────────────
@@ -232,7 +235,8 @@ export function useSpotify(): UseSpotifyReturn {
     }
   }, [])
 
-  // ── Initialization ─────────────────────────────────────────────────────────
+  // ── Initialization — handles OAuth callback and stored-token resume ─────────
+  // Does NOT start polling; the effect below ties polling to isAuthenticated.
 
   useEffect(() => {
     let cancelled = false
@@ -288,7 +292,6 @@ export function useSpotify(): UseSpotifyReturn {
         if (!cancelled) {
           setIsAuthenticated(true)
           setIsLoading(false)
-          startPolling()
         }
         return
       }
@@ -297,14 +300,14 @@ export function useSpotify(): UseSpotifyReturn {
       const { accessToken, expiry } = getStoredTokens()
 
       if (accessToken && Date.now() < expiry) {
-        if (!cancelled) { setIsAuthenticated(true); setIsLoading(false); startPolling() }
+        if (!cancelled) { setIsAuthenticated(true); setIsLoading(false) }
         return
       }
 
       if (accessToken) {
         const newToken = await refreshAccessToken()
         if (!cancelled) {
-          if (newToken) { setIsAuthenticated(true); startPolling() }
+          if (newToken) { setIsAuthenticated(true) }
           setIsLoading(false)
         }
         return
@@ -314,8 +317,16 @@ export function useSpotify(): UseSpotifyReturn {
     }
 
     void init()
-    return () => { cancelled = true; stopPolling() }
+    return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Polling lifecycle — tied to auth state so cleanup is always correct ─────
+
+  useEffect(() => {
+    if (!isAuthenticated) { stopPolling(); return }
+    startPolling()
+    return () => stopPolling()
+  }, [isAuthenticated, startPolling, stopPolling])
 
   // ── Auth actions ───────────────────────────────────────────────────────────
 
@@ -381,9 +392,10 @@ export function useSpotify(): UseSpotifyReturn {
   }, [apiFetch])
 
   const toggleShuffle = useCallback(async () => {
-    const next = !player?.shuffleState
-    await apiFetch(`/me/player/shuffle?state=${next}`, { method: 'PUT' })
-    setPlayer(p => p ? { ...p, shuffleState: next } : p)
+    // Renamed from 'next' to avoid shadowing the next() playback action above
+    const newShuffleState = !player?.shuffleState
+    await apiFetch(`/me/player/shuffle?state=${newShuffleState}`, { method: 'PUT' })
+    setPlayer(p => p ? { ...p, shuffleState: newShuffleState } : p)
   }, [apiFetch, player?.shuffleState])
 
   const cycleRepeat = useCallback(async () => {

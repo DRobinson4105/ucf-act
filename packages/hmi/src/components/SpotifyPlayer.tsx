@@ -19,120 +19,152 @@ function RepeatIcon({ state, size = 16 }: { state: RepeatState; size?: number })
     : <Repeat  size={size} />
 }
 
+// Extracted so React's reconciler sees a stable component type across renders.
+function PlayerCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="absolute bottom-8 right-8 w-96 bg-[#121212]/95 backdrop-blur-md rounded-xl shadow-2xl border border-white/10 p-4 flex flex-col gap-3">
+      {children}
+    </div>
+  )
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SpotifyPlayer() {
   const spotify = useSpotify()
   const { isAuthenticated, isLoading, player, login, logout } = spotify
 
-  // Smooth progress interpolation between API polls
-  const syncRef = useRef<{ progressMs: number; syncedAt: number; isPlaying: boolean }>({
-    progressMs: 0, syncedAt: Date.now(), isPlaying: false,
-  })
+  // Smooth progress interpolation between API polls.
+  // Stores durationMs so the interval can clamp without a stale closure.
+  const syncRef = useRef<{
+    progressMs: number
+    syncedAt: number
+    isPlaying: boolean
+    durationMs: number
+  }>({ progressMs: 0, syncedAt: Date.now(), isPlaying: false, durationMs: 0 })
+
   const [displayProgress, setDisplayProgress] = useState(0)
 
-  // Sync ref + state whenever the API gives us a new position or track
+  // Sync ref + state whenever the API returns a new position or track
   useEffect(() => {
     if (!player) return
     syncRef.current = {
       progressMs: player.progressMs,
       syncedAt:   Date.now(),
       isPlaying:  player.isPlaying,
+      durationMs: player.track?.durationMs ?? 0,
     }
     setDisplayProgress(player.progressMs)
   }, [player?.progressMs, player?.isPlaying, player?.track?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Tick every 100 ms while playing to keep the bar smooth
+  // Tick every 100 ms while playing; clamped so we never exceed track duration
   useEffect(() => {
     const timer = setInterval(() => {
-      const { progressMs, syncedAt, isPlaying } = syncRef.current
+      const { progressMs, syncedAt, isPlaying, durationMs } = syncRef.current
       if (!isPlaying) return
-      setDisplayProgress(progressMs + (Date.now() - syncedAt))
+      const interpolated = progressMs + (Date.now() - syncedAt)
+      setDisplayProgress(durationMs > 0 ? Math.min(interpolated, durationMs) : interpolated)
     }, 100)
     return () => clearInterval(timer)
   }, [])
 
   // Seek bar — only fire API call on pointer-up to avoid request flood
-  const [isDragging,  setIsDragging]  = useState(false)
-  const [dragValue,   setDragValue]   = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragValue,  setDragValue]  = useState(0)
 
   const handleSeekStart = useCallback(() => {
     setIsDragging(true)
-    setDragValue(displayProgress)
-  }, [displayProgress])
+    setDragValue(syncRef.current.progressMs + (Date.now() - syncRef.current.syncedAt))
+  }, [])
 
   const handleSeekEnd = useCallback((e: React.PointerEvent<HTMLInputElement>) => {
     const val = Number((e.target as HTMLInputElement).value)
     setIsDragging(false)
     void spotify.seek(val)
-  }, [spotify])
+  }, [spotify.seek]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Volume — local state + debounced API call
-  const [localVolume, setLocalVolume] = useState(player?.volumePercent ?? 50)
+  // Volume — local state + debounced API call + pre-mute restore
+  const [localVolume,  setLocalVolume]  = useState(player?.volumePercent ?? 50)
+  const prevVolumeRef  = useRef(50)
   const volDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    setLocalVolume(player?.volumePercent ?? 50)
+    const v = player?.volumePercent ?? 50
+    setLocalVolume(v)
+    if (v > 0) prevVolumeRef.current = v
   }, [player?.volumePercent])
 
   const handleVolumeChange = useCallback((value: number) => {
+    if (value > 0) prevVolumeRef.current = value
     setLocalVolume(value)
     if (volDebounceRef.current) clearTimeout(volDebounceRef.current)
     volDebounceRef.current = setTimeout(() => void spotify.setVolume(value), 250)
-  }, [spotify])
+  }, [spotify.setVolume]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Shell (shared outer card) ────────────────────────────────────────────
+  // ── Loading ──────────────────────────────────────────────────────────────
+  // Prevents a flash of the Connect button while stored tokens are being checked.
 
-  const card = (children: React.ReactNode) => (
-    <div className="absolute bottom-8 right-8 w-96 bg-[#121212]/95 backdrop-blur-md rounded-xl shadow-2xl border border-white/10 p-4 flex flex-col gap-3">
-      {children}
-    </div>
-  )
+  if (isLoading) {
+    return (
+      <PlayerCard>
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 bg-gray-800 rounded-lg shrink-0 animate-pulse" />
+          <div className="flex-1 space-y-2">
+            <div className="h-3 bg-gray-800 rounded animate-pulse w-3/4" />
+            <div className="h-2 bg-gray-800 rounded animate-pulse w-1/2" />
+          </div>
+        </div>
+      </PlayerCard>
+    )
+  }
 
   // ── Unauthenticated ──────────────────────────────────────────────────────
 
   if (!isAuthenticated) {
-    return card(
-      <div className="flex items-center gap-3">
-        <div className="w-11 h-11 bg-[#1DB954]/15 rounded-lg flex items-center justify-center shrink-0">
-          <Music2 size={20} className="text-[#1DB954]" />
+    return (
+      <PlayerCard>
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 bg-[#1DB954]/15 rounded-lg flex items-center justify-center shrink-0">
+            <Music2 size={20} className="text-[#1DB954]" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-semibold text-sm">Spotify</p>
+            <p className="text-gray-400 text-xs">Connect to control playback</p>
+          </div>
+          <button
+            onClick={() => void login()}
+            className="flex items-center gap-1.5 bg-[#1DB954] hover:bg-[#1ed760] active:bg-[#1aa34a] text-black font-bold text-xs px-3 py-2 rounded-lg transition-colors shrink-0"
+          >
+            <LogIn size={13} />
+            Connect
+          </button>
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-white font-semibold text-sm">Spotify</p>
-          <p className="text-gray-400 text-xs">Connect to control playback</p>
-        </div>
-        <button
-          onClick={() => void login()}
-          disabled={isLoading}
-          className="flex items-center gap-1.5 bg-[#1DB954] hover:bg-[#1ed760] active:bg-[#1aa34a] text-black font-bold text-xs px-3 py-2 rounded-lg transition-colors shrink-0 disabled:opacity-50"
-        >
-          <LogIn size={13} />
-          Connect
-        </button>
-      </div>
+      </PlayerCard>
     )
   }
 
   // ── Authenticated but nothing playing ────────────────────────────────────
 
   if (!player?.track) {
-    return card(
-      <div className="flex items-center gap-3">
-        <div className="w-11 h-11 bg-gray-800 rounded-lg flex items-center justify-center shrink-0">
-          <Music2 size={20} className="text-gray-500" />
+    return (
+      <PlayerCard>
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 bg-gray-800 rounded-lg flex items-center justify-center shrink-0">
+            <Music2 size={20} className="text-gray-500" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-gray-300 text-sm font-medium">No active playback</p>
+            <p className="text-gray-500 text-xs">Open Spotify on a device to start</p>
+          </div>
+          <button
+            onClick={logout}
+            title="Disconnect"
+            className="text-gray-600 hover:text-gray-400 transition-colors shrink-0"
+          >
+            <LogOut size={15} />
+          </button>
         </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-gray-300 text-sm font-medium">No active playback</p>
-          <p className="text-gray-500 text-xs">Open Spotify on a device to start</p>
-        </div>
-        <button
-          onClick={logout}
-          title="Disconnect"
-          className="text-gray-600 hover:text-gray-400 transition-colors shrink-0"
-        >
-          <LogOut size={15} />
-        </button>
-      </div>
+      </PlayerCard>
     )
   }
 
@@ -142,8 +174,8 @@ export function SpotifyPlayer() {
   const duration        = track.durationMs
   const progressClamped = Math.min(isDragging ? dragValue : displayProgress, duration)
 
-  return card(
-    <>
+  return (
+    <PlayerCard>
       {/* ── Track info ── */}
       <div className="flex items-center gap-3">
         {track.albumArt ? (
@@ -195,7 +227,6 @@ export function SpotifyPlayer() {
 
       {/* ── Playback controls ── */}
       <div className="flex items-center justify-between px-2">
-        {/* Shuffle */}
         <button
           onClick={() => void spotify.toggleShuffle()}
           title="Shuffle"
@@ -204,7 +235,6 @@ export function SpotifyPlayer() {
           <Shuffle size={15} />
         </button>
 
-        {/* Previous */}
         <button
           onClick={() => void spotify.previous()}
           className="text-gray-300 hover:text-white transition-colors"
@@ -212,7 +242,6 @@ export function SpotifyPlayer() {
           <SkipBack size={20} fill="currentColor" />
         </button>
 
-        {/* Play / Pause */}
         <button
           onClick={() => void (isPlaying ? spotify.pause() : spotify.play())}
           className="w-10 h-10 bg-white hover:bg-gray-100 active:bg-gray-200 rounded-full flex items-center justify-center text-black transition-colors shadow"
@@ -223,7 +252,6 @@ export function SpotifyPlayer() {
           }
         </button>
 
-        {/* Next */}
         <button
           onClick={() => void spotify.next()}
           className="text-gray-300 hover:text-white transition-colors"
@@ -231,7 +259,6 @@ export function SpotifyPlayer() {
           <SkipForward size={20} fill="currentColor" />
         </button>
 
-        {/* Repeat */}
         <button
           onClick={() => void spotify.cycleRepeat()}
           title={`Repeat: ${repeatState}`}
@@ -244,7 +271,7 @@ export function SpotifyPlayer() {
       {/* ── Volume ── */}
       <div className="flex items-center gap-2 px-1">
         <button
-          onClick={() => handleVolumeChange(localVolume === 0 ? 50 : 0)}
+          onClick={() => handleVolumeChange(localVolume === 0 ? prevVolumeRef.current : 0)}
           className="text-gray-500 hover:text-gray-300 transition-colors shrink-0"
         >
           {localVolume === 0
@@ -265,6 +292,6 @@ export function SpotifyPlayer() {
           {localVolume}
         </span>
       </div>
-    </>
+    </PlayerCard>
   )
 }
