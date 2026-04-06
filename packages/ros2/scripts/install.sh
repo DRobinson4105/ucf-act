@@ -132,6 +132,11 @@ wget -O src/perception/models/det.onnx https://huggingface.co/DavidRobinson05/yo
   --onnx=src/perception/models/det.onnx \
   --saveEngine=src/perception/models/det.engine
 
+# Setup Python env
+
+source /opt/ros/humble/setup.bash
+pip install -r requirements.txt
+
 # Build workspace
 
 chmod +x ./scripts/build.sh

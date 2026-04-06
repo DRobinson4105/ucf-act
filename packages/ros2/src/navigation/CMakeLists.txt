@@ -60,16 +60,6 @@ ament_target_dependencies(cmd_vel_adapter
   can_msgs
 )
 
-add_executable(mock_livox_pointcloud_publisher src/mock_livox_pointcloud_publisher.cpp)
-ament_target_dependencies(mock_livox_pointcloud_publisher
-  rclcpp
-  geometry_msgs
-  sensor_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-)
-
 add_executable(clicked_point_to_path src/clicked_point_to_path.cpp)
 ament_target_dependencies(clicked_point_to_path
   rclcpp
@@ -92,13 +82,10 @@ ament_target_dependencies(route_navigator
   nav2_msgs
 )
 
-
-
 install(TARGETS
   global_path_manager
   mock_odom
   cmd_vel_adapter
-  mock_livox_pointcloud_publisher
   clicked_point_to_path
   route_navigator
   DESTINATION lib/${PROJECT_NAME}

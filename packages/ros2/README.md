@@ -5,12 +5,7 @@
 1. While the Livox Mid-360 is plugged in over ethernet, run `bash scripts/lidar_setup.sh` to create and activate the network connection.
 2. From the ros2 workspace root, run `bash scripts/install.sh` to install necessary packages and build the workspace.
 3. Register an account with [FPRN](https://www.myfloridagps.com/sbc/Account/Register) and subscribe to all GNSS Real-Time Corrections for RTK corrections.
-4. Create a .env file in the workspace root with the following keys and your values.
-
-```
-FPRN_USER=your_username
-FPRN_PASS=your_password
-```
+4. Create a .env file in the workspace root following `.env.example`
 
 ## Build
 

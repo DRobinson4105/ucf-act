@@ -1,0 +1,10 @@
+serial_bridge:
+  ros__parameters:
+    port: "/dev/ttyACM0"
+    baud_rate: 1000000
+    read_size: 64
+    read_timeout: 0.01
+    poll_period: 0.01
+    in_topic: "/to_serial"
+    out_topic: "/from_serial"
+    frequency: 10
