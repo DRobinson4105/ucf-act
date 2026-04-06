@@ -13,7 +13,7 @@ class CmdVelAdapter : public rclcpp::Node {
 public:
   CmdVelAdapter() : rclcpp::Node("cmd_vel_adapter") {
     cmd_in_topic_ = declare_parameter<std::string>("cmd_in_topic", "/cmd_vel_nav");
-    odom_topic_ = declare_parameter<std::string>("odom_topic", "/odometry/local");
+    odom_topic_ = declare_parameter<std::string>("odom_topic", "/Odometry");
     can_topic_ = declare_parameter<std::string>("can_topic", "/to_can_bus");
     speed_limit_topic_ = declare_parameter<std::string>("speed_limit_topic", "/speed_limit");
 
@@ -63,7 +63,7 @@ private:
   }
 
   uint8_t counter_ = 0;
-  double decelerateL_ = 1.0;
+  double decelerateL_ = -0.5;
   double v_acc_min_ = 0.0, v_acc_max_ = 1.0;
   double v_decc_min_ = 0.0, v_decc_max_ = 1.5;
   double w_vel_min_ = -1.28, w_vel_max_ = 1.28;
@@ -77,12 +77,15 @@ private:
       normalize(std::max(accel, 0.0), v_acc_min_, v_acc_max_, throttle_min_, throttle_max_));
     uint16_t steering_raw = normalize(w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_);
 
+    RCLCPP_INFO(get_logger(), "%.3f %.3f %.3f %u %u %u", v_acc, v_acc_min_, v_acc_max_, throttle_min_, throttle_max_, throttle_val);
+    //RCLCPP_INFO(get_logger(), "%.3f %.3f %.3f %u %u %u", w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_, steering_raw);
+
     uint8_t steering_hi = static_cast<uint8_t>((steering_raw >> 8) & 0xFF);
     uint8_t steering_lo = static_cast<uint8_t>(steering_raw & 0xFF);
     uint8_t braking_val = static_cast<uint8_t>(
       normalize(std::max(-accel, 0.0), v_decc_min_, v_decc_max_, braking_min_, braking_max_));
     
-    RCLCPP_INFO(get_logger(), "%.3f %.3f %d %d %d", v_acc, w_out, throttle_val, steering_raw, braking_val);
+    RCLCPP_INFO(get_logger(), "%.3f %.3f %d %d %d", v_acc, w_vel, throttle_val, steering_raw, braking_val);
 
     return {throttle_val, steering_hi, steering_lo, braking_val};
   }
@@ -101,6 +104,7 @@ private:
 
   void onSpeedLimit(const nav2_msgs::msg::SpeedLimit::SharedPtr msg) {
     if (!msg) return;
+    return;
     last_speed_limit_time_ = now();
 
     if (!std::isfinite(msg->speed_limit) || msg->speed_limit <= 0.0) {
@@ -172,7 +176,8 @@ private:
     }
 
     double v_curr = have_odom_ ? odom_.twist.twist.linear.x : 0.0;
-    double v_acc = v_filt_ - v_curr;
+    double v_acc = v_filt_ * 6 - v_curr;
+    RCLCPP_INFO(get_logger(), "%.3f %.3f", v_filt_, v_curr);
     auto mapped = map_values(v_acc, w_out);
  
 

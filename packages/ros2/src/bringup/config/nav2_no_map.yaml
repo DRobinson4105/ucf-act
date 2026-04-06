@@ -149,7 +149,7 @@ global_costmap:
         publish_voxel_map: false
         transform_tolerance: 1.0
         mapping_mode: false
-        observation_sources: livox
+        observation_sources: front_right_seg
 
         livox:
           topic: "/livox/lidar_filtered"
@@ -222,7 +222,7 @@ local_costmap:
         publish_voxel_map: true
         transform_tolerance: 1.0
         mapping_mode: false
-        observation_sources: front_left_seg
+        observation_sources: front_right_seg
 
         livox:
           topic: "/livox/lidar_filtered"
