@@ -30,3 +30,4 @@ bags/
 dist/
 *.egg-info/
 .vercel
+.vscode

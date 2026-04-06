@@ -1,44 +1,43 @@
 #include <stdio.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "driver/twai.h"
+#include "driver/uart.h"
 #include "esp_log.h"
 
-static const char *TAG = "CAN_RX";
+static const char *TAG = "SERIAL_RX";
 
-#define CAN_TX_GPIO 4
-#define CAN_RX_GPIO 5
+#define UART_NUM        UART_NUM_0
+#define BUF_SIZE        256
+#define BAUD_RATE       1000000
 
 extern "C" void app_main(void) {
-    twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
-        (gpio_num_t)CAN_TX_GPIO,
-        (gpio_num_t)CAN_RX_GPIO,
-        TWAI_MODE_LISTEN_ONLY
-    );
-    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
-    twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    uart_config_t uart_config = {
+        .baud_rate  = BAUD_RATE,
+        .data_bits  = UART_DATA_8_BITS,
+        .parity     = UART_PARITY_DISABLE,
+        .stop_bits  = UART_STOP_BITS_1,
+        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
 
-    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
-    ESP_ERROR_CHECK(twai_start());
-    ESP_LOGI(TAG, "CAN receiver started. Waiting for messages...");
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_config));
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, BUF_SIZE * 2, 0, 0, NULL, 0));
+    ESP_LOGI(TAG, "Serial receiver started at %d baud. Waiting for messages...", BAUD_RATE);
 
-    twai_message_t msg;
+    uint8_t buf[BUF_SIZE];
     while (true) {
-        if (twai_receive(&msg, pdMS_TO_TICKS(1000)) == ESP_OK) {
-            if (msg.extd) {
-                ESP_LOGI(TAG, "ID: 0x%08lX [EXT] DLC: %d", msg.identifier, msg.data_length_code);
-            } else {
-                ESP_LOGI(TAG, "ID: 0x%03lX [STD] DLC: %d", msg.identifier, msg.data_length_code);
+        int len = uart_read_bytes(UART_NUM, buf, sizeof(buf) - 1, pdMS_TO_TICKS(10));
+        if (len > 0) {
+            buf[len] = '\0';
+            ESP_LOGI(TAG, "Received %d bytes: %s", len, (char *)buf);
+            printf("  Hex:");
+            for (int i = 0; i < len; i++) {
+                printf(" %02X", buf[i]);
             }
-            if (!msg.rtr) {
-                printf("  Data:");
-                for (int i = 0; i < msg.data_length_code; i++) {
-                    printf(" %02X", msg.data[i]);
-                }
-                printf("\n");
-            }
+            printf("\n");
         } else {
-            ESP_LOGW(TAG, "No message received (timeout)");
+            ESP_LOGW(TAG, "No data received (timeout)");
         }
     }
 }

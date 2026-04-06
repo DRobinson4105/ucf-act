@@ -20,7 +20,8 @@ static const uint16_t PT_FRAME_TIME_MS_DEFAULT = CONFIG_STEPPER_PT_FRAME_TIME_MS
 static const uint8_t PT_FIFO_LOW_WATER_DEFAULT = CONFIG_STEPPER_PT_LOW_WATER_MARK;
 static const uint8_t PT_FIFO_PREFILL_FRAMES = 2;
 static const uint16_t PT_START_ROW = 0;
-static const uint16_t PT_TABLE_ROWS = 512;
+static const uint16_t PT_TABLE_ROWS = 256;
+static const uint8_t PT_POSITION_QUERY_INTERVAL = 4; // query motor position every N PT rows
 
 // MP (motion parameter) register indices for PT/PVT FIFO configuration.
 // See UIM2852CA CAN protocol manual, CW=0x22 (MP) instruction.
@@ -147,6 +148,7 @@ esp_err_t stepper_motor_uim2852_init(stepper_motor_uim2852_t *motor, const stepp
 	motor->pulses_per_rev = 3200;     // 16 * 200
 	motor->pt_frame_time_ms = PT_FRAME_TIME_MS_DEFAULT;
 	motor->pt_low_water_mark = PT_FIFO_LOW_WATER_DEFAULT;
+	motor->pt_last_position = 0;
 
 	// Create binary semaphore for synchronous query_param
 	motor->query_sem = xSemaphoreCreateBinary();
@@ -298,6 +300,32 @@ esp_err_t stepper_motor_uim2852_disable(stepper_motor_uim2852_t *motor)
 		motor->driver_enabled = false;
 		motor->motion_in_progress = false;
 		taskEXIT_CRITICAL(&motor->lock);
+	}
+	return err;
+}
+
+esp_err_t stepper_motor_uim2852_move_absolute(stepper_motor_uim2852_t *motor, int32_t position)
+{
+	if (!motor || !motor->initialized)
+		return ESP_ERR_INVALID_STATE;
+
+	uint8_t data[8];
+	uint8_t dl = stepper_uim2852_build_pa(data, position);
+	esp_err_t err = send_instruction(motor, STEPPER_UIM2852_CW_PA, data, dl);
+	if (err == ESP_OK)
+	{
+		taskENTER_CRITICAL(&motor->lock);
+		motor->target_position = position;
+		motor->motion_in_progress = true;
+		motor->status.in_position = false;
+		taskEXIT_CRITICAL(&motor->lock);
+
+		// PA sets the target; BG starts the move
+		uint8_t bg_data[8];
+		uint8_t bg_dl = stepper_uim2852_build_bg(bg_data);
+		esp_err_t bg_err = send_instruction(motor, STEPPER_UIM2852_CW_BG, bg_data, bg_dl);
+		if (bg_err != ESP_OK)
+			return bg_err;
 	}
 	return err;
 }
@@ -457,11 +485,13 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor)
 	motor->pt_fifo_low = false;
 	motor->pt_write_index = PT_START_ROW;
 	motor->pt_prefill_count = 0;
+	motor->pt_last_position = motor->absolute_position;
 	taskEXIT_CRITICAL(&motor->lock);
 
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-	ESP_LOGI(TAG, "Node %u: PT configured (FIFO mode, %u ms frames, low-water=%u)", motor->config.node_id,
-	         (unsigned)motor->pt_frame_time_ms, (unsigned)motor->pt_low_water_mark);
+	ESP_LOGI(TAG, "Node %u: PT configured (FIFO mode, %u ms frames, low-water=%u, start_pos=%ld)",
+	         motor->config.node_id, (unsigned)motor->pt_frame_time_ms,
+	         (unsigned)motor->pt_low_water_mark, (long)motor->pt_last_position);
 #endif
 	return ESP_OK;
 }
@@ -484,9 +514,11 @@ esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor)
 		motor->pt_fifo_low = false;
 		motor->pt_write_index = PT_START_ROW;
 		motor->pt_prefill_count = 0;
+		motor->pt_last_position = motor->absolute_position;
 		taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-		ESP_LOGI(TAG, "Node %u: PT FIFO armed at row %u", motor->config.node_id, (unsigned)PT_START_ROW);
+		ESP_LOGI(TAG, "Node %u: PT FIFO armed at row %u (start_pos=%ld)",
+		         motor->config.node_id, (unsigned)PT_START_ROW, (long)motor->pt_last_position);
 #endif
 	}
 	return err;
@@ -535,14 +567,21 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 	bool start_now = false;
 	int32_t rx_position = 0;
 	int32_t rx_speed = 0;
+	int32_t last_pos = 0;
 
 	taskENTER_CRITICAL(&motor->lock);
 	row = motor->pt_write_index;
 	rx_position = motor->absolute_position;
 	rx_speed = motor->current_speed;
+	last_pos = motor->pt_last_position;
 	taskEXIT_CRITICAL(&motor->lock);
 
-	uint8_t dl = stepper_uim2852_build_pt(data, row, position);
+	// PT mode uses relative/incremental positions: compute delta from
+	// the last commanded absolute position so the motor moves to the
+	// correct absolute target.
+	int32_t delta = position - last_pos;
+
+	uint8_t dl = stepper_uim2852_build_pt(data, row, delta);
 	esp_err_t err = send_instruction_internal(motor, STEPPER_UIM2852_CW_PT, data, dl, true);
 
 	if (err == ESP_OK)
@@ -551,6 +590,7 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 		motor->pt_fifo_empty = false;
 		motor->pt_fifo_low = false;
 		motor->target_position = position;
+		motor->pt_last_position = position;
 		motor->pt_write_index = (uint16_t)((motor->pt_write_index + 1) % PT_TABLE_ROWS);
 		if (!motor->pt_motion_started && motor->pt_prefill_count < PT_FIFO_PREFILL_FRAMES)
 			motor->pt_prefill_count++;
@@ -559,6 +599,13 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 
 		if (start_now)
 		{
+			// Re-assert MO=1 before BG in case PT configure cleared it.
+			uint8_t mo_data[8];
+			uint8_t mo_dl = stepper_uim2852_build_mo(mo_data, true);
+			esp_err_t mo_err = send_instruction_internal(motor, STEPPER_UIM2852_CW_MO, mo_data, mo_dl, true);
+			if (mo_err != ESP_OK)
+				return mo_err;
+
 			uint8_t bg_data[8];
 			uint8_t bg_dl = stepper_uim2852_build_bg(bg_data);
 			esp_err_t bg_err = send_instruction_internal(motor, STEPPER_UIM2852_CW_BG, bg_data, bg_dl, true);
@@ -577,10 +624,18 @@ esp_err_t stepper_motor_uim2852_pt_feed(stepper_motor_uim2852_t *motor, int32_t 
 #endif
 		}
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX
-		ESP_LOGI(TAG, "Node %u: PT row=%u pos=%ld t=%lu ms rx_pos=%ld rx_speed=%ld err=%ld",
-		         motor->config.node_id, (unsigned)row, (long)position, (unsigned long)time_ms, (long)rx_position,
-		         (long)rx_speed, (long)llabs((long long)position - (long long)rx_position));
+		ESP_LOGI(TAG, "Node %u: PT row=%u pos=%ld delta=%ld t=%lu ms rx_pos=%ld rx_speed=%ld err=%ld",
+		         motor->config.node_id, (unsigned)row, (long)position, (long)delta, (unsigned long)time_ms,
+		         (long)rx_position, (long)rx_speed,
+		         (long)llabs((long long)position - (long long)rx_position));
 #endif
+		// Periodically query motor position so rx_pos/rx_speed stay fresh.
+		if (row % PT_POSITION_QUERY_INTERVAL == 0)
+		{
+			uint8_t ms_data[8];
+			uint8_t ms_dl = stepper_uim2852_build_ms(ms_data, STEPPER_UIM2852_MS_SPEED_ABSPOS);
+			(void)send_instruction_internal(motor, STEPPER_UIM2852_CW_MS, ms_data, ms_dl, true);
+		}
 	}
 	return err;
 }
@@ -728,6 +783,9 @@ bool stepper_motor_uim2852_process_frame(stepper_motor_uim2852_t *motor, const t
 					motor->pt_motion_started = false;
 					motor->motion_in_progress = false;
 					motor->pt_prefill_count = 0;
+					// Reset delta baseline to current position so re-prefill
+					// computes correct deltas from where the motor stopped.
+					motor->pt_last_position = motor->absolute_position;
 					taskEXIT_CRITICAL(&motor->lock);
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_RX
 					ESP_LOGI(TAG, "Node %u: PVT FIFO empty", motor->config.node_id);

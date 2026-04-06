@@ -677,6 +677,14 @@ menu "Debug Logging"
                 stepper motor PT FIFO streams, including failures. Also
                 logs repeat feeds when the target position has not changed.
 
+        config LOG_ACTUATOR_STEPPER_MOTION_TX
+            bool "Log stepper PT row data with motor feedback (rx_pos, rx_speed)"
+            default n
+            help
+                Log each PT frame sent including the motor's reported position
+                and speed from the last CAN status reply. Useful for diagnosing
+                whether the motor thinks it is already at the target position.
+
         config LOG_ACTUATOR_DAC_LEVEL
             bool "Log DAC level changes"
             default n

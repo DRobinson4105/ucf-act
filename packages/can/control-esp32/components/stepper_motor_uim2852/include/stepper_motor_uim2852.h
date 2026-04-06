@@ -118,9 +118,10 @@ typedef struct stepper_motor_uim2852
 	bool pt_fifo_empty;        // set by PVT FIFO empty notification (0x2A)
 	bool pt_fifo_low;          // set by PVT FIFO low warning notification (0x2B)
 	uint16_t pt_frame_time_ms; // fixed PT frame time configured via MP[4]
-	uint16_t pt_write_index;   // next PT table row to write (0-511)
+	uint16_t pt_write_index;   // next PT table row to write (0-255)
 	uint8_t pt_prefill_count;  // number of PT rows queued before BG start
 	uint8_t pt_low_water_mark; // queue-low threshold configured via MP[5]
+	int32_t pt_last_position;  // last absolute position fed to PT (for delta computation)
 
 	// Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
 	// Forward-declared as void* to avoid circular typedef; actual type matches
@@ -200,6 +201,11 @@ esp_err_t stepper_motor_uim2852_enable(stepper_motor_uim2852_t *motor);
  * @brief Disable motor driver (MO=0)
  */
 esp_err_t stepper_motor_uim2852_disable(stepper_motor_uim2852_t *motor);
+
+/**
+ * @brief Move to absolute position (PA + BG). Uses configured SP/AC/DC.
+ */
+esp_err_t stepper_motor_uim2852_move_absolute(stepper_motor_uim2852_t *motor, int32_t position);
 
 /**
  * @brief Stop motion with deceleration (ST)

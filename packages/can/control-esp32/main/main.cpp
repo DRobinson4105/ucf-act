@@ -1793,7 +1793,7 @@ void disable_autonomous_actuators(void)
 #endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-	(void)stepper_motor_uim2852_pt_stop(&g_braking_stepper);
+	(void)stepper_motor_uim2852_stop(&g_braking_stepper);
 #endif
 
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
@@ -1908,6 +1908,8 @@ void execute_complete_enable()
 #ifdef CONFIG_STEERING_ACTUATOR_PWM
 	steer_err = steering_pwm_set_neutral();
 #else
+	stepper_motor_uim2852_clear_status(&g_steering_stepper);
+	vTaskDelay(pdMS_TO_TICKS(10));
 	steer_err = stepper_motor_uim2852_enable(&g_steering_stepper);
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
 	if (steer_err != ESP_OK)
@@ -1917,12 +1919,21 @@ void execute_complete_enable()
 #endif
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
+	stepper_motor_uim2852_clear_status(&g_braking_stepper);
+	vTaskDelay(pdMS_TO_TICKS(10));
 	brake_err = stepper_motor_uim2852_enable(&g_braking_stepper);
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
 	if (brake_err != ESP_OK)
 		ESP_LOGI(TAG, "Braking enable failed: %s", esp_err_to_name(brake_err));
 #endif
 	vTaskDelay(pdMS_TO_TICKS(5));
+	// Seed target_position from actual position so the position-error
+	// check does not trip on the first ACTIVE tick before PA is sent.
+	{
+		taskENTER_CRITICAL(&g_cmd_lock);
+		g_braking_stepper.target_position = g_braking_stepper.absolute_position;
+		taskEXIT_CRITICAL(&g_cmd_lock);
+	}
 #endif
 
 	if (steer_err != ESP_OK || brake_err != ESP_OK)
@@ -1944,9 +1955,8 @@ void execute_complete_enable()
 		return;
 	}
 
-	// Configure and arm PT FIFO mode.
-	// This must happen after MO=1 succeeds and before the control loop
-	// begins feeding position commands.
+	// Configure and arm PT FIFO mode for steering stepper.
+	// Braking uses PA (absolute position) mode — no PT setup needed.
 	esp_err_t pt_err = ESP_OK;
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING
 #ifndef CONFIG_STEERING_ACTUATOR_PWM
@@ -1954,12 +1964,6 @@ void execute_complete_enable()
 	if (pt_err == ESP_OK)
 		pt_err = stepper_motor_uim2852_pt_start(&g_steering_stepper);
 #endif
-#endif
-#ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
-	if (pt_err == ESP_OK)
-		pt_err = stepper_motor_uim2852_pt_configure(&g_braking_stepper);
-	if (pt_err == ESP_OK)
-		pt_err = stepper_motor_uim2852_pt_start(&g_braking_stepper);
 #endif
 	if (pt_err != ESP_OK)
 	{
@@ -2664,30 +2668,26 @@ void control_task(void *param)
 #ifndef CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING
 		if (g_stepper_braking_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
-			bool fed_frame = false;
-			esp_err_t err = feed_pt_stream_if_due(&g_braking_stepper, step.braking_position, now_tick,
-			                                      &next_braking_pt_feed_tick, &fed_frame);
-			if (err != ESP_OK && step.send_braking)
+			// Use PA (absolute position) mode for braking — sends the motor
+			// directly to the target with no FIFO buffering delay.
+			if (step.send_braking)
 			{
-				step.new_last_braking = last_braking_sent; // keep old value on failure
-			}
+				esp_err_t err = stepper_motor_uim2852_move_absolute(&g_braking_stepper, step.braking_position);
+				if (err != ESP_OK)
+				{
+					step.new_last_braking = last_braking_sent;
 #ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
-			if (err != ESP_OK)
-			{
-				ESP_LOGI(TAG_TX, "Braking PT feed failed: %s", esp_err_to_name(err));
-			}
-			else if (fed_frame)
-			{
-				ESP_LOGI(TAG_TX, "Braking PT feed -> %ld%s", (long)step.braking_position,
-				         step.send_braking ? "" : " (repeat)");
-			}
+					ESP_LOGI(TAG_TX, "Braking PA move failed: %s", esp_err_to_name(err));
 #endif
-			if (fed_frame || err != ESP_OK)
+				}
+				else
+				{
+#ifdef CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX
+					ESP_LOGI(TAG_TX, "Braking PA move -> %ld", (long)step.braking_position);
+#endif
+				}
 				track_can_tx(err);
-		}
-		else
-		{
-			next_braking_pt_feed_tick = 0;
+			}
 		}
 #endif
 
