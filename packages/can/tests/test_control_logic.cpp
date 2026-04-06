@@ -18,6 +18,7 @@ static control_inputs_t default_inputs(void)
 		.steering_cmd = 0,
 		.braking_cmd = 0,
 		.motor_fault_code = NODE_FAULT_NONE,
+		.stop_flags = NODE_STOP_NONE,
 		.fr_state = FR_STATE_FORWARD,
 		.pedal_pressed = false,
 		.pedal_rearmed = true,
@@ -32,8 +33,11 @@ static control_inputs_t default_inputs(void)
 		.throttle_current = 0,
 		.last_throttle_change_ms = 0,
 		.throttle_slew_interval_ms = 100,
-		.last_steering_sent = STEPPER_DEDUP_RESET,
-		.last_braking_sent = STEPPER_DEDUP_RESET,
+		.throttle_slew_step = 1,
+		.throttle_min = 0,
+		.throttle_max = 4095,
+		.last_steering_sent = STEPPER_DEDUP_RESET_STEERING,
+		.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING,
 		.steering_min = -3000,
 		.steering_max = 3000,
 		.braking_min = -3000,
@@ -116,7 +120,7 @@ static void test_enable_stays_enable_with_complete_flag(void)
 	in.now_ms = 400;
 	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_ENABLE);
-	assert((r.heartbeat_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE) != 0);
+	assert((r.status_flags & NODE_STATUS_FLAG_ENABLE_COMPLETE) != 0);
 }
 
 static void test_enable_abort_to_not_ready_on_pedal(void)
@@ -148,8 +152,10 @@ static void test_active_override_on_pedal(void)
 	in.target_state = NODE_STATE_ACTIVE;
 	in.pedal_pressed = true;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	assert(r.new_state == NODE_STATE_NOT_READY);
 	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_THROTTLE) != 0);
 }
 
 static void test_override_recovery_to_ready(void)
@@ -159,8 +165,11 @@ static void test_override_recovery_to_ready(void)
 	in.pedal_pressed = false;
 	in.pedal_rearmed = true;
 	in.fr_state = FR_STATE_FORWARD;
-	control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
+	in.stop_flags = NODE_STOP_OPERATOR_THROTTLE;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_READY);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert(r.new_stop_flags == NODE_STOP_NONE);
 }
 
 static void test_fault_clear_to_not_ready(void)
@@ -169,35 +178,35 @@ static void test_fault_clear_to_not_ready(void)
 	in.pedal_pressed = true;
 	in.pedal_rearmed = false;
 	in.motor_fault_code = NODE_FAULT_NONE;
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_MOTOR_COMM, &in);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_CONTROL_MOTOR_COMM, &in);
 	assert(r.new_state == NODE_STATE_NOT_READY);
-	assert(r.new_fault_code == NODE_FAULT_NONE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_fault_clear_to_ready(void)
 {
 	control_inputs_t in = default_inputs();
 	in.motor_fault_code = NODE_FAULT_NONE;
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_MOTOR_COMM, &in);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_CONTROL_MOTOR_COMM, &in);
 	assert(r.new_state == NODE_STATE_READY);
-	assert(r.new_fault_code == NODE_FAULT_NONE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_fault_injection_from_not_ready(void)
 {
 	control_inputs_t in = default_inputs();
-	in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
 }
 
 static void test_unknown_state_defaults_to_fault(void)
 {
 	control_inputs_t in = default_inputs();
 	control_step_result_t r = control_compute_step(0xFF, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_GENERAL);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_GENERAL);
 }
 
 // ============================================================================
@@ -267,7 +276,7 @@ static void test_preconditions_active_fault(void)
 		.fr_state = FR_STATE_FORWARD,
 		.pedal_pressed = false,
 		.pedal_rearmed = true,
-		.fault_code = NODE_FAULT_MOTOR_COMM,
+		.fault_code = NODE_FAULT_CONTROL_MOTOR_COMM,
 	};
 	precondition_fail_t fail = control_check_preconditions(&pre);
 	assert(fail == PRECONDITION_FAIL_ACTIVE_FAULT);
@@ -279,10 +288,11 @@ static void test_preconditions_multiple_combine(void)
 		.fr_state = FR_STATE_REVERSE,
 		.pedal_pressed = true,
 		.pedal_rearmed = false,
-		.fault_code = NODE_FAULT_MOTOR_COMM,
+		.fault_code = NODE_FAULT_CONTROL_MOTOR_COMM,
 	};
 	precondition_fail_t fail = control_check_preconditions(&pre);
-	assert(fail == PRECONDITION_FAIL_ALL);
+	assert(fail == (PRECONDITION_FAIL_FR_IN_REVERSE | PRECONDITION_FAIL_PEDAL_PRESSED |
+	                PRECONDITION_FAIL_PEDAL_NOT_REARMED | PRECONDITION_FAIL_ACTIVE_FAULT));
 	assert((fail & PRECONDITION_FAIL_FR_IN_REVERSE) != 0);
 }
 
@@ -298,6 +308,7 @@ static void test_slew_at_target_no_change(void)
 		.last_change_ms = 0,
 		.now_ms = 1000,
 		.slew_interval_ms = 100,
+		.slew_step = 1,
 	};
 	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
 	assert(r.new_level == 3);
@@ -312,6 +323,7 @@ static void test_slew_step_up(void)
 		.last_change_ms = 0,
 		.now_ms = 200,
 		.slew_interval_ms = 100,
+		.slew_step = 1,
 	};
 	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
 	assert(r.new_level == 4);
@@ -326,6 +338,7 @@ static void test_slew_step_down(void)
 		.last_change_ms = 0,
 		.now_ms = 200,
 		.slew_interval_ms = 100,
+		.slew_step = 1,
 	};
 	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
 	assert(r.new_level == 4);
@@ -340,6 +353,7 @@ static void test_slew_rate_limited(void)
 		.last_change_ms = 0,
 		.now_ms = 50,
 		.slew_interval_ms = 100,
+		.slew_step = 1,
 	};
 	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
 	assert(r.new_level == 3);
@@ -363,6 +377,7 @@ static void test_slew_timer_overflow(void)
 		.last_change_ms = UINT32_MAX - 50,
 		.now_ms = 50,
 		.slew_interval_ms = 100,
+		.slew_step = 1,
 	};
 	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
 	assert(r.new_level == 3);
@@ -386,6 +401,14 @@ static void test_clamp_above_max(void)
 static void test_clamp_in_range(void)
 {
 	assert(control_clamp_command(1500, -3000, 3000) == 1500);
+}
+
+static void test_clamp_misconfigured_returns_neutral(void)
+{
+	// When min > max (misconfigured envelope), should force neutral (0)
+	assert(control_clamp_command(50, 200, 100) == 0);
+	assert(control_clamp_command(0, 100, -100) == 0);
+	assert(control_clamp_command(-50, 50, -50) == 0);
 }
 
 // ============================================================================
@@ -472,7 +495,7 @@ static void test_enable_complete_fires_once(void)
 	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_ENABLE);
 	assert((r.actions & CONTROL_ACTION_COMPLETE_ENABLE) == 0); // should NOT fire again
-	assert((r.heartbeat_flags & HEARTBEAT_FLAG_ENABLE_COMPLETE) != 0);
+	assert((r.status_flags & NODE_STATUS_FLAG_ENABLE_COMPLETE) != 0);
 }
 
 static void test_enable_timer_exact_boundary(void)
@@ -497,9 +520,11 @@ static void test_active_override_fr_changed(void)
 	in.target_state = NODE_STATE_ACTIVE;
 	in.fr_state = FR_STATE_REVERSE;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	assert(r.new_state == NODE_STATE_NOT_READY);
 	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
-	assert(r.override_reason == OVERRIDE_REASON_FR_CHANGED);
+	assert(r.override_reason == OVERRIDE_REASON_REVERSE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_REVERSE) != 0);
 }
 
 static void test_active_neutral_zeros_throttle(void)
@@ -541,9 +566,11 @@ static void test_active_override_steering_error(void)
 	in.target_state = NODE_STATE_ACTIVE;
 	in.steering_position_error = true;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	assert(r.new_state == NODE_STATE_NOT_READY);
 	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
 	assert(r.override_reason == OVERRIDE_REASON_STEERING);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_STEER) != 0);
 }
 
 static void test_active_override_braking_error(void)
@@ -552,9 +579,11 @@ static void test_active_override_braking_error(void)
 	in.target_state = NODE_STATE_ACTIVE;
 	in.braking_position_error = true;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	assert(r.new_state == NODE_STATE_NOT_READY);
 	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
 	assert(r.override_reason == OVERRIDE_REASON_BRAKING);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_BRAKE) != 0);
 }
 
 static void test_active_safety_retreat_priority_over_pedal(void)
@@ -602,6 +631,34 @@ static void test_active_throttle_at_target_no_action(void)
 	assert(r.throttle_level == 3); // carried forward, unchanged
 }
 
+static void test_active_throttle_clamps_to_envelope(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.throttle_cmd = 5000; // above envelope max (4095)
+	in.throttle_current = 4095;
+	in.now_ms = 1000;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) == 0);
+	assert(r.throttle_level == 4095);
+}
+
+static void test_active_throttle_unconfigured_forces_neutral(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.throttle_cmd = 100;
+	in.throttle_current = 50;
+	in.now_ms = 1000;
+	in.throttle_min = 0;
+	in.throttle_max = 0;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) != 0);
+	assert(r.throttle_level == 0);
+}
+
 static void test_active_steering_dedup_same_skips(void)
 {
 	control_inputs_t in = default_inputs();
@@ -628,12 +685,12 @@ static void test_active_steering_changed_sends(void)
 
 static void test_active_braking_dedup_reset_always_sends(void)
 {
-	// After exiting override/fault, dedup tracker is STEPPER_DEDUP_RESET.
+	// After exiting override/fault, dedup tracker is STEPPER_DEDUP_RESET_BRAKING.
 	// Even a zero command should be sent since it doesn't match the sentinel.
 	control_inputs_t in = default_inputs();
 	in.target_state = NODE_STATE_ACTIVE;
 	in.braking_cmd = 0;
-	in.last_braking_sent = STEPPER_DEDUP_RESET;
+	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_braking == true);
 	assert(r.braking_position == 0);
@@ -648,7 +705,7 @@ static void test_active_envelope_unconfigured_forces_neutral(void)
 	in.steering_cmd = 2000;
 	in.steering_min = 0;
 	in.steering_max = 0;
-	in.last_steering_sent = STEPPER_DEDUP_RESET;
+	in.last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_steering == true);
 	assert(r.steering_position == 0); // forced neutral
@@ -661,7 +718,7 @@ static void test_active_envelope_clamps_command(void)
 	in.steering_cmd = 5000; // exceeds max of 3000
 	in.steering_min = -3000;
 	in.steering_max = 3000;
-	in.last_steering_sent = STEPPER_DEDUP_RESET;
+	in.last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_steering == true);
 	assert(r.steering_position == 3000); // clamped to max
@@ -675,10 +732,10 @@ static void test_motor_fault_from_active(void)
 {
 	control_inputs_t in = default_inputs();
 	in.target_state = NODE_STATE_ACTIVE;
-	in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
 	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) != 0);
 	assert(r.disable_reason == CONTROL_DISABLE_REASON_MOTOR_FAULT);
 	assert(r.throttle_level == 0); // safe outputs applied
@@ -688,10 +745,10 @@ static void test_motor_fault_from_enable(void)
 {
 	control_inputs_t in = default_inputs();
 	in.target_state = NODE_STATE_ENABLE;
-	in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
 	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) != 0);
 	assert(r.abort_reason == CONTROL_ABORT_REASON_MOTOR_FAULT);
 }
@@ -699,10 +756,10 @@ static void test_motor_fault_from_enable(void)
 static void test_motor_fault_from_ready(void)
 {
 	control_inputs_t in = default_inputs();
-	in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 	control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
 	// No DISABLE or ABORT actions — nothing was enabled
 	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) == 0);
 	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) == 0);
@@ -711,14 +768,14 @@ static void test_motor_fault_from_ready(void)
 static void test_motor_fault_ignored_when_already_faulted(void)
 {
 	control_inputs_t in = default_inputs();
-	in.motor_fault_code = NODE_FAULT_MOTOR_COMM;
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
 	// Already in a MOTOR_COMM fault — should NOT re-trigger
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_MOTOR_COMM, &in);
-	// Should stay in FAULT with existing fault code, not re-enter
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_MOTOR_COMM);
-	// ATTEMPT_RECOVERY since fault persists (motor_fault_code != NONE)
-	assert((r.actions & CONTROL_ACTION_ATTEMPT_RECOVERY) != 0);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_CONTROL_MOTOR_COMM, &in);
+	// Should stay in NOT_READY with existing fault code, not re-enter
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
+	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) == 0);
+	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) == 0);
 }
 
 // ============================================================================
@@ -731,8 +788,8 @@ static void test_fr_invalid_from_active(void)
 	in.target_state = NODE_STATE_ACTIVE;
 	in.fr_state = FR_STATE_INVALID;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_SENSOR_INVALID);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_SENSOR_INVALID);
 	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) != 0);
 	assert(r.disable_reason == CONTROL_DISABLE_REASON_SENSOR_INVALID);
 }
@@ -743,10 +800,10 @@ static void test_fr_invalid_from_enable(void)
 	in.target_state = NODE_STATE_ENABLE;
 	in.fr_state = FR_STATE_INVALID;
 	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_SENSOR_INVALID);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) != 0);
-	assert(r.abort_reason == CONTROL_ABORT_REASON_SENSOR_INVALID);
+	assert(r.abort_reason == CONTROL_ABORT_REASON_FR_IN_REVERSE);
 }
 
 static void test_fr_invalid_from_not_ready_no_fault(void)
@@ -757,7 +814,7 @@ static void test_fr_invalid_from_not_ready_no_fault(void)
 	in.fr_state = FR_STATE_INVALID;
 	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_NOT_READY);
-	assert(r.new_fault_code == NODE_FAULT_NONE); // no fault triggered
+	assert(r.new_fault_flags == NODE_FAULT_NONE); // no fault triggered
 	assert((r.precondition_fail & PRECONDITION_FAIL_FR_IN_REVERSE) != 0);
 }
 
@@ -768,7 +825,7 @@ static void test_fr_invalid_from_ready_no_fault(void)
 	in.fr_state = FR_STATE_INVALID;
 	control_step_result_t r = control_compute_step(NODE_STATE_READY, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_NOT_READY);
-	assert(r.new_fault_code == NODE_FAULT_NONE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_fr_invalid_no_retrigger(void)
@@ -776,11 +833,10 @@ static void test_fr_invalid_no_retrigger(void)
 	control_inputs_t in = default_inputs();
 	in.fr_state = FR_STATE_INVALID;
 	// Already in SENSOR_INVALID fault — should NOT re-trigger pre-switch path
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_SENSOR_INVALID, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_SENSOR_INVALID);
-	// Fault not cleared (fr_state is still INVALID), so ATTEMPT_RECOVERY
-	assert((r.actions & CONTROL_ACTION_ATTEMPT_RECOVERY) != 0);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_CONTROL_SENSOR_INVALID, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_SENSOR_INVALID);
+	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) == 0);
 }
 
 // ============================================================================
@@ -792,8 +848,11 @@ static void test_override_stays_when_pedal_not_rearmed(void)
 	control_inputs_t in = default_inputs();
 	in.fr_state = FR_STATE_FORWARD;
 	in.pedal_rearmed = false; // not rearmed
-	control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	in.stop_flags = NODE_STOP_OPERATOR_THROTTLE;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_THROTTLE) != 0);
 }
 
 static void test_override_stays_when_fr_reverse(void)
@@ -801,8 +860,11 @@ static void test_override_stays_when_fr_reverse(void)
 	control_inputs_t in = default_inputs();
 	in.fr_state = FR_STATE_REVERSE;
 	in.pedal_rearmed = true;
-	control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	in.stop_flags = NODE_STOP_OPERATOR_REVERSE;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_REVERSE) != 0);
 }
 
 static void test_override_recovers_when_fr_neutral(void)
@@ -811,8 +873,11 @@ static void test_override_recovers_when_fr_neutral(void)
 	control_inputs_t in = default_inputs();
 	in.fr_state = FR_STATE_NEUTRAL;
 	in.pedal_rearmed = true;
-	control_step_result_t r = control_compute_step(NODE_STATE_OVERRIDE, NODE_FAULT_NONE, &in);
+	in.stop_flags = NODE_STOP_OPERATOR_REVERSE;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_READY); // NEUTRAL passes preconditions
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_REVERSE) == 0);
 }
 
 // ============================================================================
@@ -823,29 +888,29 @@ static void test_fault_motor_comm_clears_on_recovery(void)
 {
 	control_inputs_t in = default_inputs();
 	in.motor_fault_code = NODE_FAULT_NONE; // fault condition cleared
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_MOTOR_COMM, &in);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_CONTROL_MOTOR_COMM, &in);
 	assert(r.new_state == NODE_STATE_READY);
-	assert(r.new_fault_code == NODE_FAULT_NONE);
-	assert((r.actions & CONTROL_ACTION_ATTEMPT_RECOVERY) == 0);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
+	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) == 0);
 }
 
 static void test_fault_sensor_invalid_clears_when_fr_valid(void)
 {
 	control_inputs_t in = default_inputs();
 	in.fr_state = FR_STATE_FORWARD; // no longer INVALID
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_SENSOR_INVALID, &in);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_CONTROL_SENSOR_INVALID, &in);
 	assert(r.new_state == NODE_STATE_READY);
-	assert(r.new_fault_code == NODE_FAULT_NONE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_fault_unknown_type_stays_in_fault(void)
 {
 	// An unrecognized fault code (e.g. NODE_FAULT_GENERAL) should not clear
 	control_inputs_t in = default_inputs();
-	control_step_result_t r = control_compute_step(NODE_STATE_FAULT, NODE_FAULT_GENERAL, &in);
-	assert(r.new_state == NODE_STATE_FAULT);
-	assert(r.new_fault_code == NODE_FAULT_GENERAL);
-	assert((r.actions & CONTROL_ACTION_ATTEMPT_RECOVERY) != 0);
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_GENERAL, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_GENERAL);
+	assert((r.actions & CONTROL_ACTION_DISABLE_AUTONOMY) == 0);
 }
 
 // ============================================================================
@@ -876,22 +941,203 @@ static void test_override_applies_safe_outputs(void)
 	in.last_steering_sent = 1000;
 	in.last_braking_sent = 500;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
-	assert(r.new_state == NODE_STATE_OVERRIDE);
+	assert(r.new_state == NODE_STATE_NOT_READY);
 	assert(r.throttle_level == 0);
-	assert(r.new_last_steering == STEPPER_DEDUP_RESET);
-	assert(r.new_last_braking == STEPPER_DEDUP_RESET);
+	assert(r.new_last_steering == STEPPER_DEDUP_RESET_STEERING);
+	assert(r.new_last_braking == STEPPER_DEDUP_RESET_BRAKING);
 }
 
 // ============================================================================
 // NULL inputs guard
 // ============================================================================
 
-static void test_null_inputs_returns_safe_defaults(void)
+static void test_null_inputs_preserves_current_state(void)
 {
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, NULL);
-	// Should return the zero-init struct with current_state/fault carried forward
+	// NULL inputs returns zero-init struct with current_state/fault carried forward
 	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert(r.new_fault_flags == NODE_FAULT_NONE);
 	assert(r.actions == CONTROL_ACTION_NONE);
+}
+
+// ============================================================================
+// Simultaneous faults and multi-step slew
+// ============================================================================
+
+static void test_active_simultaneous_steering_braking_errors(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.steering_position_error = true;
+	in.braking_position_error = true;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert((r.actions & CONTROL_ACTION_TRIGGER_OVERRIDE) != 0);
+	// At least one override reason should be set
+	assert(r.override_reason != OVERRIDE_REASON_NONE);
+	assert(r.throttle_level == 0); // safe outputs
+}
+
+static void test_enable_motor_fault_before_timer_expires(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ENABLE;
+	in.enable_start_ms = 900;
+	in.enable_sequence_ms = 200;
+	in.now_ms = 1000; // timer NOT expired (elapsed=100 < 200)
+	in.motor_fault_code = NODE_FAULT_CONTROL_MOTOR_COMM;
+	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert(r.new_fault_flags == NODE_FAULT_CONTROL_MOTOR_COMM);
+	assert((r.actions & CONTROL_ACTION_ABORT_ENABLE) != 0);
+	assert(r.abort_reason == CONTROL_ABORT_REASON_MOTOR_FAULT);
+}
+
+static void test_slew_multi_step(void)
+{
+	throttle_slew_inputs_t slew = {
+		.current = 0,
+		.target = 50,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = 12, // max 12 steps per interval (production value)
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 12); // steps by 12 (not 1)
+	assert(r.changed == true);
+}
+
+static void test_slew_step_defaults_when_zero(void)
+{
+	throttle_slew_inputs_t slew = {
+		.current = 0,
+		.target = 10,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = 0, // should default to 1
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 1);
+	assert(r.changed == true);
+}
+
+static void test_slew_step_defaults_when_negative(void)
+{
+	throttle_slew_inputs_t slew = {
+		.current = 5,
+		.target = 10,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = -5, // should default to 1
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 6);
+	assert(r.changed == true);
+}
+
+static void test_slew_multi_step_clamps_to_target(void)
+{
+	// When step > distance to target, should clamp to target
+	throttle_slew_inputs_t slew = {
+		.current = 5,
+		.target = 8,
+		.last_change_ms = 0,
+		.now_ms = 200,
+		.slew_interval_ms = 100,
+		.slew_step = 12,
+	};
+	throttle_slew_result_t r = control_compute_throttle_slew(&slew);
+	assert(r.new_level == 8); // clamped to target, not 5+12=17
+	assert(r.changed == true);
+}
+
+static void test_active_fr_neutral_while_slewing_up(void)
+{
+	// FR goes NEUTRAL while throttle is slewing up — throttle should target 0
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.fr_state = FR_STATE_NEUTRAL;
+	in.throttle_cmd = 100;
+	in.throttle_current = 50;
+	in.last_throttle_change_ms = 0;
+	in.now_ms = 1000;
+	in.throttle_slew_step = 1;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_APPLY_THROTTLE) != 0);
+	assert(r.throttle_level == 49); // slewing toward 0, not toward 100
+}
+
+static void test_enable_to_active_skips_complete_when_already_done(void)
+{
+	// enable_work_done=true + target=ACTIVE: transition to ACTIVE without
+	// re-firing COMPLETE_ENABLE (work was already done in a prior tick)
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.enable_start_ms = 100;
+	in.enable_sequence_ms = 200;
+	in.now_ms = 400;            // timer expired
+	in.enable_work_done = true; // already fired
+	control_step_result_t r = control_compute_step(NODE_STATE_ENABLE, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_ACTIVE);
+	assert((r.actions & CONTROL_ACTION_COMPLETE_ENABLE) == 0); // must NOT re-fire
+}
+
+static void test_active_braking_envelope_unconfigured_forces_neutral(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.braking_cmd = 5000;
+	in.braking_min = 0;
+	in.braking_max = 0; // unconfigured
+	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.send_braking == true);
+	assert(r.braking_position == 0); // forced neutral
+}
+
+static void test_override_steering_stop_clears_when_error_resolves(void)
+{
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_FORWARD;
+	in.pedal_rearmed = true;
+	in.steering_position_error = false; // error resolved
+	in.stop_flags = NODE_STOP_OPERATOR_STEER;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_READY);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_STEER) == 0); // cleared
+}
+
+static void test_override_braking_stop_clears_when_error_resolves(void)
+{
+	control_inputs_t in = default_inputs();
+	in.fr_state = FR_STATE_FORWARD;
+	in.pedal_rearmed = true;
+	in.braking_position_error = false; // error resolved
+	in.stop_flags = NODE_STOP_OPERATOR_BRAKE;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_READY);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_BRAKE) == 0); // cleared
+}
+
+static void test_override_steering_stop_stays_when_error_persists(void)
+{
+	control_inputs_t in = default_inputs();
+	in.steering_position_error = true; // still errored
+	in.stop_flags = NODE_STOP_OPERATOR_STEER;
+	control_step_result_t r = control_compute_step(NODE_STATE_NOT_READY, NODE_FAULT_NONE, &in);
+	assert(r.new_state == NODE_STATE_NOT_READY);
+	assert((r.new_stop_flags & NODE_STOP_OPERATOR_STEER) != 0); // NOT cleared
+}
+
+static void test_clamp_negative_range_values(void)
+{
+	assert(control_clamp_command(-100, -200, -50) == -100); // in range
+	assert(control_clamp_command(-300, -200, -50) == -200); // below min
+	assert(control_clamp_command(0, -200, -50) == -50);     // above max
 }
 
 // ============================================================================
@@ -945,6 +1191,7 @@ int main(void)
 	TEST(test_clamp_below_min);
 	TEST(test_clamp_above_max);
 	TEST(test_clamp_in_range);
+	TEST(test_clamp_misconfigured_returns_neutral);
 
 	// INIT edge cases (2)
 	printf("\n  --- INIT edge cases ---\n");
@@ -969,10 +1216,12 @@ int main(void)
 	TEST(test_active_override_braking_error);
 	TEST(test_active_safety_retreat_priority_over_pedal);
 
-	// ACTIVE throttle + steering (7)
+	// ACTIVE throttle + steering (9)
 	printf("\n  --- ACTIVE throttle + steering ---\n");
 	TEST(test_active_throttle_slew_applies);
 	TEST(test_active_throttle_at_target_no_action);
+	TEST(test_active_throttle_clamps_to_envelope);
+	TEST(test_active_throttle_unconfigured_forces_neutral);
 	TEST(test_active_steering_dedup_same_skips);
 	TEST(test_active_steering_changed_sends);
 	TEST(test_active_braking_dedup_reset_always_sends);
@@ -1016,7 +1265,23 @@ int main(void)
 
 	// NULL inputs (1)
 	printf("\n  --- NULL inputs ---\n");
-	TEST(test_null_inputs_returns_safe_defaults);
+	TEST(test_null_inputs_preserves_current_state);
+
+	// Simultaneous faults and multi-step slew
+	printf("\n  --- simultaneous faults + multi-step slew ---\n");
+	TEST(test_active_simultaneous_steering_braking_errors);
+	TEST(test_enable_motor_fault_before_timer_expires);
+	TEST(test_slew_multi_step);
+	TEST(test_slew_step_defaults_when_zero);
+	TEST(test_slew_step_defaults_when_negative);
+	TEST(test_slew_multi_step_clamps_to_target);
+	TEST(test_active_fr_neutral_while_slewing_up);
+	TEST(test_clamp_negative_range_values);
+	TEST(test_enable_to_active_skips_complete_when_already_done);
+	TEST(test_active_braking_envelope_unconfigured_forces_neutral);
+	TEST(test_override_steering_stop_clears_when_error_resolves);
+	TEST(test_override_braking_stop_clears_when_error_resolves);
+	TEST(test_override_steering_stop_stays_when_error_persists);
 
 	TEST_REPORT();
 	TEST_EXIT();

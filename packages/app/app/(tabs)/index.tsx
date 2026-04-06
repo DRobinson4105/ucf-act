@@ -2,12 +2,13 @@ import { CAMPUS_LOCATIONS, CampusLocation } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRide } from "@/contexts/RideContext";
-import { useDebouncedNavigation } from "@/hooks/useDebouncedNavigation";
+import { useRouter } from "expo-router";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
   BookOpen,
   Building2,
-  Car,
   MapPin,
+  Navigation,
   ParkingSquare,
   Search,
   Star,
@@ -29,7 +30,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -60,7 +60,7 @@ export default function HomeScreen() {
     currentRide, cancelRide, boardRide, rideHistory,
     pendingReview, submitReview, dismissReview,
   } = useRide();
-  const router = useDebouncedNavigation();
+  const router = useRouter();
   const [reviewRating, setReviewRating] = useState(0);
   const [reviewComment, setReviewComment] = useState("");
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
@@ -131,7 +131,7 @@ export default function HomeScreen() {
             <Text style={styles.greetingSub}>UCF Autonomous Campus Transit</Text>
           </View>
           <View style={styles.logoMark}>
-            <Car size={22} color={Colors.accent} />
+            <MaterialCommunityIcons name="golf-cart" size={22} color={Colors.accent} />
           </View>
         </View>
 
@@ -140,7 +140,7 @@ export default function HomeScreen() {
           style={[styles.searchBar, isTracking && styles.searchBarDisabled]}
           onPress={() => router.push("/plan-ride")}
           activeOpacity={isTracking ? 1 : 0.75}
-          disabled={router.isNavigating || isTracking}
+          disabled={isTracking}
         >
           <Search size={20} color={isTracking ? Colors.textSecondary : Colors.accent} />
           <Text style={[styles.searchText, isTracking && styles.searchTextDisabled]}>
@@ -172,7 +172,7 @@ export default function HomeScreen() {
             {/* Cart row */}
             <View style={styles.cartRow}>
               <View style={styles.cartIcon}>
-                <Car size={20} color={Colors.accent} />
+                <MaterialCommunityIcons name="golf-cart" size={20} color={Colors.accent} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.cartName}>ACT-001</Text>
@@ -185,6 +185,15 @@ export default function HomeScreen() {
                 <Text style={styles.boardBtnText}>I'm Here</Text>
               </TouchableOpacity>
             )}
+
+            <TouchableOpacity
+              style={styles.trackBtn}
+              onPress={() => router.push("/plan-ride")}
+              activeOpacity={0.8}
+            >
+              <Navigation size={15} color={Colors.accent} />
+              <Text style={styles.trackBtnText}>Track Ride</Text>
+            </TouchableOpacity>
 
             {canCancel && (
               <TouchableOpacity style={styles.cancelBtn} onPress={cancelRide} activeOpacity={0.8}>
@@ -211,7 +220,6 @@ export default function HomeScreen() {
                   onPress={() =>
                     router.push({ pathname: "/plan-ride", params: { destinationId: loc.id } })
                   }
-                  disabled={router.isNavigating}
                   activeOpacity={0.7}
                 >
                   <View style={styles.chipIcon}>
@@ -233,7 +241,7 @@ export default function HomeScreen() {
                     onPress={() =>
                       router.push({ pathname: "/plan-ride", params: { destinationId: loc.id } })
                     }
-                    disabled={router.isNavigating}
+                    disabled={false}
                     activeOpacity={0.7}
                   >
                     <View style={styles.recentIconWrap}>
@@ -262,83 +270,82 @@ export default function HomeScreen() {
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={{ flex: 1 }}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.modalBackdrop}>
-              <TouchableWithoutFeedback>
-                <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
-                  <View style={styles.handle} />
+          <View style={styles.modalBackdrop}>
+            {/* Backdrop dismiss — only covers area ABOVE the sheet */}
+            <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss} />
 
-                  <Text style={styles.reviewTitle}>How was your ride?</Text>
-                  {pendingReview && (
-                    <Text style={styles.reviewRoute}>
-                      {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.pickupLocationId)?.name ?? "Pickup"}
-                      {" → "}
-                      {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.dropoffLocationId)?.name ?? "Dropoff"}
-                    </Text>
-                  )}
+            <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 16 }]}>
+              <View style={styles.handle} />
 
-                  <View style={styles.starsRow}>
-                    {[1, 2, 3, 4, 5].map((n) => (
-                      <Pressable
-                        key={n}
-                        onPress={() => setReviewRating(n)}
-                        hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-                      >
-                        <Star
-                          size={40}
-                          color={n <= reviewRating ? Colors.accent : Colors.border}
-                          fill={n <= reviewRating ? Colors.accent : "transparent"}
-                        />
-                      </Pressable>
-                    ))}
-                  </View>
+              <Text style={styles.reviewTitle}>How was your ride?</Text>
+              {pendingReview && (
+                <Text style={styles.reviewRoute}>
+                  {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.pickupLocationId)?.name ?? "Pickup"}
+                  {" → "}
+                  {CAMPUS_LOCATIONS.find(l => l.id === pendingReview.dropoffLocationId)?.name ?? "Dropoff"}
+                </Text>
+              )}
 
-                  {reviewRating === 0 ? (
-                    <Text style={styles.starHint}>Tap a star to rate your ride</Text>
-                  ) : (
-                    <View style={{ height: 16 }} />
-                  )}
-
-                  <TextInput
-                    placeholder="Add a comment (optional)"
-                    placeholderTextColor={Colors.textSecondary}
-                    value={reviewComment}
-                    onChangeText={setReviewComment}
-                    multiline
-                    numberOfLines={3}
-                    style={styles.commentInput}
-                  />
-
-                  <TouchableOpacity
-                    style={[styles.submitBtn, reviewRating === 0 && styles.submitBtnDisabled]}
-                    onPress={() => {
-                      if (reviewRating === 0) return;
-                      submitReview(reviewRating, reviewComment.trim() || undefined);
-                      setReviewRating(0);
-                      setReviewComment("");
-                    }}
-                    activeOpacity={reviewRating === 0 ? 1 : 0.8}
+              <View style={styles.starsRow}>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <Pressable
+                    key={n}
+                    onPress={() => setReviewRating(n)}
+                    hitSlop={16}
                   >
-                    <Text style={[styles.submitBtnText, reviewRating === 0 && styles.submitBtnTextDisabled]}>
-                      Submit Review
-                    </Text>
-                  </TouchableOpacity>
+                    <Star
+                      size={40}
+                      color={n <= reviewRating ? Colors.accent : Colors.border}
+                      fill={n <= reviewRating ? Colors.accent : "transparent"}
+                    />
+                  </Pressable>
+                ))}
+              </View>
 
-                  <TouchableOpacity
-                    style={styles.skipBtn}
-                    onPress={() => {
-                      dismissReview();
-                      setReviewRating(0);
-                      setReviewComment("");
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.skipText}>Skip for now</Text>
-                  </TouchableOpacity>
-                </View>
-              </TouchableWithoutFeedback>
+              {reviewRating === 0 ? (
+                <Text style={styles.starHint}>Tap a star to rate your ride</Text>
+              ) : (
+                <View style={{ height: 16 }} />
+              )}
+
+              <TextInput
+                placeholder="Add a comment (optional)"
+                placeholderTextColor={Colors.textSecondary}
+                value={reviewComment}
+                onChangeText={setReviewComment}
+                multiline
+                numberOfLines={3}
+                style={styles.commentInput}
+              />
+
+              <TouchableOpacity
+                style={[styles.submitBtn, reviewRating === 0 && styles.submitBtnDisabled]}
+                onPress={() => {
+                  if (reviewRating === 0) return;
+                  submitReview(reviewRating, reviewComment.trim() || undefined);
+                  setReviewRating(0);
+                  setReviewComment("");
+                }}
+                activeOpacity={reviewRating === 0 ? 1 : 0.8}
+              >
+                <Text style={[styles.submitBtnText, reviewRating === 0 && styles.submitBtnTextDisabled]}>
+                  Submit Review
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.skipBtn}
+                onPress={() => {
+                  dismissReview();
+                  setReviewRating(0);
+                  setReviewComment("");
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.skipText}>Skip for now</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
+          </View>
         </KeyboardAvoidingView>
       </Modal>
     </View>
@@ -510,14 +517,31 @@ const styles = StyleSheet.create({
   boardBtn: {
     backgroundColor: Colors.accent,
     borderRadius: 14,
-    paddingVertical: 15,
+    paddingVertical: 16,
     alignItems: "center",
     marginBottom: 10,
   },
   boardBtnText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "700",
     color: Colors.black,
+  },
+  trackBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: 12,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: Colors.accent,
+    backgroundColor: "transparent",
+    marginBottom: 8,
+  },
+  trackBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.accent,
   },
   cancelBtn: {
     flexDirection: "row",
@@ -525,10 +549,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderWidth: 1,
     borderColor: "rgba(239,68,68,0.35)",
-    backgroundColor: "rgba(239,68,68,0.06)",
+    backgroundColor: "transparent",
   },
   cancelBtnText: {
     fontSize: 14,
@@ -612,7 +636,7 @@ const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.55)",
+    backgroundColor: "rgba(17,17,17,0.55)",
   },
   modalSheet: {
     backgroundColor: Colors.surface,
@@ -673,7 +697,7 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: {
     backgroundColor: Colors.border,
-    opacity: 0.6,
+    opacity: 0.5,
   },
   submitBtnText: {
     fontSize: 16,

@@ -1,8 +1,11 @@
 import { CAMPUS_LOCATIONS, UCF_CENTER } from "@/constants/campus-locations";
 import Colors from "@/constants/colors";
+import { SHEET_MIN_HEIGHT } from "./SwipeableBottomSheet";
 import { findPath, PathNode } from "@/utils/pathfinding";
+import { useAnimatedPolyline } from "@/utils/animatePolyline";
 import * as Location from "expo-location";
-import { Car, MapPin, Navigation } from "lucide-react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { Navigation } from "lucide-react-native";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -31,6 +34,8 @@ interface CampusMapProps {
   onMapPress?: (coord: { latitude: number; longitude: number }) => void;
   hideUserLocation?: boolean; // hide blue user dot (e.g. during in_progress — use cart as reference instead)
   convexRoute?: Array<{ latitude: number; longitude: number }>; // live route from Convex (cart bridge) — overrides local A* pathfinding
+  rideStatus?: "none" | "planning" | "assigned" | "arriving" | "in_progress";
+  overlay?: React.ReactNode; // absolutely-positioned elements rendered ABOVE the native MapView
 }
 
 export default function CampusMap({
@@ -51,6 +56,8 @@ export default function CampusMap({
   onMapPress,
   hideUserLocation = false,
   convexRoute,
+  rideStatus = "none",
+  overlay,
 }: CampusMapProps) {
   const assignedCart = cartId ? allCarts?.find((c) => c._id === cartId) : null;
   const vehiclePosition = assignedCart?.location ?? vehiclePositionProp;
@@ -68,6 +75,8 @@ export default function CampusMap({
   const pathOpacity = useRef(new Animated.Value(1)).current;
   const [animatedOpacity, setAnimatedOpacity] = useState(1);
   const listenerRef = useRef<string | null>(null);
+  const animatedWalkingPath = useAnimatedPolyline(walkingPath, 800);
+  const animatedVehiclePath = useAnimatedPolyline(vehiclePath, 600);
 
   const pickupLocation = React.useMemo(() => {
     if (selectedPickup === "current-location") {
@@ -251,7 +260,10 @@ export default function CampusMap({
       }
     });
 
-    setVehiclePath(fullVehiclePathRef.current.slice(nearestIdx));
+    // Start from the waypoint AFTER the nearest one so the polyline
+    // begins at the edge of the cart marker instead of under it
+    const startIdx = Math.min(nearestIdx + 1, fullVehiclePathRef.current.length - 1);
+    setVehiclePath(fullVehiclePathRef.current.slice(startIdx));
   }, [vehiclePosition]);
 
   const handleMarkerPress = (locationId: string) => {
@@ -295,8 +307,8 @@ export default function CampusMap({
   };
 
   return (
-    <View className={fullScreen ? "flex-1 w-full h-full" : "mx-4"}>
-      <View className={fullScreen ? "w-full h-full" : "w-full h-[400px] rounded-2xl overflow-hidden"}>
+    <View pointerEvents="box-none" style={fullScreen ? { flex: 1, width: "100%", height: "100%" } : { marginHorizontal: 16 }}>
+      <View style={fullScreen ? { width: "100%", height: "100%" } : { width: "100%", height: 400, borderRadius: 16, overflow: "hidden" }}>
         <MapView
           ref={mapRef}
           style={{ flex: 1 }}
@@ -320,130 +332,249 @@ export default function CampusMap({
           showsBuildings={false}
           onPress={onMapPress ? (e) => onMapPress(e.nativeEvent.coordinate) : undefined}
         >
-          {showRoute && vehiclePath.length > 0 && (
+          {showRoute && animatedVehiclePath.length > 0 && (
             <Polyline
-              coordinates={vehiclePath}
-              strokeColor={`${Colors.accent}80`}
-              strokeWidth={4}
+              coordinates={animatedVehiclePath}
+              strokeColor={Colors.accent}
+              strokeWidth={3}
               lineCap="round"
               lineJoin="round"
-              lineDashPattern={[10, 10]}
             />
           )}
 
-          {walkingPath.length > 0 && !vehiclePosition && (
-            <>
-              <Polyline
-                coordinates={walkingPath}
-                strokeColor={`rgba(${parseInt(Colors.primary.slice(1, 3), 16)}, ${parseInt(Colors.primary.slice(3, 5), 16)}, ${parseInt(Colors.primary.slice(5, 7), 16)}, ${animatedOpacity})`}
-                strokeWidth={6}
-                lineCap="round"
-                lineJoin="round"
-              />
-            </>
+          {animatedWalkingPath.length > 0 && !vehiclePosition && (
+            <Polyline
+              coordinates={animatedWalkingPath}
+              strokeColor={`rgba(45,212,191,${animatedOpacity})`}
+              strokeWidth={3}
+              lineCap="round"
+              lineJoin="round"
+            />
           )}
 
           {CAMPUS_LOCATIONS.map((location) => {
             const isPickup = selectedPickup === location.id;
             const isDropoff = selectedDropoff === location.id;
-            const isVisible = showRoute ? isPickup || isDropoff : true;
-            if (!isVisible) return null;
+            const isSelected = isPickup || isDropoff;
+
+            // Determine marker visual state for key — forces re-mount when state changes
+            // so react-native-maps re-renders the marker view
+            const markerState = isPickup ? "pickup" : isDropoff ? "dropoff" : "default";
+
+            // When route is showing, dim unselected markers but NEVER hide them
+            // Hiding causes the bug where changing one endpoint makes the other disappear
+            const dimmed = showRoute && !isSelected;
+
+            const markerColor = isPickup
+              ? Colors.accent
+              : isDropoff
+                ? Colors.destination
+                : Colors.muted;
 
             return (
               <Marker
-                key={location.id}
+                key={`${location.id}-${markerState}`}
                 coordinate={{
                   latitude: location.latitude,
                   longitude: location.longitude,
                 }}
                 onPress={() => handleMarkerPress(location.id)}
                 title={location.name}
+                tracksViewChanges={false}
+                opacity={dimmed ? 0.25 : 1}
               >
-                <View className="items-center justify-center">
-                  <View
-                    className="w-10 h-10 rounded-full items-center justify-center border-4 border-white/90 shadow-md"
-                    style={{
-                        backgroundColor: isPickup
-                          ? Colors.accent
-                          : isDropoff
-                            ? Colors.primary
-                            : "#52525b",
+                {isSelected ? (
+                  <View style={{ alignItems: "center" }}>
+                    <View
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 14,
+                        backgroundColor: markerColor,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        borderWidth: 3,
+                        borderColor: "#FFFFFF",
+                        shadowColor: markerColor,
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.5,
+                        shadowRadius: 6,
+                        elevation: 6,
                       }}
-                  >
-                    <MapPin size={14} color="#ffffff" fill="#ffffff" />
+                    >
+                      <View
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: "#FFFFFF",
+                        }}
+                      />
+                    </View>
+                    <View
+                      style={{
+                        width: 0,
+                        height: 0,
+                        borderLeftWidth: 5,
+                        borderRightWidth: 5,
+                        borderTopWidth: 6,
+                        borderLeftColor: "transparent",
+                        borderRightColor: "transparent",
+                        borderTopColor: "#FFFFFF",
+                        marginTop: -1,
+                      }}
+                    />
                   </View>
+                ) : (
                   <View
-                    className="w-3 h-1 rounded-full opacity-30 -mt-1"
                     style={{
-                        backgroundColor: isPickup
-                          ? Colors.accent
-                          : isDropoff
-                            ? Colors.primary
-                            : "#52525b",
-                      }}
+                      width: 10,
+                      height: 10,
+                      borderRadius: 5,
+                      backgroundColor: Colors.muted,
+                      borderWidth: 1.5,
+                      borderColor: "rgba(255,255,255,0.3)",
+                    }}
                   />
-                </View>
+                )}
               </Marker>
             );
           })}
 
           {customPickupCoord && selectedPickup === "custom" && (
-            <Marker coordinate={customPickupCoord} title="Custom Pickup">
-              <View className="items-center justify-center">
+            <Marker coordinate={customPickupCoord} title="Custom Pickup" tracksViewChanges={false}>
+              <View style={{ alignItems: "center" }}>
                 <View
-                  className="w-10 h-10 rounded-full items-center justify-center border-4 border-white/90 shadow-md"
-                  style={{ backgroundColor: Colors.accent }}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: Colors.accent,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 3,
+                    borderColor: "#FFFFFF",
+                    shadowColor: Colors.accent,
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.5,
+                    shadowRadius: 6,
+                    elevation: 6,
+                  }}
                 >
-                  <MapPin size={14} color="#ffffff" fill="#ffffff" />
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFFFFF" }} />
                 </View>
-                <View className="w-3 h-1 rounded-full opacity-30 -mt-1" style={{ backgroundColor: Colors.accent }} />
+                <View
+                  style={{
+                    width: 0, height: 0,
+                    borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6,
+                    borderLeftColor: "transparent", borderRightColor: "transparent",
+                    borderTopColor: "#FFFFFF",
+                    marginTop: -1,
+                  }}
+                />
               </View>
             </Marker>
           )}
 
           {customDropoffCoord && selectedDropoff === "custom" && (
-            <Marker coordinate={customDropoffCoord} title="Custom Drop-off">
-              <View className="items-center justify-center">
+            <Marker coordinate={customDropoffCoord} title="Custom Drop-off" tracksViewChanges={false}>
+              <View style={{ alignItems: "center" }}>
                 <View
-                  className="w-10 h-10 rounded-full items-center justify-center border-4 border-white/90 shadow-md"
-                  style={{ backgroundColor: Colors.primary }}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: Colors.destination,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderWidth: 3,
+                    borderColor: "#FFFFFF",
+                    shadowColor: Colors.destination,
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.5,
+                    shadowRadius: 6,
+                    elevation: 6,
+                  }}
                 >
-                  <MapPin size={14} color="#ffffff" fill="#ffffff" />
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: "#FFFFFF" }} />
                 </View>
-                <View className="w-3 h-1 rounded-full opacity-30 -mt-1" style={{ backgroundColor: Colors.primary }} />
+                <View
+                  style={{
+                    width: 0, height: 0,
+                    borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6,
+                    borderLeftColor: "transparent", borderRightColor: "transparent",
+                    borderTopColor: "#FFFFFF",
+                    marginTop: -1,
+                  }}
+                />
               </View>
             </Marker>
           )}
 
           {/* Idle carts — shown when no ride is assigned yet */}
-          {idleCarts.map((cart) => (
+          {(rideStatus === "none" || rideStatus === "planning") && idleCarts.map((cart) => (
             <Marker
               key={cart._id}
               coordinate={{ latitude: cart.location.latitude, longitude: cart.location.longitude }}
               title={cart.name}
             >
-              <View className="w-[44px] h-[44px] rounded-full bg-surface/90 items-center justify-center border-2 border-border shadow-md">
-                <Car size={20} color={Colors.accent} />
+              <View style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: "rgba(26,26,26,0.9)",
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 2,
+                borderColor: Colors.border,
+                overflow: "hidden",
+              }}>
+                <MaterialCommunityIcons name="golf-cart" size={20} color={Colors.accent} />
               </View>
             </Marker>
           ))}
 
           {/* Assigned cart — shown after a ride is matched */}
           {vehiclePosition && (
-            <Marker coordinate={vehiclePosition} title="Your Cart">
-              <View className="w-[50px] h-[50px] rounded-full bg-accent/15 items-center justify-center border-4 border-accent shadow-lg shadow-accent">
-                <View
-                  className="w-5 h-5 rounded-full shadow-md shadow-accent"
-                  style={{ backgroundColor: Colors.accent }}
-                />
+            <Marker coordinate={vehiclePosition} title="Your Cart" tracksViewChanges={false}>
+              <View style={{
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                backgroundColor: "rgba(26,26,26,0.95)",
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 2,
+                borderColor: Colors.accent,
+                overflow: "hidden",
+              }}>
+                <MaterialCommunityIcons name="golf-cart" size={22} color={Colors.accent} />
               </View>
             </Marker>
           )}
 
           {userLocation && !hideUserLocation && (
             <Marker coordinate={userLocation} title="Your Location">
-              <View className="w-11 h-11 rounded-full bg-accent/20 items-center justify-center border-4 border-accent/30 shadow-md shadow-accent">
-                <View className="w-4 h-4 rounded-full bg-accent shadow-sm shadow-accent" />
+              <View style={{
+                width: 22,
+                height: 22,
+                borderRadius: 11,
+                backgroundColor: "rgba(59,130,246,0.2)",
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 3,
+                borderColor: "rgba(59,130,246,0.4)",
+              }}>
+                <View style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 5,
+                  backgroundColor: "#3B82F6",
+                  shadowColor: "#3B82F6",
+                  shadowOffset: { width: 0, height: 0 },
+                  shadowOpacity: 0.4,
+                  shadowRadius: 4,
+                }} />
               </View>
             </Marker>
           )}
@@ -451,30 +582,52 @@ export default function CampusMap({
 
         {fullScreen && (
           <TouchableOpacity
-            className="absolute bottom-[230px] right-5 w-14 h-14 rounded-full bg-surface items-center justify-center shadow-lg z-50"
+            style={{
+              position: "absolute",
+              bottom: SHEET_MIN_HEIGHT + 20,
+              right: 20,
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              backgroundColor: Colors.surface,
+              alignItems: "center",
+              justifyContent: "center",
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.4,
+              shadowRadius: 8,
+              elevation: 8,
+              zIndex: 50,
+            }}
             onPress={handleCenterToUser}
             activeOpacity={0.8}
           >
-            <Navigation size={24} color={Colors.text} fill={Colors.accent} />
+            <Navigation size={24} color={Colors.text} />
           </TouchableOpacity>
         )}
+
+        {overlay}
       </View>
 
       {!showRoute && !fullScreen && (
-        <View className="flex-row justify-center gap-6 mt-4 py-3 bg-white rounded-xl shadow-sm">
-          <View className="flex-row items-center gap-2">
-            <View
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: Colors.accent }}
-            />
-            <Text className="text-xs text-textSecondary font-medium">Pickup</Text>
+        <View style={{
+          flexDirection: "row",
+          justifyContent: "center",
+          gap: 24,
+          marginTop: 16,
+          paddingVertical: 12,
+          backgroundColor: Colors.surface,
+          borderRadius: 12,
+          borderWidth: 1,
+          borderColor: Colors.border,
+        }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.accent }} />
+            <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: "500" }}>Pickup</Text>
           </View>
-          <View className="flex-row items-center gap-2">
-            <View
-              className="w-3 h-3 rounded-full"
-              style={{ backgroundColor: Colors.primary }}
-            />
-            <Text className="text-xs text-textSecondary font-medium">Drop-off</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.destination }} />
+            <Text style={{ fontSize: 12, color: Colors.textSecondary, fontWeight: "500" }}>Drop-off</Text>
           </View>
         </View>
       )}

@@ -30,6 +30,7 @@ from convex_client import (
     complete_ride,
     CART_ID,
 )
+from pathfinding import find_path
 
 # Starting position (UCF campus area) -- used when idle
 IDLE_LAT = 28.6024
@@ -38,7 +39,7 @@ IDLE_LON = -81.2001
 TELEMETRY_INTERVAL = 2.0    # seconds
 POLL_INTERVAL = 5.0         # seconds
 BOARD_POLL_INTERVAL = 2.0   # seconds -- how often to check if user has boarded
-DRIVE_DURATION = 30.0       # seconds to travel between any two points
+SPEED_MPS = 4.0             # metres per second (~9 mph golf cart speed)
 COMPLETION_DIST_M = 8.0     # metres -- trigger action when within this distance
 
 
@@ -51,22 +52,50 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def lerp(a: float, b: float, t: float) -> float:
-    return a + (b - a) * t
+def compute_path_distances(waypoints: list[dict]) -> list[float]:
+    """Compute cumulative distances along the path (in metres)."""
+    dists = [0.0]
+    for i in range(1, len(waypoints)):
+        d = haversine_m(
+            waypoints[i - 1]["latitude"], waypoints[i - 1]["longitude"],
+            waypoints[i]["latitude"], waypoints[i]["longitude"],
+        )
+        dists.append(dists[-1] + d)
+    return dists
 
 
-def make_waypoints(lat1: float, lon1: float, lat2: float, lon2: float, n: int = 20) -> list:
-    return [
-        {"latitude": lerp(lat1, lat2, i / (n - 1)), "longitude": lerp(lon1, lon2, i / (n - 1))}
-        for i in range(n)
-    ]
+def interpolate_along_path(
+    waypoints: list[dict],
+    cum_dists: list[float],
+    distance_m: float,
+) -> tuple[float, float, float]:
+    """
+    Given a path and a distance along it, return (lat, lon, heading).
+    Clamps to end of path if distance exceeds total.
+    """
+    total = cum_dists[-1]
+    distance_m = max(0.0, min(distance_m, total))
+
+    for i in range(1, len(cum_dists)):
+        if cum_dists[i] >= distance_m:
+            seg_len = cum_dists[i] - cum_dists[i - 1]
+            t = (distance_m - cum_dists[i - 1]) / seg_len if seg_len > 0 else 0.0
+            lat = waypoints[i - 1]["latitude"] + (waypoints[i]["latitude"] - waypoints[i - 1]["latitude"]) * t
+            lon = waypoints[i - 1]["longitude"] + (waypoints[i]["longitude"] - waypoints[i - 1]["longitude"]) * t
+            dlat = waypoints[i]["latitude"] - waypoints[i - 1]["latitude"]
+            dlon = waypoints[i]["longitude"] - waypoints[i - 1]["longitude"]
+            heading = math.degrees(math.atan2(dlon, dlat)) % 360
+            return lat, lon, heading
+
+    last = waypoints[-1]
+    return last["latitude"], last["longitude"], 0.0
 
 
 # Phase constants
 PHASE_IDLE = "idle"
-PHASE_TO_PICKUP = "to_pickup"      # driving idle -> origin
-PHASE_WAITING_BOARD = "waiting"    # at pickup, waiting for user to board
-PHASE_TO_DEST = "to_dest"          # driving origin -> destination
+PHASE_TO_PICKUP = "to_pickup"
+PHASE_WAITING_BOARD = "waiting"
+PHASE_TO_DEST = "to_dest"
 
 
 class CartSimulator:
@@ -78,8 +107,10 @@ class CartSimulator:
         self.active_ride: Optional[dict] = None
         self.phase: str = PHASE_IDLE
         self.drive_start: Optional[float] = None
-        self.phase2_start_lat: float = IDLE_LAT
-        self.phase2_start_lon: float = IDLE_LON
+
+        # Path-following state
+        self.path: list[dict] = []
+        self.path_dists: list[float] = []
 
         self._last_telemetry = 0.0
         self._last_poll = 0.0
@@ -97,12 +128,10 @@ class CartSimulator:
                 self._send_telemetry()
                 self._last_telemetry = now
 
-            # Poll for new assignments only when idle
             if self.phase == PHASE_IDLE and now - self._last_poll >= POLL_INTERVAL:
                 self._poll(now)
                 self._last_poll = now
 
-            # Poll for user boarding while waiting at pickup
             if self.phase == PHASE_WAITING_BOARD and now - self._last_board_check >= BOARD_POLL_INTERVAL:
                 self._check_boarding(now)
                 self._last_board_check = now
@@ -110,31 +139,17 @@ class CartSimulator:
             time.sleep(0.5)
 
     def _step_position(self, now: float) -> None:
-        """Interpolate position based on current phase."""
-        if self.phase == PHASE_TO_PICKUP:
-            if self.drive_start is None:
-                return
-            elapsed = now - self.drive_start
-            t = min(elapsed / DRIVE_DURATION, 1.0)
-            origin = self.active_ride["origin"]
-            self.lat = lerp(IDLE_LAT, origin["latitude"], t)
-            self.lon = lerp(IDLE_LON, origin["longitude"], t)
-            dlat = origin["latitude"] - IDLE_LAT
-            dlon = origin["longitude"] - IDLE_LON
-            self.heading = math.degrees(math.atan2(dlon, dlat)) % 360
+        """Move along the pre-computed path at SPEED_MPS."""
+        if self.phase not in (PHASE_TO_PICKUP, PHASE_TO_DEST):
+            return
+        if self.drive_start is None or not self.path:
+            return
 
-        elif self.phase == PHASE_TO_DEST:
-            if self.drive_start is None:
-                return
-            elapsed = now - self.drive_start
-            t = min(elapsed / DRIVE_DURATION, 1.0)
-            origin = self.active_ride["origin"]
-            dest = self.active_ride["destination"]
-            self.lat = lerp(self.phase2_start_lat, dest["latitude"], t)
-            self.lon = lerp(self.phase2_start_lon, dest["longitude"], t)
-            dlat = dest["latitude"] - origin["latitude"]
-            dlon = dest["longitude"] - origin["longitude"]
-            self.heading = math.degrees(math.atan2(dlon, dlat)) % 360
+        elapsed = now - self.drive_start
+        distance_traveled = elapsed * SPEED_MPS
+        self.lat, self.lon, self.heading = interpolate_along_path(
+            self.path, self.path_dists, distance_traveled
+        )
 
     def _send_telemetry(self) -> None:
         status = "idle" if self.phase == PHASE_IDLE else "busy"
@@ -156,6 +171,8 @@ class CartSimulator:
             print(f"[SIM] Distance to pickup: {dist:.1f}m")
             if dist <= COMPLETION_DIST_M:
                 self._arrive_at_pickup()
+            else:
+                self._check_cancellation()
 
         elif self.phase == PHASE_TO_DEST:
             dest = self.active_ride["destination"]
@@ -163,6 +180,8 @@ class CartSimulator:
             print(f"[SIM] Distance to destination: {dist:.1f}m")
             if dist <= COMPLETION_DIST_M:
                 self._finish_ride()
+            else:
+                self._check_cancellation()
 
     def _poll(self, now: float) -> None:
         try:
@@ -171,14 +190,23 @@ class CartSimulator:
                 self.active_ride = ride
                 self.phase = PHASE_TO_PICKUP
                 self.drive_start = now
+                origin = ride["origin"]
+
                 print(f"[SIM] Ride assigned: {ride['_id']}")
-                print(f"[SIM]   Pickup:      ({ride['origin']['latitude']:.5f}, {ride['origin']['longitude']:.5f})")
+                print(f"[SIM]   Pickup:      ({origin['latitude']:.5f}, {origin['longitude']:.5f})")
                 print(f"[SIM]   Destination: ({ride['destination']['latitude']:.5f}, {ride['destination']['longitude']:.5f})")
-                print(f"[SIM] Phase 1: driving to pickup...")
+
+                # Compute path using campus graph
+                self.path = find_path(self.lat, self.lon, origin["latitude"], origin["longitude"])
+                self.path_dists = compute_path_distances(self.path)
+                total_m = self.path_dists[-1] if self.path_dists else 0
+                eta_s = total_m / SPEED_MPS if SPEED_MPS > 0 else 0
+
+                print(f"[SIM] Phase 1: driving to pickup ({len(self.path)} waypoints, {total_m:.0f}m, ~{eta_s:.0f}s)")
+
                 try:
-                    wps = make_waypoints(self.lat, self.lon, ride["origin"]["latitude"], ride["origin"]["longitude"])
-                    push_route(wps)
-                    print(f"[SIM] Route pushed: cart → pickup ({len(wps)} waypoints)")
+                    push_route(self.path)
+                    print(f"[SIM] Route pushed: cart -> pickup")
                 except Exception as e:
                     print(f"[SIM] Route push failed: {e}")
             else:
@@ -187,10 +215,8 @@ class CartSimulator:
             print(f"[SIM] Poll failed: {e}")
 
     def _arrive_at_pickup(self) -> None:
-        """Cart has reached pickup. Notify server and wait for user to board."""
         ride_id = self.active_ride["_id"]
         origin = self.active_ride["origin"]
-        # Snap to exact pickup coords
         self.lat = origin["latitude"]
         self.lon = origin["longitude"]
         try:
@@ -201,23 +227,56 @@ class CartSimulator:
         except Exception as e:
             print(f"[SIM] arrived_at_pickup failed: {e}")
 
+    def _check_cancellation(self) -> None:
+        ride_id = self.active_ride["_id"]
+        try:
+            status = get_ride_status(ride_id)
+            if status in ("cancelled", "completed", None):
+                print(f"[SIM] Ride {ride_id} was {status} -- aborting and returning to idle.")
+                self._abort_ride()
+        except Exception as e:
+            print(f"[SIM] Cancellation check failed: {e}")
+
+    def _abort_ride(self) -> None:
+        try:
+            push_route([])
+        except Exception:
+            pass
+        self.active_ride = None
+        self.phase = PHASE_IDLE
+        self.drive_start = None
+        self.path = []
+        self.path_dists = []
+        self.lat = IDLE_LAT
+        self.lon = IDLE_LON
+        print("[SIM] Ride aborted. Back to idle.")
+
     def _check_boarding(self, now: float) -> None:
-        """Poll ride status until user boards (status -> in_progress)."""
         ride_id = self.active_ride["_id"]
         try:
             status = get_ride_status(ride_id)
             print(f"[SIM] Waiting for board... ride status={status}")
+            if status == "cancelled":
+                print(f"[SIM] Ride cancelled while waiting at pickup.")
+                self._abort_ride()
+                return
             if status == "in_progress":
                 print(f"[SIM] User boarded! Phase 2: driving to destination...")
                 self.phase = PHASE_TO_DEST
-                self.phase2_start_lat = self.lat
-                self.phase2_start_lon = self.lon
                 self.drive_start = now
+                dest = self.active_ride["destination"]
+
+                # Compute path from current position to destination
+                self.path = find_path(self.lat, self.lon, dest["latitude"], dest["longitude"])
+                self.path_dists = compute_path_distances(self.path)
+                total_m = self.path_dists[-1] if self.path_dists else 0
+                eta_s = total_m / SPEED_MPS if SPEED_MPS > 0 else 0
+
+                print(f"[SIM] Phase 2: ({len(self.path)} waypoints, {total_m:.0f}m, ~{eta_s:.0f}s)")
+
                 try:
-                    dest = self.active_ride["destination"]
-                    wps = make_waypoints(self.lat, self.lon, dest["latitude"], dest["longitude"])
-                    push_route(wps)
-                    print(f"[SIM] Route pushed: pickup → dropoff ({len(wps)} waypoints)")
+                    push_route(self.path)
+                    print(f"[SIM] Route pushed: pickup -> dropoff")
                 except Exception as e:
                     print(f"[SIM] Route push failed: {e}")
         except Exception as e:
@@ -226,7 +285,6 @@ class CartSimulator:
     def _finish_ride(self) -> None:
         ride_id = self.active_ride["_id"]
         dest = self.active_ride["destination"]
-        # Snap to exact destination coords
         self.lat = dest["latitude"]
         self.lon = dest["longitude"]
         try:
@@ -242,6 +300,8 @@ class CartSimulator:
             self.active_ride = None
             self.phase = PHASE_IDLE
             self.drive_start = None
+            self.path = []
+            self.path_dists = []
             self.lat = IDLE_LAT
             self.lon = IDLE_LON
             print("[SIM] Back to idle.")

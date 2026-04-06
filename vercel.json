@@ -1,0 +1,6 @@
+{
+  "buildCommand": "cd packages/hmi && npm install && npx vite build",
+  "outputDirectory": "packages/hmi/dist",
+  "installCommand": "echo 'skip root install'",
+  "framework": null
+}

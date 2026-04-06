@@ -16,9 +16,12 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client"],
+    "baseUrl": ".",
     "paths": {
       "@convex-api": ["../app/convex/_generated/api"],
-      "@convex-types": ["../app/convex/_generated/dataModel"]
+      "@convex-types": ["../app/convex/_generated/dataModel"],
+      "convex": ["./node_modules/convex"],
+      "convex/*": ["./node_modules/convex/*"]
     }
   },
   "include": ["src"],

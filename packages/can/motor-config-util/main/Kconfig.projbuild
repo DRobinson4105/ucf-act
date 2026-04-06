@@ -1,0 +1,33 @@
+menu "SC3 Sender"
+
+    config CAN_TX_GPIO
+        int "TWAI TX GPIO number"
+        range 0 48
+        default 4
+        help
+            GPIO pin connected to the CAN transceiver TX line.
+
+    config CAN_RX_GPIO
+        int "TWAI RX GPIO number"
+        range 0 48
+        default 5
+        help
+            GPIO pin connected to the CAN transceiver RX line.
+
+    config MOTOR_TARGET
+        int "Motor target (1 = braking, 2 = steering)"
+        range 1 2
+        default 1
+        help
+            1 = braking motor, 2 = steering motor.
+
+    config FACTORY_RESET
+        bool "Factory reset motor after configuration"
+        default n
+        help
+            When enabled, two additional cw=0x7E frames are sent after the
+            normal save frame: one with data byte 0 = 2 (factory reset
+            command) followed by one with data byte 0 = 1 (save), matching
+            the motor's factory-reset sequence.
+
+endmenu

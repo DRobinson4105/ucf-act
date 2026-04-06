@@ -5,6 +5,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 const locationArg = v.object({
   latitude: v.number(),
@@ -103,6 +104,13 @@ export const cancelRide = mutation({
     }
 
     await ctx.db.patch(args.rideId, { status: "cancelled" });
+
+    await ctx.scheduler.runAfter(0, internal.notifications.sendPush, {
+      userId: ride.userId,
+      title: "Ride Cancelled",
+      body: "Your ride has been cancelled.",
+      rideStatus: "cancelled",
+    });
   },
 });
 
@@ -138,6 +146,27 @@ export const updateStatus = internalMutation({
     if (args.cartId !== undefined) patch.cartId = args.cartId;
     if (args.status === "completed") patch.endTime = Date.now();
     await ctx.db.patch(args.rideId, patch);
+
+    // Send push notification for critical status changes
+    const ride = await ctx.db.get(args.rideId);
+    if (!ride) return;
+
+    const pushMessages: Record<string, { title: string; body: string }> = {
+      assigned: { title: "Cart Found", body: "A self-driving cart is on the way to your pickup!" },
+      arriving: { title: "Cart Arrived", body: "Your cart has arrived! Head to your pickup." },
+      completed: { title: "Trip Complete", body: "Thanks for riding with ACT!" },
+      cancelled: { title: "Ride Cancelled", body: "Your ride has been cancelled." },
+    };
+
+    const msg = pushMessages[args.status];
+    if (msg) {
+      await ctx.scheduler.runAfter(0, internal.notifications.sendPush, {
+        userId: ride.userId,
+        title: msg.title,
+        body: msg.body,
+        rideStatus: args.status,
+      });
+    }
   },
 });
 
@@ -164,6 +193,22 @@ export const addReview = mutation({
       rating: args.rating,
       reviewComment: args.reviewComment,
     });
+  },
+});
+
+// Called by HMI — finds the active ride currently assigned to a specific cart
+export const getActiveRideForCart = query({
+  args: { cartId: v.id("carts") },
+  handler: async (ctx, args) => {
+    for (const status of ["assigned", "arriving", "in_progress"] as const) {
+      const ride = await ctx.db
+        .query("rides")
+        .withIndex("by_status", (q: any) => q.eq("status", status))
+        .filter((q: any) => q.eq(q.field("cartId"), args.cartId))
+        .first();
+      if (ride) return ride;
+    }
+    return null;
   },
 });
 

@@ -2,9 +2,9 @@
  * @file stepper_protocol_uim2852.h
  * @brief UIM2852 stepper motor SimpleCAN3.0 protocol frame encoding and parsing.
  *
- * All CW (Control Word) hex codes and data formats match the UIM342CA CAN
- * Interface Reference specification.  Byte ordering is little-endian (LSB
- * first) throughout.
+ * All CW (Control Word) hex codes and data formats match the UIM2852CA
+ * SimpleCAN3.0 protocol specification.  Byte ordering is little-endian
+ * (LSB first) throughout.
  */
 #pragma once
 
@@ -25,15 +25,19 @@ extern "C"
 //   CAN_ID = (SID << 18) | EID
 //
 // For responses (Motor -> Host):
-//   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 1) & 0x001F)
+//   ProducerID = ((EID >> 11) & 0x0060) | ((SID >> 6) & 0x001F)
 //   CW = EID & 0x00FF
 // ============================================================================
 
 // Common node IDs used by this project.
-#define UIM2852_MASTER_ID     4 // Producer ID for host controller
 #define UIM2852_NODE_STEERING 7 // Steering motor node ID
 #define UIM2852_NODE_BRAKING  6 // Braking motor node ID
 #define UIM2852_GLOBAL_ID     0 // Broadcast to all motors
+
+// The ProducerID extracted from any host-encoded CAN ID is always 4,
+// regardless of the target ConsumerID. This is a property of the
+// SimpleCAN encoding formula, not a configurable host address.
+#define UIM2852_HOST_PRODUCER_ID 4
 
 /**
  * @brief Calculate the 29-bit extended CAN ID for sending an instruction to a motor.
@@ -74,7 +78,7 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 		return false;
 
 	if (producer_id)
-		*producer_id = ((eid >> 11) & 0x0060) | ((sid >> 1) & 0x001F);
+		*producer_id = ((eid >> 11) & 0x0060) | ((sid >> 6) & 0x001F);
 	if (cw)
 		*cw = eid & 0x00FF;
 	return true;
@@ -149,6 +153,70 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 #define STEPPER_UIM2852_CW_D1 0xD1 // High-speed reciprocating / fixed-angle pulse
 
 // ============================================================================
+// CW Name Lookup
+// ============================================================================
+
+static inline const char *stepper_uim2852_cw_name(uint8_t cw)
+{
+	if (cw == STEPPER_UIM2852_CW_D1)
+		return "high-speed pulse";
+	switch (cw & 0x7F)
+	{
+	case STEPPER_UIM2852_CW_PP:     return "system params";
+	case STEPPER_UIM2852_CW_IC:     return "initial config";
+	case STEPPER_UIM2852_CW_IE:     return "info enable";
+	case STEPPER_UIM2852_CW_ML:     return "model string";
+	case STEPPER_UIM2852_CW_SN:     return "serial number";
+	case STEPPER_UIM2852_CW_ER:     return "error";
+	case STEPPER_UIM2852_CW_MT:     return "motor driver params";
+	case STEPPER_UIM2852_CW_MS:     return "motion status";
+	case STEPPER_UIM2852_CW_MO:     return "motor on/off";
+	case STEPPER_UIM2852_CW_BG:     return "begin motion";
+	case STEPPER_UIM2852_CW_ST:     return "stop";
+	case STEPPER_UIM2852_CW_MF:     return "motion param frame";
+	case STEPPER_UIM2852_CW_AC:     return "acceleration";
+	case STEPPER_UIM2852_CW_DC:     return "deceleration";
+	case STEPPER_UIM2852_CW_SS:     return "cut-in speed";
+	case STEPPER_UIM2852_CW_SD:     return "stop deceleration";
+	case STEPPER_UIM2852_CW_JV:     return "jog velocity";
+	case STEPPER_UIM2852_CW_SP:     return "speed";
+	case STEPPER_UIM2852_CW_PR:     return "relative position";
+	case STEPPER_UIM2852_CW_PA:     return "absolute position";
+	case STEPPER_UIM2852_CW_OG:     return "set origin";
+	case STEPPER_UIM2852_CW_MP:     return "pvt motion params";
+	case STEPPER_UIM2852_CW_PV:     return "pvt mode select";
+	case STEPPER_UIM2852_CW_PT:     return "pt position";
+	case STEPPER_UIM2852_CW_QP:     return "pvt queue position";
+	case STEPPER_UIM2852_CW_QV:     return "pvt queue velocity";
+	case STEPPER_UIM2852_CW_QT:     return "pvt queue time";
+	case STEPPER_UIM2852_CW_QF:     return "pvt quick feed";
+	case STEPPER_UIM2852_CW_LM:     return "software limits";
+	case STEPPER_UIM2852_CW_BL:     return "backlash";
+	case STEPPER_UIM2852_CW_DV:     return "desired values";
+	case STEPPER_UIM2852_CW_IL:     return "input logic";
+	case STEPPER_UIM2852_CW_TG:     return "trigger";
+	case STEPPER_UIM2852_CW_DI:     return "digital io";
+	case STEPPER_UIM2852_CW_QE:     return "encoder/stall";
+	case STEPPER_UIM2852_CW_NOTIFY: return "notification";
+	case STEPPER_UIM2852_CW_SY:     return "system operation";
+	default:                        return "unknown";
+	}
+}
+
+// Returns a short type label for an RX extended frame based on the command word.
+static inline const char *stepper_uim2852_rx_type(uint8_t cw)
+{
+	uint8_t cw_base = cw & 0x7F;
+	if (cw_base == STEPPER_UIM2852_CW_ER)
+		return "ERR  ";
+	if (cw_base == STEPPER_UIM2852_CW_NOTIFY)
+		return "NOTIF";
+	if (cw & 0x80)
+		return "ACK  ";
+	return "RSP  ";
+}
+
+// ============================================================================
 // Parameter Indices
 // ============================================================================
 
@@ -186,7 +254,6 @@ static inline bool stepper_uim2852_parse_can_id(uint32_t can_id, uint8_t *produc
 #define STEPPER_UIM2852_MT_WORKING_CURRENT   1 // Working current (5-80 = 0.5-8.0A in 0.1A steps)
 #define STEPPER_UIM2852_MT_IDLE_CURRENT      2 // Idle current (0-100% of working current)
 #define STEPPER_UIM2852_MT_AUTO_ENABLE_DELAY 3 // Auto-enable delay (0-60000 ms)
-#define STEPPER_UIM2852_MT_BRAKE             5 // Internal brake (0=release, 1=engage/lock)
 
 // MS[i] - Motion status query (CW: 0x11)
 #define STEPPER_UIM2852_MS_FLAGS_RELPOS 0 // Status flags + relative position
@@ -293,10 +360,9 @@ typedef struct
 	int32_t relative_position;
 } stepper_uim2852_status_t;
 
-// Notification structure
+// Notification structure (payload only — node identity comes from the CAN ID)
 typedef struct
 {
-	uint8_t node_id;
 	bool is_alarm;    // true if alarm (d0==0x00), false if status
 	uint8_t type;     // notification type code (alarm code or status code)
 	int32_t position; // For PTP_COMPLETE, current position from d4-d7
@@ -627,56 +693,41 @@ uint8_t stepper_uim2852_build_qe_query(uint8_t *data, uint8_t index);
  */
 uint8_t stepper_uim2852_build_qe_set(uint8_t *data, uint8_t index, uint16_t value);
 
-/**
- * @brief Build a Brake Control frame (MT[5] instruction, CW 0x10).
- *
- * Engages or releases the internal brake by setting motor driver
- * parameter MT[5].
- *
- * @param data    [out] Frame data buffer (at least 8 bytes)
- * @param engage  true to engage (lock) the brake, false to release it
- * @return Data length (DL) for the CAN frame (3)
- */
-uint8_t stepper_uim2852_build_brake(uint8_t *data, bool engage);
-
 // ============================================================================
 // PT/PVT Interpolated Motion Frame Builders
 // ============================================================================
-// Position-Time (PT) mode queues (position, time) waypoints in the motor's
-// internal FIFO.  The motor smoothly interpolates between waypoints,
-// eliminating the jerk caused by repeated PTP (PA+BG) re-profiling.
+// Position-Time (PT) mode stores absolute position waypoints in the motor's
+// internal FIFO.  The fixed segment duration is configured separately via
+// MP[4], and the motor derives velocity internally between successive PT rows.
 //
 // Typical usage:
-//   1. build_pv(mode=1, start) — select PT mode, start interpolation
-//   2. build_pt(position, time_ms) — feed waypoints at control loop rate
-//      OR build_qf(position, time_ms) — packed single-frame variant
-//   3. build_pv(mode=1, stop) — stop PT interpolation
-//   4. build_st() — stop motion if needed
+//   1. Configure MP[1..5] for PT FIFO mode (MP[3]=0, MP[4]=frame time)
+//   2. build_pt(row, position) - preload a few PT rows
+//   3. build_pv(start_row) - select the first PT row to execute
+//   4. build_bg() - begin interpolated motion
+//   5. Continue feeding build_pt(next_row, position) while motion is active
 
 /**
- * @brief Build a PVT/PT Mode Select and Start/Stop frame (PV instruction, CW 0x23).
- *
- * Selects the interpolation mode and starts or stops interpolated motion.
+ * @brief Build a PV frame (CW 0x23) to select the starting PT/PVT table row.
  *
  * @param data   [out] Frame data buffer (at least 8 bytes)
- * @param mode   Interpolation mode (0 = PVT cubic spline, 1 = PT linear, 2 = PT circular)
- * @param start  true to begin interpolation, false to stop
- * @return Data length (DL) for the CAN frame (1)
+ * @param start_row  Index of the first PT/PVT row to execute
+ * @return Data length (DL) for the CAN frame (2)
  */
-uint8_t stepper_uim2852_build_pv(uint8_t *data, uint8_t mode, bool start);
+uint8_t stepper_uim2852_build_pv(uint8_t *data, uint16_t start_row);
 
 /**
- * @brief Build a PT Position + Time feed frame (PT instruction, CW 0x24).
+ * @brief Build a PT row write frame (PT instruction, CW 0x24).
  *
- * Feeds an absolute position and time waypoint into the motor's PT FIFO.
- * The motor will move to the specified position within the given time.
+ * Writes an absolute PT position into a numbered row of the PT table.
+ * The fixed PT segment time is configured separately via MP[4].
  *
  * @param data      [out] Frame data buffer (at least 8 bytes)
- * @param position  Absolute target position in pulses (signed 32-bit LE, bytes 0-3)
- * @param time_ms   Time to reach the position in milliseconds (unsigned 32-bit LE, bytes 4-7)
+ * @param row       PT row index (0-511)
+ * @param position  Absolute target position in pulses (signed 32-bit LE)
  * @return Data length (DL) for the CAN frame (8)
  */
-uint8_t stepper_uim2852_build_pt(uint8_t *data, int32_t position, uint32_t time_ms);
+uint8_t stepper_uim2852_build_pt(uint8_t *data, uint16_t row, int32_t position);
 
 /**
  * @brief Build a PVT Queue Position frame (QP instruction, CW 0x25).
@@ -712,17 +763,18 @@ uint8_t stepper_uim2852_build_qv(uint8_t *data, int32_t velocity);
 uint8_t stepper_uim2852_build_qt(uint8_t *data, uint32_t time_ms);
 
 /**
- * @brief Build a Quick Feed frame (QF instruction, CW 0x29).
+ * @brief Build a PVT Quick Feed frame (QF instruction, CW 0x29).
  *
- * Packs an absolute position and time into a single 8-byte CAN frame,
- * equivalent to issuing QP + QT but using only one bus transaction.
+ * Packs QT (8-bit), QV (24-bit signed), and QP (32-bit signed) into a single
+ * 8-byte frame for PVT FIFO mode.  This instruction is not used for PT mode.
  *
- * @param data      [out] Frame data buffer (at least 8 bytes)
- * @param position  Absolute position in pulses (signed 32-bit LE, bytes 0-3)
- * @param time_ms   Time segment in milliseconds (unsigned 32-bit LE, bytes 4-7)
+ * @param data       [out] Frame data buffer (at least 8 bytes)
+ * @param time_ms    Segment time in milliseconds (stored as unsigned 8-bit)
+ * @param velocity   Target velocity in pulses/sec (stored as signed 24-bit LE)
+ * @param position   Absolute position in pulses (signed 32-bit LE)
  * @return Data length (DL) for the CAN frame (8)
  */
-uint8_t stepper_uim2852_build_qf(uint8_t *data, int32_t position, uint32_t time_ms);
+uint8_t stepper_uim2852_build_qf(uint8_t *data, uint8_t time_ms, int32_t velocity, int32_t position);
 
 /**
  * @brief Build a Query Model String frame (ML instruction, CW 0x0B).

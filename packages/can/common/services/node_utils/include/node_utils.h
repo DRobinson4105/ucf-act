@@ -88,7 +88,7 @@ static inline void node_task_wdt_reset_or_log(const char *tag, const char *task_
 /**
  * @brief Log that a component has been lost (transition to unhealthy).
  * @param tag     ESP_LOG tag
- * @param name    Component name (e.g. "MULTIPLEXER")
+ * @param name    Component name (e.g. "DAC")
  * @param detail  Optional detail string (may be NULL or empty)
  */
 static inline void node_log_component_lost(const char *tag, const char *name, const char *detail)
@@ -140,39 +140,6 @@ static inline void node_mark_component_lost(volatile bool *ready, const char *ta
 		node_log_component_lost(tag, name, detail);
 	}
 	*ready = false;
-}
-
-// ============================================================================
-// CAN TX Quiesce
-// ============================================================================
-
-/**
- * @brief Wait for CAN RX task to exit TWAI API calls and all in-flight TX
- *        to complete.
- *
- * Must be called after setting g_twai_ready = false. The initial delay
- * (20 ms) exceeds the CAN_RX_TIMEOUT bound so the RX task has returned
- * from twai_receive(). Then we spin-wait up to 20 ms for any in-flight
- * heartbeat TX to drain.
- *
- * @param lock        Spinlock protecting the in-flight counter
- * @param in_flight   Pointer to the in-flight TX counter
- */
-static inline void node_quiesce_can_rx(portMUX_TYPE *lock, volatile uint8_t *in_flight)
-{
-	vTaskDelay(pdMS_TO_TICKS(20));
-
-	// Wait for any in-flight heartbeat TX to complete before touching
-	// TWAI driver state.
-	for (int i = 0; i < 20; ++i)
-	{
-		taskENTER_CRITICAL(lock);
-		uint8_t n = *in_flight;
-		taskEXIT_CRITICAL(lock);
-		if (n == 0)
-			break;
-		vTaskDelay(pdMS_TO_TICKS(1));
-	}
 }
 
 #ifdef __cplusplus

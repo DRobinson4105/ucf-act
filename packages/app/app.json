@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "ACT - Campus Taxi",
 		"slug": "act-campus-taxi",
-		"version": "5.0.1",
+		"version": "9.1.0",
 		"orientation": "portrait",
 		"icon": "./assets/images/icon.png",
 		"scheme": "myapp",
@@ -11,11 +11,12 @@
 		"splash": {
 			"image": "./assets/images/splash-icon.png",
 			"resizeMode": "contain",
-			"backgroundColor": "#ffffff"
+			"backgroundColor": "#111111"
 		},
 		"ios": {
 			"supportsTablet": true,
 			"bundleIdentifier": "com.ucf.act",
+			"icon": "./assets/images/icon.png",
 			"infoPlist": {
 				"NSAppTransportSecurity": {
 					"NSAllowsArbitraryLoads": true
@@ -24,10 +25,32 @@
 				"NSLocationAlwaysUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
 				"NSLocationWhenInUseUsageDescription": "ACT needs your location to show your position on the map and provide ride services.",
 				"UIBackgroundModes": [
-					"location"
+					"location",
+					"remote-notification"
 				],
-				"ITSAppUsesNonExemptEncryption": false
+				"ITSAppUsesNonExemptEncryption": false,
+				"NSSupportsLiveActivities": true
 			}
+		},
+		"android": {
+			"adaptiveIcon": {
+				"foregroundImage": "./assets/images/android-icon-foreground.png",
+				"monochromeImage": "./assets/images/android-icon-monochrome.png",
+				"backgroundColor": "#111111"
+			},
+			"permissions": [
+				"android.permission.ACCESS_COARSE_LOCATION",
+				"android.permission.ACCESS_FINE_LOCATION",
+				"android.permission.ACCESS_BACKGROUND_LOCATION",
+				"android.permission.FOREGROUND_SERVICE",
+				"android.permission.FOREGROUND_SERVICE_LOCATION",
+				"android.permission.ACCESS_COARSE_LOCATION",
+				"android.permission.ACCESS_FINE_LOCATION",
+				"android.permission.ACCESS_BACKGROUND_LOCATION",
+				"android.permission.FOREGROUND_SERVICE",
+				"android.permission.FOREGROUND_SERVICE_LOCATION"
+			],
+			"package": "com.ucf.act"
 		},
 		"plugins": [
 			"expo-router",
@@ -51,7 +74,21 @@
 				}
 			],
 			"expo-secure-store",
-			"expo-apple-authentication"
+			"expo-apple-authentication",
+			[
+				"expo-notifications",
+				{
+					"icon": "./assets/images/ucf_act_logo_notext.png",
+					"color": "#2DD4BF"
+				}
+			],
+			[
+				"expo-live-activity",
+				{
+					"enablePushNotifications": true
+				}
+			],
+			"./plugins/withCustomLiveActivity"
 		],
 		"extra": {
 			"router": {},

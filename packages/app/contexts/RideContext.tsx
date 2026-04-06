@@ -2,9 +2,31 @@ import { CAMPUS_LOCATIONS } from "@/constants/campus-locations";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Notification, Ride, RideStatus } from "@/types/ride";
+import {
+  startRideActivity,
+  updateRideActivity,
+  endRideActivity,
+  hasActiveActivity,
+} from "@/utils/liveActivity";
 import createContextHook from "@nkzw/create-context-hook";
 import { useMutation, useQuery } from "convex/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+function haversineDistanceMi(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 3958.8;
+  const toRad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * toRad;
+  const dLon = (lon2 - lon1) * toRad;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 export interface PendingReview {
   rideId: Id<"rides">;
@@ -30,6 +52,11 @@ function findLocationId(lat: number, lon: number): string {
 export const [RideProvider, useRide] = createContextHook(() => {
   const activeRideData = useQuery(api.rides.getActiveRide);
   const rideHistoryData = useQuery(api.rides.getRideHistory);
+  const assignedCartId = activeRideData?.cartId;
+  const assignedCart = useQuery(
+    api.carts.getById,
+    assignedCartId ? { cartId: assignedCartId } : "skip"
+  );
   const requestRideMutation = useMutation(api.rides.requestRide);
   const cancelRideMutation = useMutation(api.rides.cancelRide);
   const boardRideMutation = useMutation(api.rides.boardRide);
@@ -38,7 +65,10 @@ export const [RideProvider, useRide] = createContextHook(() => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
   const prevStatusRef = useRef<RideStatus | null>(null);
+  const prevLAStatusRef = useRef<RideStatus | null>(null);
   const prevRideRef = useRef<Ride | null>(null);
+  const initialDistanceRef = useRef<number | null>(null);
+  const prevDistTargetRef = useRef<string | null>(null);
 
   // Map Convex activeRide to the local Ride type consumed by UI components
   const currentRide: Ride | null = useMemo(() => {
@@ -147,6 +177,97 @@ export const [RideProvider, useRide] = createContextHook(() => {
       setNotifications((prev) => [notification, ...prev]);
     }
   }, [currentRide?.status]);
+
+  // Trigger Live Activity start/stop on status transitions (uses its own ref to
+  // avoid the race where the notification effect above already updated prevStatusRef)
+  useEffect(() => {
+    const status = currentRide?.status ?? null;
+    const prev = prevLAStatusRef.current;
+    if (status === prev) return;
+    prevLAStatusRef.current = status;
+
+    // Reset distance tracking when target changes
+    const targetType = status === "in_progress" ? "dropoff" : "pickup";
+    if (targetType !== prevDistTargetRef.current) {
+      initialDistanceRef.current = null;
+      prevDistTargetRef.current = targetType;
+    }
+
+    if (!status) {
+      if (prev) endRideActivity();
+      return;
+    }
+
+    if (status === "requested" || status === "assigned") {
+      const pickupLoc = CAMPUS_LOCATIONS.find(
+        (l) => l.id === currentRide!.pickupLocationId
+      );
+      const dropoffLoc = CAMPUS_LOCATIONS.find(
+        (l) => l.id === currentRide!.dropoffLocationId
+      );
+      if (!hasActiveActivity()) {
+        startRideActivity({
+          cartName: "ACT-001",
+          pickupName: pickupLoc?.shortName ?? "Pickup",
+          dropoffName: dropoffLoc?.shortName ?? "Destination",
+          status,
+        });
+      } else {
+        // LA already running (requested → assigned) — just update text
+        updateRideActivity(status);
+      }
+    } else if (status === "arriving" || status === "in_progress") {
+      // Update status text immediately; distance effect will follow with progress
+      updateRideActivity(status);
+    } else if (status === "completed" || status === "cancelled") {
+      endRideActivity();
+    }
+  }, [currentRide?.status, currentRide?.pickupLocationId, currentRide?.dropoffLocationId]);
+
+  // Update Live Activity with distance/progress whenever cart position changes
+  useEffect(() => {
+    if (!currentRide || !activeRideData || !assignedCart?.location) return;
+    if (!hasActiveActivity()) return;
+
+    const status = currentRide.status;
+    if (!["assigned", "arriving", "in_progress"].includes(status)) return;
+
+    const target =
+      status === "in_progress"
+        ? activeRideData.destination
+        : activeRideData.origin;
+
+    const dist = haversineDistanceMi(
+      assignedCart.location.latitude,
+      assignedCart.location.longitude,
+      target.latitude,
+      target.longitude
+    );
+
+    if (initialDistanceRef.current === null || dist > initialDistanceRef.current) {
+      initialDistanceRef.current = dist;
+    }
+
+    const total = initialDistanceRef.current;
+    const progress = total > 0.01 ? Math.max(0, Math.min(1, 1 - dist / total)) : 0;
+
+    const destLoc =
+      status === "in_progress"
+        ? CAMPUS_LOCATIONS.find((l) => l.id === currentRide.dropoffLocationId)
+        : CAMPUS_LOCATIONS.find((l) => l.id === currentRide.pickupLocationId);
+
+    updateRideActivity(status, {
+      distanceMiles: dist,
+      progress,
+      destinationName: destLoc?.shortName ?? "Destination",
+    });
+  }, [
+    assignedCart?.location?.latitude,
+    assignedCart?.location?.longitude,
+    currentRide?.status,
+    activeRideData?.origin,
+    activeRideData?.destination,
+  ]);
 
   const requestRide = useCallback(
     async (

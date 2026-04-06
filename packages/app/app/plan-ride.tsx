@@ -6,9 +6,9 @@ import { useRide } from "@/contexts/RideContext";
 import { api } from "@/convex/_generated/api";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import {
     ArrowLeft,
-    Car,
     Clock,
     MapPin,
     Navigation,
@@ -21,6 +21,7 @@ import {
     Dimensions,
     FlatList,
     Keyboard,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
@@ -59,13 +60,11 @@ const RIDE_OPTIONS: RideOption[] = [
 interface RideTrackingContentProps {
   pickupLocation: { name: string } | null;
   dropoffLocation: { name: string } | null | undefined;
-  onBack: () => void;
 }
 
 function RideTrackingContent({
   pickupLocation,
   dropoffLocation,
-  onBack,
 }: RideTrackingContentProps) {
   const { currentRide, cancelRide, boardRide } = useRide();
 
@@ -86,7 +85,6 @@ function RideTrackingContent({
 
   const handleCancelRide = () => {
     cancelRide();
-    onBack();
   };
 
   const statusInfo = getStatusInfo();
@@ -95,7 +93,7 @@ function RideTrackingContent({
     ["requested", "assigned", "arriving", "in_progress"].includes(currentRide.status);
 
   return (
-    <ScrollView style={styles.sheetContent} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.sheetContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
       <View style={styles.statusCard}>
         <Text style={styles.statusTitle}>{statusInfo.title}</Text>
         <Text style={styles.statusSubtitle}>{statusInfo.subtitle}</Text>
@@ -115,7 +113,7 @@ function RideTrackingContent({
             <Text style={styles.autonomousLabel}>Autonomous · Free</Text>
           </View>
           <View style={styles.vehicleIcon}>
-            <Car size={28} color={Colors.accent} />
+            <MaterialCommunityIcons name="golf-cart" size={28} color={Colors.accent} />
           </View>
         </View>
       </View>
@@ -320,28 +318,36 @@ export default function PlanRideScreen() {
   };
 
   const prevRideIdRef = useRef<string | undefined>(undefined);
+  const prevRideStatusRef = useRef<string | undefined>(undefined);
 
-  useEffect(() => {
-    if (!currentRide) return;
-    // As soon as any ride record exists, leave the "finding" spinner
-    if (viewMode === "finding") {
-      setViewMode("tracking");
-    }
-    if (viewMode === "tracking" && currentRide.status === "cancelled") {
-      setViewMode("planning");
-    }
-  }, [viewMode, currentRide?.status]);
-
-  // Watch for ride completion (active ride disappears → dismiss plan-ride, review modal handles itself)
+  // Sync viewMode with ride lifecycle:
+  // - Ride appears while on planning/finding → switch to tracking
+  // - Ride disappears after in_progress (completed) → dismiss screen
+  // - Ride disappears otherwise (cancelled) → back to planning
   const { rideHistory } = useRide();
   useEffect(() => {
-    if (viewMode !== "tracking") return;
-    if (!prevRideIdRef.current && currentRide) {
+    if (currentRide) {
       prevRideIdRef.current = currentRide.id;
+      prevRideStatusRef.current = currentRide.status;
+      if (viewMode === "planning" || viewMode === "finding") {
+        setViewMode("tracking");
+      }
+      return;
     }
-    if (prevRideIdRef.current && !currentRide) {
+
+    // currentRide is null — ride ended
+    if (prevRideIdRef.current) {
+      const wasInProgress = prevRideStatusRef.current === "in_progress";
       prevRideIdRef.current = undefined;
-      router.dismiss();
+      prevRideStatusRef.current = undefined;
+
+      if (wasInProgress) {
+        // Completed ride → dismiss to home (review modal handles itself)
+        router.dismiss();
+      } else if (viewMode === "tracking" || viewMode === "finding") {
+        // Cancelled ride → back to planning
+        setViewMode("planning");
+      }
     }
   }, [viewMode, currentRide, rideHistory]);
 
@@ -453,14 +459,27 @@ export default function PlanRideScreen() {
         hideUserLocation={currentRide?.status === "in_progress"}
         allCarts={allCarts ?? []}
         convexRoute={convexRoute}
+        rideStatus={
+          viewMode === "tracking"
+            ? (currentRide?.status === "in_progress"
+                ? "in_progress"
+                : currentRide?.status === "arriving"
+                  ? "arriving"
+                  : "assigned")
+            : pickupLocationObj && dropoffLocationObj
+              ? "planning"
+              : "none"
+        }
+        overlay={
+          <Pressable
+            style={[styles.backButton, { top: insets.top + 12 }]}
+            onPress={() => router.back()}
+            hitSlop={8}
+          >
+            <ArrowLeft size={24} color={Colors.text} />
+          </Pressable>
+        }
       />
-
-      <TouchableOpacity
-        style={[styles.backButton, { top: insets.top + 12 }]}
-        onPress={() => router.back()}
-      >
-        <ArrowLeft size={24} color={Colors.text} />
-      </TouchableOpacity>
 
       <SwipeableBottomSheet
         initiallyExpanded={false}
@@ -488,12 +507,12 @@ export default function PlanRideScreen() {
           <RideTrackingContent
             pickupLocation={pickupLocationObj}
             dropoffLocation={dropoffLocationObj}
-            onBack={() => setViewMode("planning")}
           />
         ) : viewMode === "choosing" ? (
           <ScrollView
             style={styles.sheetContent}
             showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           >
             <TouchableOpacity
               style={styles.backButtonInline}
@@ -516,7 +535,7 @@ export default function PlanRideScreen() {
                   onPress={() => setSelectedRide(option.id)}
                 >
                   <View style={styles.rideIconContainer}>
-                    <Car size={32} color={Colors.accent} />
+                    <MaterialCommunityIcons name="golf-cart" size={32} color={Colors.accent} />
                     <View style={styles.capacityBadge}>
                       <Text style={styles.capacityText}>{option.capacity}</Text>
                     </View>
@@ -583,9 +602,6 @@ export default function PlanRideScreen() {
                 </Text>
               </View>
             </TouchableOpacity>
-            <Text style={styles.dropPinHint}>
-              Or tap anywhere on the map to drop a pin
-            </Text>
             <TouchableOpacity
               style={[
                 styles.collapsedButton,
@@ -603,6 +619,9 @@ export default function PlanRideScreen() {
                 {getButtonText()}
               </Text>
             </TouchableOpacity>
+            <Text style={styles.dropPinHint}>
+              Or tap anywhere on the map to drop a pin
+            </Text>
           </View>
         ) : (
           <ScrollView
@@ -617,7 +636,7 @@ export default function PlanRideScreen() {
                   ref={pickupInputRef}
                   style={styles.textInput}
                   placeholder="Pickup location"
-                  placeholderTextColor="#9CA3AF"
+                  placeholderTextColor={Colors.textSecondary}
                   value={pickupSearchQuery || pickupLocation}
                   onChangeText={(text) => {
                     setPickupSearchQuery(text);
@@ -659,7 +678,7 @@ export default function PlanRideScreen() {
                   onPress={handleSetCurrentLocation}
                   style={styles.currentLocationButton}
                 >
-                  <Navigation size={20} color="#6B7280" />
+                  <Navigation size={20} color={Colors.textSecondary} />
                 </TouchableOpacity>
               </View>
 
@@ -671,7 +690,7 @@ export default function PlanRideScreen() {
                   ref={destinationInputRef}
                   style={styles.textInput}
                   placeholder="Where to?"
-                  placeholderTextColor="#9CA3AF"
+                  placeholderTextColor={Colors.textSecondary}
                   value={dropoffSearchQuery || dropoffLocation}
                   onChangeText={(text) => {
                     setDropoffSearchQuery(text);
@@ -705,7 +724,7 @@ export default function PlanRideScreen() {
                   returnKeyType="search"
                   blurOnSubmit={false}
                 />
-                <Search size={20} color="#6B7280" />
+                <Search size={20} color={Colors.textSecondary} />
               </View>
             </View>
 
@@ -732,7 +751,7 @@ export default function PlanRideScreen() {
                       }}
                     >
                       <View style={styles.locationIcon}>
-                        <Clock size={20} color="#6B7280" />
+                        <Clock size={20} color={Colors.textSecondary} />
                       </View>
                       <View style={styles.locationInfo}>
                         <Text style={styles.locationName}>{item.name}</Text>
@@ -777,7 +796,6 @@ const styles = StyleSheet.create({
   },
   backButton: {
     position: "absolute",
-    top: 60,
     left: 20,
     width: 48,
     height: 48,
@@ -831,8 +849,8 @@ const styles = StyleSheet.create({
   },
   collapsedButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -843,7 +861,7 @@ const styles = StyleSheet.create({
   collapsedButtonText: {
     fontSize: 16,
     fontWeight: "700" as const,
-    color: Colors.white,
+    color: Colors.black,
   },
   collapsedButtonTextDisabled: {
     color: Colors.textSecondary,
@@ -934,8 +952,8 @@ const styles = StyleSheet.create({
   },
   confirmButton: {
     backgroundColor: Colors.accent,
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 8,
@@ -948,7 +966,7 @@ const styles = StyleSheet.create({
   confirmButtonText: {
     fontSize: 16,
     fontWeight: "700" as const,
-    color: Colors.white,
+    color: Colors.black,
   },
   confirmButtonTextDisabled: {
     color: Colors.textSecondary,
@@ -1079,7 +1097,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   timerContainer: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: Colors.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
@@ -1165,15 +1183,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: Colors.surface,
+    backgroundColor: "transparent",
     borderRadius: 12,
-    paddingVertical: 16,
+    paddingVertical: 14,
     borderWidth: 1,
-    borderColor: Colors.error,
+    borderColor: "rgba(239,68,68,0.35)",
     marginBottom: 20,
   },
   cancelButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "600" as const,
     color: Colors.error,
   },
@@ -1195,8 +1213,8 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   boardButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
+    backgroundColor: Colors.accent,
+    borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
     justifyContent: "center",
@@ -1205,7 +1223,7 @@ const styles = StyleSheet.create({
   boardButtonText: {
     fontSize: 16,
     fontWeight: "700" as const,
-    color: Colors.white,
+    color: Colors.black,
   },
 });
 

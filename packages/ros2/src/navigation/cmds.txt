@@ -1,5 +1,5 @@
 ros2 run tf2_ros static_transform_publisher 0 0 0 0 0 0 map base_link
-ros2 run act_navigation act_global_path_manager --ros-args -p datum_lat:=28.602123 -p datum_lon:=-81.200456 -p datum_alt:=0.0
+ros2 run navigation global_path_manager --ros-args -p datum_lat:=28.602123 -p datum_lon:=-81.200456 -p datum_alt:=0.0
 ros2 topic pub --once /ui/global_route_wgs84_json std_msgs/msg/String "{data: '$(tr -d '\n' < su-millican.json)'}"
 rviz2
 - /global_path
@@ -12,8 +12,7 @@ FOR LOCAL PATH TESTING 2/15
 make sure sim time params are off!!!!
 ```
 ros2 launch bringup act.launch.py
-ros2 run navigation clicked_point_path_publisher --ros-args -p global_frame:=odom -p base_frame:=base_link -p path_topic:=/global_path
-ros2 run navigation follow_path_client --ros-args -p global_path_topic:=/global_path -p action_name:=/follow_path -p controller_id:=FollowPath -p goal_checker_id:=general_goal_checker
+ros2 run navigation clicked_point_to_path --ros-args -p global_frame:=odom -p base_frame:=base_link -p path_topic:=/global_path
 rviz2
 ```
 

@@ -58,6 +58,7 @@ export default function HistoryScreen() {
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         {rideHistory.length === 0 ? (
           <View style={styles.emptyState}>

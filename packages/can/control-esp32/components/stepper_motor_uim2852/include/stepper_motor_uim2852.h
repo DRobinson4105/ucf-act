@@ -13,27 +13,22 @@
  *
  *   1. CAN bus must be initialized and running (TWAI driver started).
  *   2. **MO=0** (driver off) — immediately de-energize coils.
- *   3. **MT[5]=1** (brake engage) — mechanically lock the shaft.
- *   4. **IC[0]=0** (disable auto-enable) — prevent driver from enabling
+ *   3. **IC[0]=0** (disable auto-enable) — prevent driver from enabling
  *      on future power cycles before host configures the motor.
- *   5. **IC[8]=1** (brake safety interlock) — motor controller refuses
- *      MO=1 unless brake is explicitly released first.
- *   6. Configure motion parameters: SP, AC, DC, SD.
- *   7. Configure software limits: LM[1], LM[2], IC[7]=1.
- *   8. **MO=0** (redundant disable) — ensure driver stays off.
+ *   4. Configure motion parameters: SP, AC, DC, SD.
+ *   5. Configure software limits: LM[1], LM[2], IC[7]=1.
+ *   6. **MO=0** (redundant disable) — ensure driver stays off.
  *
- * Steps 2-8 are performed by init_stepper_checked() in main.cpp.
+ * Steps 2-6 are performed by init_stepper_checked() in main.cpp.
  * The ENABLE transition later performs:
  *
- *   9. **MT[5]=0** (brake release)
- *  10. **MO=1** (driver enable)
- *  11. Begin accepting position commands.
+ *   7. **MO=1** (driver enable)
+ *   8. Begin accepting position commands.
  *
  * The DISABLE / E-STOP sequence reverses this:
  *
- *  12. **ST** (deceleration stop)
- *  13. **MT[5]=1** (brake engage)
- *  14. **MO=0** (driver off)
+ *   9. **ST** (deceleration stop)
+ *  10. **MO=0** (driver off)
  */
 
 #pragma once
@@ -59,12 +54,13 @@ extern "C"
 
 typedef struct
 {
-	uint8_t node_id;        // Motor's CAN node ID — used as consumer ID when sending commands
-	uint8_t producer_id;    // Motor's response producer ID — used to match incoming frames
-	uint32_t default_accel; // Default acceleration in pulses/sec^2
-	uint32_t default_decel; // Default deceleration in pulses/sec^2
-	uint32_t stop_decel;    // Emergency stop deceleration rate
-	bool request_ack;       // Request ACK for commands (recommended)
+	uint8_t node_id;          // Motor's CAN node ID — used as consumer ID when sending commands
+	uint8_t producer_id;      // Motor's response producer ID — used to match incoming frames
+	uint32_t default_accel;   // Default acceleration in pulses/sec^2
+	uint32_t default_decel;   // Default deceleration in pulses/sec^2
+	uint32_t stop_decel;      // Emergency stop deceleration rate
+	uint16_t working_current; // Working current in 0.1A units (e.g. 8 = 0.8A)
+	bool request_ack;         // Request ACK for commands (recommended)
 } stepper_motor_uim2852_config_t;
 
 // Default configuration
@@ -75,6 +71,7 @@ typedef struct
 		.default_accel = 5000,                 \
 		.default_decel = 5000,                 \
 		.stop_decel = 8000,                    \
+		.working_current = 8,                  \
 		.request_ack = true,                   \
 	}
 
@@ -89,6 +86,9 @@ typedef struct stepper_motor_uim2852
 	// Status from last MS[0] query
 	stepper_uim2852_status_t status;
 
+	// Last error reported by motor (valid when status.error_detected is true)
+	stepper_uim2852_error_t last_error;
+
 	// Speed and position from last MS[1] query
 	int32_t current_speed;     // pulses/sec
 	int32_t absolute_position; // pulses
@@ -97,6 +97,9 @@ typedef struct stepper_motor_uim2852
 	// Tracking
 	TickType_t last_response_tick;
 	TickType_t last_command_tick;
+	uint8_t last_tx_data[8];    // last transmitted payload bytes
+	uint8_t last_tx_dlc;        // last transmitted DLC
+	bool last_tx_request_ack;   // whether last transmitted frame requested ACK
 
 	// Configuration (queried from motor)
 	uint16_t microstep_resolution; // From PP[5] (uint16_t to support 256 microsteps)
@@ -110,9 +113,14 @@ typedef struct stepper_motor_uim2852
 	uint8_t last_cw_sent; // Last control word sent
 
 	// PT (Position-Time) interpolation mode state
-	bool pt_mode_active; // true while PT interpolation is running
-	bool pt_fifo_empty;  // set by PVT FIFO empty notification (0x2A)
-	bool pt_fifo_low;    // set by PVT FIFO low warning notification (0x2B)
+	bool pt_mode_active;       // true after PT FIFO mode is armed with PV=start_row
+	bool pt_motion_started;    // true after BG has been sent for the current PT FIFO run
+	bool pt_fifo_empty;        // set by PVT FIFO empty notification (0x2A)
+	bool pt_fifo_low;          // set by PVT FIFO low warning notification (0x2B)
+	uint16_t pt_frame_time_ms; // fixed PT frame time configured via MP[4]
+	uint16_t pt_write_index;   // next PT table row to write (0-511)
+	uint8_t pt_prefill_count;  // number of PT rows queued before BG start
+	uint8_t pt_low_water_mark; // queue-low threshold configured via MP[5]
 
 	// Per-motor notification callback (set via stepper_motor_uim2852_set_notify_callback)
 	// Forward-declared as void* to avoid circular typedef; actual type matches
@@ -164,16 +172,20 @@ esp_err_t stepper_motor_uim2852_configure(stepper_motor_uim2852_t *motor);
 /**
  * @brief Program hardware software-limits (LM) on the motor controller.
  *
- * Sets lower/upper working limits and enables the limit system.
- * These act as a secondary safety net — even if the host sends an
- * out-of-range position, the motor controller will reject it.
+ * When enable_hw_limits is true, sends LM[0] (max speed), LM[1] (lower
+ * working limit), LM[2] (upper working limit), and LM[7] (max accel), then
+ * IC[7]=1 to enforce them. When false, skips the LM frames and sends IC[7]=0.
  *
- * @param motor       Motor instance
- * @param lower_limit Lower working limit in pulses (signed)
- * @param upper_limit Upper working limit in pulses (signed)
+ * @param motor            Motor instance
+ * @param max_speed        LM[0]: maximum working speed (pulses/sec)
+ * @param lower_limit      LM[1]: lower working limit (pulses, signed)
+ * @param upper_limit      LM[2]: upper working limit (pulses, signed)
+ * @param max_accel        LM[7]: maximum acceleration (pulses/sec^2)
+ * @param enable_hw_limits true → send LM frames + IC[7]=1, false → IC[7]=0 only
  * @return ESP_OK on success
  */
-esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t lower_limit, int32_t upper_limit);
+esp_err_t stepper_motor_uim2852_set_limits(stepper_motor_uim2852_t *motor, int32_t max_speed, int32_t lower_limit,
+                                           int32_t upper_limit, int32_t max_accel, bool enable_hw_limits);
 
 // ============================================================================
 // Basic Control
@@ -223,16 +235,17 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
 // ============================================================================
 // Position-Time (PT) Interpolation Mode
 // ============================================================================
-// PT mode queues (position, time) waypoints in the motor's internal FIFO.
-// The motor smoothly interpolates between waypoints for jerk-free motion.
-// Each control loop tick feeds one (position, time_ms) waypoint via pt_feed().
+// PT mode queues absolute position waypoints in the motor's internal FIFO.
+// The motor uses MP[4] as the fixed segment time for every PT row.
+// Each PT frame interval feeds one PT row via pt_feed().
 
 /**
- * @brief Configure PT mode: enable FIFO notifications (IE[10], IE[11])
+ * @brief Configure PT FIFO mode and enable FIFO notifications.
  *
- * Enables PVT FIFO empty and FIFO low warning notifications so the host
- * can detect when the motor's waypoint buffer needs refilling.
- * Call once during enable sequence, before pt_start().
+ * Resets the PT/PVT queue, selects FIFO mode, programs the fixed PT frame
+ * time (MP[4]), sets a queue-low threshold (MP[5]), and enables the FIFO
+ * empty / low notifications. Call once during enable sequence, before
+ * pt_start().
  *
  * @param motor Motor instance
  * @return ESP_OK on success
@@ -240,10 +253,10 @@ esp_err_t stepper_motor_uim2852_set_origin(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Start PT interpolation (PV mode=1, start=true)
+ * @brief Arm PT FIFO mode at row 0.
  *
- * Begins consuming queued waypoints from the motor's internal FIFO.
- * The host should begin feeding waypoints via pt_feed() immediately.
+ * Sends PV=0 to select the starting PT row.  Actual motion begins later
+ * when pt_feed() has preloaded a small number of PT rows and issues BG.
  *
  * @param motor Motor instance
  * @return ESP_OK on success
@@ -251,10 +264,10 @@ esp_err_t stepper_motor_uim2852_pt_configure(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Stop PT interpolation (PV mode=1, start=false, then ST)
+ * @brief Stop PT interpolation with a deceleration stop.
  *
- * Stops consuming waypoints and decelerates to a stop.
- * Clears pt_mode_active flag.
+ * Issues ST, clears PT FIFO tracking state, and marks the PT stream as
+ * inactive in software.
  *
  * @param motor Motor instance
  * @return ESP_OK on success
@@ -262,11 +275,12 @@ esp_err_t stepper_motor_uim2852_pt_start(stepper_motor_uim2852_t *motor);
 esp_err_t stepper_motor_uim2852_pt_stop(stepper_motor_uim2852_t *motor);
 
 /**
- * @brief Feed a position+time waypoint into the PT FIFO (QF quick feed)
+ * @brief Feed a PT row into the PT FIFO table.
  *
- * Sends a single packed CAN frame containing the target position and
- * the time interval to reach it.  Call this at the control loop rate
- * (e.g. every 20ms with time_ms=20).
+ * Writes the next PT table row using the desired absolute position.  The
+ * time argument is retained for API compatibility and must match the fixed
+ * PT frame time configured via MP[4].  After a small startup prefill, the
+ * function automatically sends BG once to start the PT engine.
  *
  * @param motor    Motor instance
  * @param position Absolute target position in pulses (signed)

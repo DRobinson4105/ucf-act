@@ -308,6 +308,9 @@ esp_err_t ultrasonic_a02yyuw_init(const ultrasonic_a02yyuw_config_t *config)
 
 	ultrasonic_a02yyuw_reset_parser_state();
 
+	// Discard stale bytes left in HW FIFO from a prior session / mid-byte reset
+	uart_flush_input(config->uart_num);
+
 	// Start background task to continuously read sensor (uses internal config copy)
 	s_stop_requested = false;
 	BaseType_t task_ok = xTaskCreate(ultrasonic_a02yyuw_uart_rx_task, "ultrasonic_a02yyuw_rx", RX_TASK_STACK,
@@ -391,7 +394,7 @@ bool ultrasonic_a02yyuw_get_distance_mm(uint16_t *out_distance_mm)
 
 // NOTE: Returns false (not too close) when sensor has no valid data. This is
 // intentional — the fail-safe is handled by the caller's safety_compute_ultrasonic_trigger()
-// which combines this function with is_healthy() to trigger e-stop when the sensor
+// which combines this function with is_healthy() to trigger a stop when the sensor
 // is unhealthy, regardless of the distance reading.
 bool ultrasonic_a02yyuw_is_too_close(uint16_t threshold_mm, uint16_t *out_distance_mm)
 {

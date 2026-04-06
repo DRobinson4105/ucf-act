@@ -7,7 +7,7 @@ import {
   FileText,
   HelpCircle,
   LogOut,
-  Mail,
+  Pencil,
   Settings,
   Star,
   User,
@@ -22,6 +22,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { router } from "expo-router";
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -73,11 +74,12 @@ export default function ProfileScreen() {
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.profileSection}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
-              <User size={40} color={Colors.white} />
+              <User size={40} color={Colors.text} />
             </View>
           </View>
           <Text style={styles.userName}>{user?.name}</Text>
@@ -120,14 +122,14 @@ export default function ProfileScreen() {
           <Text style={styles.sectionTitle}>Account</Text>
           <View style={styles.menuCard}>
             <MenuItem
-              icon={<Mail size={20} color={Colors.accent} />}
+              icon={<Pencil size={20} color={Colors.accent} />}
               title="Edit Profile"
-              onPress={() => console.log("Edit Profile")}
+              onPress={() => router.push("/edit-profile")}
             />
             <MenuItem
               icon={<CreditCard size={20} color={Colors.accent} />}
               title="Payment Methods"
-              onPress={() => console.log("Payment Methods")}
+              onPress={() => router.push("/payment")}
               showBorder={false}
             />
           </View>
@@ -139,12 +141,12 @@ export default function ProfileScreen() {
             <MenuItem
               icon={<HelpCircle size={20} color={Colors.accent} />}
               title="Help Center"
-              onPress={() => console.log("Help Center")}
+              onPress={() => router.push("/help")}
             />
             <MenuItem
               icon={<FileText size={20} color={Colors.accent} />}
               title="Terms & Privacy"
-              onPress={() => console.log("Terms & Privacy")}
+              onPress={() => router.push("/terms")}
               showBorder={false}
             />
           </View>
@@ -156,7 +158,7 @@ export default function ProfileScreen() {
             <MenuItem
               icon={<Settings size={20} color={Colors.accent} />}
               title="Settings"
-              onPress={() => console.log("Settings")}
+              onPress={() => router.push("/settings")}
               showBorder={false}
             />
           </View>
@@ -167,7 +169,7 @@ export default function ProfileScreen() {
           <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
 
-        <Text style={styles.version}>ACT v1.0.0</Text>
+        <Text style={styles.version}>ACT v6.0.0</Text>
       </ScrollView>
     </View>
   );

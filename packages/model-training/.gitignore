@@ -1,6 +1,8 @@
 __pycache__
+
 data
 runs
+
 *.onnx
 *.engine
 *.cache

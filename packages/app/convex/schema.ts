@@ -13,6 +13,7 @@ export default defineSchema({
         notificationsEnabled: v.boolean(),
       })
     ),
+    expoPushToken: v.optional(v.string()),
   }).index("by_token", ["tokenIdentifier"]),
 
   rides: defineTable({

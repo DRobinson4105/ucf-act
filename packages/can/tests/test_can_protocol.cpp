@@ -92,7 +92,7 @@ static void test_planner_command_roundtrip(void)
 	can_encode_planner_command(data, &cmd_in);
 
 	planner_command_t cmd_out = {};
-	assert(can_decode_planner_command(data, 8, &cmd_out));
+	assert(can_decode_planner_command(data, 6, &cmd_out));
 
 	assert(cmd_out.throttle == 5);
 	assert(cmd_out.steering_position == 720);
@@ -121,7 +121,7 @@ static void test_planner_command_extremes(void)
 {
 	planner_command_t cmd_in = {
 		.sequence = 255,
-		.throttle = 7,
+		.throttle = 4095,
 		.steering_position = 720,
 		.braking_position = 255,
 	};
@@ -130,9 +130,9 @@ static void test_planner_command_extremes(void)
 	can_encode_planner_command(data, &cmd_in);
 
 	planner_command_t cmd_out = {};
-	assert(can_decode_planner_command(data, 8, &cmd_out));
+	assert(can_decode_planner_command(data, 6, &cmd_out));
 
-	assert(cmd_out.throttle == 7);
+	assert(cmd_out.throttle == 4095);
 	assert(cmd_out.steering_position == 720);
 	assert(cmd_out.braking_position == 255);
 	assert(cmd_out.sequence == 255);
@@ -146,15 +146,17 @@ static void test_planner_command_wire_format(void)
 
 	// byte 0: sequence
 	assert(data[0] == 10);
-	// byte 1: throttle
-	assert(data[1] == 3);
-	// bytes 2-3: steering MSB/LSB (300 = 0x012C -> 0x01, 0x2C)
-	assert(data[2] == 0x01);
-	assert(data[3] == 0x2C);
-	// byte 4: braking
-	assert(data[4] == 2);
-	// bytes 5-7: reserved, should be zero
-	assert(data[5] == 0);
+	// byte 1: throttle MSB (3 = 0x0003 -> MSB 0x00)
+	assert(data[1] == 0x00);
+	// byte 2: throttle LSB (3 = 0x0003 -> LSB 0x03)
+	assert(data[2] == 0x03);
+	// byte 3: steering MSB (300 = 0x012C -> MSB 0x01)
+	assert(data[3] == 0x01);
+	// byte 4: steering LSB (300 = 0x012C -> LSB 0x2C)
+	assert(data[4] == 0x2C);
+	// byte 5: braking
+	assert(data[5] == 2);
+	// bytes 6-7: reserved, should be zero
 	assert(data[6] == 0);
 	assert(data[7] == 0);
 }
@@ -169,28 +171,32 @@ static void test_planner_command_decode_rejects_short_dlc(void)
 		.braking_position = 0xCC,
 	};
 
-	assert(!can_decode_planner_command(data, 4, &cmd_out));
+	assert(!can_decode_planner_command(data, 5, &cmd_out));
 	assert(cmd_out.sequence == 0xAA);
 	assert(cmd_out.throttle == 0xBB);
 	assert(cmd_out.steering_position == 0x1234);
 	assert(cmd_out.braking_position == 0xCC);
 }
 
-static void test_planner_command_decode_clamps_throttle(void)
+static void test_planner_command_decode_full_byte_throttle(void)
 {
 	uint8_t data[8] = {};
 	data[0] = 42;
-	data[1] = 0xFF;
-	data[2] = 0x01;
-	data[3] = 0x2C;
-	data[4] = 0x04;
+	// throttle = 4095 = 0x0FFF MSB/LSB
+	data[1] = 0x0F;
+	data[2] = 0xFF;
+	// steering = 100 = 0x0064 MSB/LSB
+	data[3] = 0x00;
+	data[4] = 0x64;
+	// braking = 50
+	data[5] = 50;
 
 	planner_command_t cmd_out = {};
-	assert(can_decode_planner_command(data, 8, &cmd_out));
+	assert(can_decode_planner_command(data, 6, &cmd_out));
 	assert(cmd_out.sequence == 42);
-	assert(cmd_out.throttle == 7);
-	assert(cmd_out.steering_position == 300);
-	assert(cmd_out.braking_position == 4);
+	assert(cmd_out.throttle == 4095);
+	assert(cmd_out.steering_position == 100);
+	assert(cmd_out.braking_position == 50);
 }
 
 // ============================================================================
@@ -202,9 +208,10 @@ static void test_safety_heartbeat_roundtrip_advancing(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 1,
 		.state = NODE_STATE_ENABLE,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = 0,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -215,7 +222,7 @@ static void test_safety_heartbeat_roundtrip_advancing(void)
 
 	assert(hb_out.sequence == 1);
 	assert(hb_out.state == NODE_STATE_ENABLE);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
 }
 
 static void test_safety_heartbeat_roundtrip_retreating(void)
@@ -223,9 +230,10 @@ static void test_safety_heartbeat_roundtrip_retreating(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 55,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_ESTOP_BUTTON,
-		.flags = 0,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_SAFETY_PLANNER_TIMEOUT,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_PUSH_BUTTON,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -236,7 +244,8 @@ static void test_safety_heartbeat_roundtrip_retreating(void)
 
 	assert(hb_out.sequence == 55);
 	assert(hb_out.state == NODE_STATE_READY);
-	assert(hb_out.fault_code == NODE_FAULT_ESTOP_BUTTON);
+	assert(hb_out.fault_flags == NODE_FAULT_SAFETY_PLANNER_TIMEOUT);
+	assert(hb_out.stop_flags == NODE_STOP_PUSH_BUTTON);
 }
 
 static void test_safety_heartbeat_reserved_bytes_zero(void)
@@ -244,19 +253,20 @@ static void test_safety_heartbeat_reserved_bytes_zero(void)
 	node_heartbeat_t hb = {
 		.sequence = 1,
 		.state = NODE_STATE_ACTIVE,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = 0,
-		.fr_state = 0, // Safety has no FR state
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 	uint8_t data[8];
 	memset(data, 0xFF, 8);
 	can_encode_heartbeat(data, &hb);
 
-	// byte 4 = fr_state (0 for Safety), bytes 5-7 reserved (zeroed)
-	for (int i = 4; i < 8; i++)
-	{
-		assert(data[i] == 0);
-	}
+	// byte 4 = stop_flags, byte 5 = soc_pct, bytes 6-7 reserved
+	assert(data[4] == 0);
+	assert(data[5] == 0);
+	assert(data[6] == 0);
+	assert(data[7] == 0);
 }
 
 // ============================================================================
@@ -268,9 +278,10 @@ static void test_heartbeat_roundtrip_basic(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 100,
 		.state = NODE_STATE_ACTIVE,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = 0,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 72,
 	};
 
 	uint8_t data[8];
@@ -281,18 +292,20 @@ static void test_heartbeat_roundtrip_basic(void)
 
 	assert(hb_out.sequence == 100);
 	assert(hb_out.state == NODE_STATE_ACTIVE);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
-	assert(hb_out.flags == 0);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
+	assert(hb_out.status_flags == 0);
+	assert(hb_out.soc_pct == 72);
 }
 
 static void test_heartbeat_roundtrip_with_fault(void)
 {
 	node_heartbeat_t hb_in = {
 		.sequence = 99,
-		.state = NODE_STATE_FAULT,
-		.fault_code = NODE_FAULT_PERCEPTION,
-		.flags = 0,
-		.fr_state = 0,
+		.state = NODE_STATE_NOT_READY,
+		.fault_flags = NODE_FAULT_PLANNER_PERCEPTION,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -302,9 +315,9 @@ static void test_heartbeat_roundtrip_with_fault(void)
 	assert(can_decode_heartbeat(data, 8, &hb_out));
 
 	assert(hb_out.sequence == 99);
-	assert(hb_out.state == NODE_STATE_FAULT);
-	assert(hb_out.fault_code == NODE_FAULT_PERCEPTION);
-	assert(hb_out.flags == 0);
+	assert(hb_out.state == NODE_STATE_NOT_READY);
+	assert(hb_out.fault_flags == NODE_FAULT_PLANNER_PERCEPTION);
+	assert(hb_out.status_flags == 0);
 }
 
 static void test_heartbeat_roundtrip_enable_complete(void)
@@ -312,9 +325,10 @@ static void test_heartbeat_roundtrip_enable_complete(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 50,
 		.state = NODE_STATE_ENABLE,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = HEARTBEAT_FLAG_ENABLE_COMPLETE,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = NODE_STATUS_FLAG_ENABLE_COMPLETE,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -325,8 +339,8 @@ static void test_heartbeat_roundtrip_enable_complete(void)
 
 	assert(hb_out.sequence == 50);
 	assert(hb_out.state == NODE_STATE_ENABLE);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
-	assert(hb_out.flags == HEARTBEAT_FLAG_ENABLE_COMPLETE);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
+	assert(hb_out.status_flags == NODE_STATUS_FLAG_ENABLE_COMPLETE);
 }
 
 static void test_heartbeat_roundtrip_autonomy_request(void)
@@ -334,9 +348,10 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 51,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = HEARTBEAT_FLAG_AUTONOMY_REQUEST,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = NODE_STATUS_FLAG_AUTONOMY_REQUEST,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -347,32 +362,33 @@ static void test_heartbeat_roundtrip_autonomy_request(void)
 
 	assert(hb_out.sequence == 51);
 	assert(hb_out.state == NODE_STATE_READY);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
-	assert(hb_out.flags == HEARTBEAT_FLAG_AUTONOMY_REQUEST);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
+	assert(hb_out.status_flags == NODE_STATUS_FLAG_AUTONOMY_REQUEST);
 }
 
-static void test_heartbeat_roundtrip_fr_state(void)
+static void test_heartbeat_roundtrip_stop_flags(void)
 {
 	node_heartbeat_t hb_in = {
 		.sequence = 53,
 		.state = NODE_STATE_ACTIVE,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = 0,
-		.fr_state = 0x01, // FR_STATE_FORWARD
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_OPERATOR_REVERSE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
 	can_encode_heartbeat(data, &hb_in);
 
-	// Verify byte 4 carries fr_state
-	assert(data[4] == 0x01);
+	// Verify byte 4 carries stop_flags
+	assert(data[4] == NODE_STOP_OPERATOR_REVERSE);
 
 	node_heartbeat_t hb_out = {};
 	assert(can_decode_heartbeat(data, 8, &hb_out));
 
 	assert(hb_out.sequence == 53);
 	assert(hb_out.state == NODE_STATE_ACTIVE);
-	assert(hb_out.fr_state == 0x01);
+	assert(hb_out.stop_flags == NODE_STOP_OPERATOR_REVERSE);
 }
 
 static void test_heartbeat_roundtrip_reserved_bit2(void)
@@ -380,9 +396,10 @@ static void test_heartbeat_roundtrip_reserved_bit2(void)
 	node_heartbeat_t hb_in = {
 		.sequence = 52,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = 0x04,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = 0x04,
+		.stop_flags = NODE_STOP_NONE,
+		.soc_pct = 0,
 	};
 
 	uint8_t data[8];
@@ -393,8 +410,8 @@ static void test_heartbeat_roundtrip_reserved_bit2(void)
 
 	assert(hb_out.sequence == 52);
 	assert(hb_out.state == NODE_STATE_READY);
-	assert(hb_out.fault_code == NODE_FAULT_NONE);
-	assert(hb_out.flags == 0x04);
+	assert(hb_out.fault_flags == NODE_FAULT_NONE);
+	assert(hb_out.status_flags == 0x04);
 }
 
 static void test_heartbeat_reserved_bytes_zero(void)
@@ -402,19 +419,20 @@ static void test_heartbeat_reserved_bytes_zero(void)
 	node_heartbeat_t hb = {
 		.sequence = 1,
 		.state = NODE_STATE_READY,
-		.fault_code = NODE_FAULT_NONE,
-		.flags = 0,
-		.fr_state = 0,
+		.fault_flags = NODE_FAULT_NONE,
+		.status_flags = 0,
+		.stop_flags = NODE_STOP_REMOTE,
+		.soc_pct = 0,
 	};
 	uint8_t data[8];
 	memset(data, 0xFF, 8);
 	can_encode_heartbeat(data, &hb);
 
-	// byte 4 = fr_state (0), bytes 5-7 reserved (zeroed)
-	for (int i = 4; i < 8; i++)
-	{
-		assert(data[i] == 0);
-	}
+	// byte 4 = stop_flags, byte 5 = soc_pct, bytes 6-7 reserved
+	assert(data[4] == NODE_STOP_REMOTE);
+	assert(data[5] == 0);
+	assert(data[6] == 0);
+	assert(data[7] == 0);
 }
 
 static void test_heartbeat_decode_rejects_short_dlc(void)
@@ -423,17 +441,23 @@ static void test_heartbeat_decode_rejects_short_dlc(void)
 	node_heartbeat_t hb_out = {
 		.sequence = 0xAA,
 		.state = 0xBB,
-		.fault_code = 0xCC,
-		.flags = 0xDD,
-		.fr_state = 0xEE,
+		.fault_flags = 0xCC,
+		.status_flags = 0xDD,
+		.stop_flags = 0x11,
+		.soc_pct = 0x22,
 	};
 
 	assert(!can_decode_heartbeat(data, 3, &hb_out));
-	assert(!can_decode_heartbeat(data, 7, &hb_out));
+	assert(!can_decode_heartbeat(data, 5, &hb_out));
+	assert(can_decode_heartbeat(data, 6, &hb_out));  // minimum valid DLC
+	// Reset hb_out to sentinel values for the remaining checks
+	hb_out = {.sequence = 0xAA, .state = 0xBB, .fault_flags = 0xCC, .status_flags = 0xDD, .stop_flags = 0x11, .soc_pct = 0x22};
+	assert(!can_decode_heartbeat(data, 0, &hb_out));
 	assert(hb_out.sequence == 0xAA);
 	assert(hb_out.state == 0xBB);
-	assert(hb_out.fault_code == 0xCC);
-	assert(hb_out.flags == 0xDD);
+	assert(hb_out.fault_flags == 0xCC);
+	assert(hb_out.status_flags == 0xDD);
+	assert(hb_out.stop_flags == 0x11);
 }
 
 // ============================================================================
@@ -447,8 +471,6 @@ static void test_node_state_all_values(void)
 	assert(strcmp(node_state_to_string(NODE_STATE_READY), "READY") == 0);
 	assert(strcmp(node_state_to_string(NODE_STATE_ENABLE), "ENABLE") == 0);
 	assert(strcmp(node_state_to_string(NODE_STATE_ACTIVE), "ACTIVE") == 0);
-	assert(strcmp(node_state_to_string(NODE_STATE_OVERRIDE), "OVERRIDE") == 0);
-	assert(strcmp(node_state_to_string(NODE_STATE_FAULT), "FAULT") == 0);
 	assert(strcmp(node_state_to_string(0xFF), "UNKNOWN") == 0);
 }
 
@@ -457,31 +479,109 @@ static void test_node_fault_all_values(void)
 	// Common
 	assert(strcmp(node_fault_to_string(NODE_FAULT_NONE), "none") == 0);
 	assert(strcmp(node_fault_to_string(NODE_FAULT_GENERAL), "general") == 0);
-	// System / Safety e-stop causes (bitmask — single bits)
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_BUTTON), "button") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_REMOTE), "remote") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_ULTRASONIC), "ultrasonic") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER), "planner") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_PLANNER_TIMEOUT), "planner_timeout") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL), "control") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_CONTROL_TIMEOUT), "control_timeout") == 0);
-	// Estop bitmask combinations
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_BUTTON | NODE_FAULT_ESTOP_REMOTE), "button+remote") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_ESTOP_BUTTON | NODE_FAULT_ESTOP_REMOTE | NODE_FAULT_ESTOP_ULTRASONIC),
-	              "button+remote+ultrasonic") == 0);
+	// Safety fault bitmask flags (single bits)
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY), "ultrasonic_unhealthy") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_PLANNER_ISSUE), "planner_issue") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_PLANNER_TIMEOUT), "planner_timeout") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_CONTROL_ISSUE), "control_issue") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_CONTROL_TIMEOUT), "control_timeout") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_RELAY_UNAVAILABLE), "relay_unavailable") == 0);
+	// Safety fault bitmask combinations
+	assert(strcmp(node_fault_to_string(NODE_FAULT_SAFETY_PLANNER_TIMEOUT | NODE_FAULT_SAFETY_CONTROL_TIMEOUT),
+	              "planner_timeout+control_timeout") == 0);
 	// Planner faults
-	assert(strcmp(node_fault_to_string(NODE_FAULT_PERCEPTION), "perception") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_LOCALIZATION), "localization") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNING), "planning") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_PERCEPTION), "perception") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_LOCALIZATION), "localization") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_PLANNING), "planning") == 0);
 	assert(strcmp(node_fault_to_string(NODE_FAULT_PLANNER_HARDWARE), "planner_hardware") == 0);
 	// Control faults
-	assert(strcmp(node_fault_to_string(NODE_FAULT_THROTTLE_INIT), "throttle_init") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_CAN_TX), "can_tx") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_MOTOR_COMM), "motor_comm") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_SENSOR_INVALID), "sensor_invalid") == 0);
-	assert(strcmp(node_fault_to_string(NODE_FAULT_RELAY_INIT), "relay_init") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_THROTTLE_INIT), "throttle_init") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_CAN_TX), "can_tx") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_MOTOR_COMM), "motor_comm") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_SENSOR_INVALID), "sensor_invalid") == 0);
+	assert(strcmp(node_fault_to_string(NODE_FAULT_CONTROL_RELAY_INIT), "relay_init") == 0);
 	// Unknown
-	assert(strcmp(node_fault_to_string(0xFE), "unknown") == 0);
+	assert(strcmp(node_fault_to_string(0xFE), "unknown(0xFE)") == 0);
+}
+
+static void test_fault_classification_helpers(void)
+{
+	assert(node_fault_is_planner(NODE_FAULT_PLANNER_PERCEPTION));
+	assert(node_fault_is_planner(NODE_FAULT_PLANNER_PERCEPTION | NODE_FAULT_PLANNER_LOCALIZATION));
+	assert(!node_fault_is_planner(NODE_FAULT_CONTROL_THROTTLE_INIT));
+	assert(!node_fault_is_planner(NODE_FAULT_NONE));
+
+	assert(node_fault_is_control(NODE_FAULT_CONTROL_THROTTLE_INIT));
+	assert(node_fault_is_control(NODE_FAULT_CONTROL_MOTOR_COMM | NODE_FAULT_CONTROL_CAN_TX));
+	assert(!node_fault_is_control(NODE_FAULT_PLANNER_PERCEPTION));
+	assert(!node_fault_is_control(NODE_FAULT_NONE));
+
+	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_THROTTLE));
+	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_REVERSE));
+	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_STEER));
+	assert(node_stop_has_operator_intervention(NODE_STOP_OPERATOR_BRAKE));
+	assert(!node_stop_has_operator_intervention(NODE_STOP_PUSH_BUTTON));
+	assert(!node_stop_has_operator_intervention(NODE_STOP_NONE));
+}
+
+// ============================================================================
+// String helper reentrant variants
+// ============================================================================
+
+static void test_stop_to_string_r_buffer(void)
+{
+	char buf[80];
+	const char *result = node_stop_to_string_r(NODE_STOP_PUSH_BUTTON | NODE_STOP_REMOTE, buf, sizeof(buf));
+	assert(result == buf); // should return the buffer pointer
+	assert(strcmp(buf, "push_button+remote") == 0);
+}
+
+static void test_stop_to_string_r_none(void)
+{
+	char buf[80];
+	node_stop_to_string_r(NODE_STOP_NONE, buf, sizeof(buf));
+	assert(strcmp(buf, "none") == 0);
+}
+
+static void test_fault_to_string_r_safety_bitmask(void)
+{
+	char buf[96];
+	const char *result = node_fault_to_string_r(
+		NODE_FAULT_SAFETY_PLANNER_TIMEOUT | NODE_FAULT_SAFETY_CONTROL_TIMEOUT, buf, sizeof(buf));
+	assert(result == buf);
+	assert(strcmp(buf, "planner_timeout+control_timeout") == 0);
+}
+
+static void test_fault_to_string_r_planner_bitmask(void)
+{
+	char buf[96];
+	const char *result = node_fault_to_string_r(
+		NODE_FAULT_PLANNER_PERCEPTION | NODE_FAULT_PLANNER_LOCALIZATION, buf, sizeof(buf));
+	assert(result == buf);
+	assert(strcmp(buf, "perception+localization") == 0);
+}
+
+static void test_fault_to_string_r_control_bitmask(void)
+{
+	char buf[96];
+	const char *result = node_fault_to_string_r(
+		NODE_FAULT_CONTROL_MOTOR_COMM | NODE_FAULT_CONTROL_SENSOR_INVALID, buf, sizeof(buf));
+	assert(result == buf);
+	assert(strcmp(buf, "motor_comm+sensor_invalid") == 0);
+}
+
+// ============================================================================
+// Compile-time safety checks
+// ============================================================================
+
+static void test_safety_fault_mask_completeness(void)
+{
+	// NODE_FAULT_SAFETY_ANY must equal the OR of all individual safety fault bits.
+	// If a new flag is added without being included in the mask, this test will fail.
+	node_fault_t expected = NODE_FAULT_SAFETY_ULTRASONIC_UNHEALTHY | NODE_FAULT_SAFETY_PLANNER_ISSUE |
+	                        NODE_FAULT_SAFETY_PLANNER_TIMEOUT | NODE_FAULT_SAFETY_CONTROL_ISSUE |
+	                        NODE_FAULT_SAFETY_CONTROL_TIMEOUT | NODE_FAULT_SAFETY_RELAY_UNAVAILABLE;
+	assert(NODE_FAULT_SAFETY_ANY == expected);
 }
 
 // ============================================================================
@@ -545,7 +645,7 @@ int main(void)
 	TEST(test_planner_command_extremes);
 	TEST(test_planner_command_wire_format);
 	TEST(test_planner_command_decode_rejects_short_dlc);
-	TEST(test_planner_command_decode_clamps_throttle);
+	TEST(test_planner_command_decode_full_byte_throttle);
 
 	// Safety heartbeat encode/decode (3)
 	printf("\n--- Safety heartbeat encode/decode ---\n");
@@ -559,15 +659,28 @@ int main(void)
 	TEST(test_heartbeat_roundtrip_with_fault);
 	TEST(test_heartbeat_roundtrip_enable_complete);
 	TEST(test_heartbeat_roundtrip_autonomy_request);
-	TEST(test_heartbeat_roundtrip_fr_state);
+	TEST(test_heartbeat_roundtrip_stop_flags);
 	TEST(test_heartbeat_roundtrip_reserved_bit2);
 	TEST(test_heartbeat_reserved_bytes_zero);
 	TEST(test_heartbeat_decode_rejects_short_dlc);
 
-	// String helpers (2)
+	// String helpers + cause classification (3)
 	printf("\n--- String helpers ---\n");
 	TEST(test_node_state_all_values);
 	TEST(test_node_fault_all_values);
+	TEST(test_fault_classification_helpers);
+
+	// String helper reentrant variants (5)
+	printf("\n--- String helpers (reentrant) ---\n");
+	TEST(test_stop_to_string_r_buffer);
+	TEST(test_stop_to_string_r_none);
+	TEST(test_fault_to_string_r_safety_bitmask);
+	TEST(test_fault_to_string_r_planner_bitmask);
+	TEST(test_fault_to_string_r_control_bitmask);
+
+	// Safety checks (1)
+	printf("\n--- Compile-time safety checks ---\n");
+	TEST(test_safety_fault_mask_completeness);
 
 	// CAN ID constants (2)
 	printf("\n--- CAN ID constants ---\n");

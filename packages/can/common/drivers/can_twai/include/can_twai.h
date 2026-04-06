@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "freertos/FreeRTOS.h"
 #include "driver/twai.h"
@@ -120,6 +121,49 @@ bool can_twai_bus_ok(void);
  * @return ESP_OK on successful recovery, or an error code if all tiers fail
  */
 esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag);
+
+/**
+ * @brief Wait for CAN RX task to exit TWAI API calls and all in-flight TX
+ *        to complete.
+ *
+ * Must be called after setting g_twai_ready = false (to prevent the RX task
+ * from re-entering twai_receive). Waits for the RX task to return from any
+ * in-progress TWAI call, then spin-waits for in-flight TX to drain.
+ *
+ * @param lock        Spinlock protecting the in-flight counter
+ * @param in_flight   Pointer to the in-flight TX counter
+ */
+void can_twai_quiesce(portMUX_TYPE *lock, volatile uint8_t *in_flight);
+
+// ============================================================================
+// TX Failure Tracking
+// ============================================================================
+// Pure-function tracker for consecutive CAN TX failures. Counts consecutive
+// failures and signals when a threshold is reached, prompting the caller to
+// invoke can_twai_recover().
+
+typedef struct
+{
+	uint8_t fail_count; /**< current consecutive failure count */
+	uint8_t threshold;  /**< trigger recovery at this count */
+	bool tx_ok;         /**< result of last TX */
+} can_tx_track_inputs_t;
+
+typedef struct
+{
+	uint8_t new_fail_count; /**< updated count */
+	bool trigger_recovery;  /**< true if threshold reached */
+} can_tx_track_result_t;
+
+/**
+ * @brief Track CAN TX success/failure and determine if recovery is needed.
+ *
+ * Pure function — no side effects, no global state.
+ *
+ * @param inputs  Current TX result and failure tracking state
+ * @return Updated count and whether recovery should be triggered
+ */
+can_tx_track_result_t can_tx_track(const can_tx_track_inputs_t *inputs);
 
 #ifdef __cplusplus
 }

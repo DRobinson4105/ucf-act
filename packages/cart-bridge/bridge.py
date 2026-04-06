@@ -5,7 +5,7 @@ Responsibilities:
 - Subscribes to /fix (GPS) and /odometry/global (heading) for telemetry
 - Pushes telemetry to Convex every TELEMETRY_INTERVAL_S seconds
 - Polls Convex for ride assignments every POLL_INTERVAL_S seconds
-- When a ride is assigned, publishes the route to act_global_path_manager
+- When a ride is assigned, publishes the route to global_path_manager
   via /ui/global_route_wgs84_json
 - Detects ride completion (proximity to destination) and notifies Convex
 
@@ -79,7 +79,7 @@ class CartBridgeNode(Node):
 	)
         self.create_subscription(Odometry, "/odometry/global", self._odom_callback, 10)
 
-        # Publisher — sends route to act_global_path_manager
+        # Publisher — sends route to global_path_manager
         self._route_pub = self.create_publisher(
             String,
             "/ui/global_route_wgs84_json",

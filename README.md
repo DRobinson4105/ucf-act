@@ -19,4 +19,4 @@ Cart acceleration will be controlled by an ESP-32 module directly connected to t
 - ESP32 (safety and actuator control)
 - GNSS IMU System
 - Steering and brake linear actuators
-- Sensors (RGB-D cameras, 360 degree LiDAR, Radar, Ultrasonic)
+- Sensors (RGB-D cameras, 360 degree LiDAR, Ultrasonic)

@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -15,6 +17,8 @@ public:
     cmd_in_topic_ = declare_parameter<std::string>("cmd_in_topic", "/cmd_vel_nav");
     odom_topic_ = declare_parameter<std::string>("odom_topic", "/Odometry");
     can_topic_ = declare_parameter<std::string>("can_topic", "/to_can_bus");
+    const auto legacy_out_topic = declare_parameter<std::string>("out_topic", "");
+    if (!legacy_out_topic.empty()) can_topic_ = legacy_out_topic;
     speed_limit_topic_ = declare_parameter<std::string>("speed_limit_topic", "/speed_limit");
 
     publish_hz_ = declare_parameter<double>("publish_hz", 50.0);
@@ -27,6 +31,9 @@ public:
     w_acc_max_ = declare_parameter<double>("w_acc_max", 2.0);
     speed_limit_timeout_s_ = declare_parameter<double>("speed_limit_timeout_s", 0.5);
     min_turning_r_ = declare_parameter<double>("min_turning_r", 2.8);
+    speed_error_deadband_mps_ = declare_parameter<double>("speed_error_deadband_mps", 0.15);
+    throttle_full_error_mps_ = declare_parameter<double>("throttle_full_error_mps", 1.0);
+    brake_full_error_mps_ = declare_parameter<double>("brake_full_error_mps", 1.5);
 
     cmd_in_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       cmd_in_topic_, 10,
@@ -57,6 +64,7 @@ private:
   }
 
   uint16_t normalize(double value, double inMin, double inMax, uint16_t outMin, uint16_t outMax) {
+    if (inMax <= inMin) return outMin;
     double clamped = std::clamp(value, inMin, inMax);
     double normalized = (clamped - inMin) / (inMax - inMin);
     return static_cast<uint16_t>(outMin + normalized * (outMax - outMin) + 0.5);
@@ -71,10 +79,8 @@ private:
   uint16_t steering_min_ = 0, steering_max_ = 720;
   uint8_t braking_min_ = 0, braking_max_ = 3;
 
-  std::vector<uint8_t> map_values(double v_acc, double w_vel) {
-    double accel = v_acc - decelerateL_;
-    uint8_t throttle_val = static_cast<uint8_t>(
-      normalize(std::max(accel, 0.0), v_acc_min_, v_acc_max_, throttle_min_, throttle_max_));
+  std::array<uint8_t, 4> mapValues(double speed_error, double w_vel) {
+    uint8_t throttle_val = 0;
     uint16_t steering_raw = normalize(w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_);
 
     RCLCPP_INFO(get_logger(), "%.3f %.3f %.3f %u %u %u", v_acc, v_acc_min_, v_acc_max_, throttle_min_, throttle_max_, throttle_val);
@@ -82,10 +88,19 @@ private:
 
     uint8_t steering_hi = static_cast<uint8_t>((steering_raw >> 8) & 0xFF);
     uint8_t steering_lo = static_cast<uint8_t>(steering_raw & 0xFF);
-    uint8_t braking_val = static_cast<uint8_t>(
-      normalize(std::max(-accel, 0.0), v_decc_min_, v_decc_max_, braking_min_, braking_max_));
-    
-    RCLCPP_INFO(get_logger(), "%.3f %.3f %d %d %d", v_acc, w_vel, throttle_val, steering_raw, braking_val);
+    uint8_t braking_val = 0;
+
+    if (speed_error > speed_error_deadband_mps_) {
+      const double throttle_span = std::max(1e-3, throttle_full_error_mps_ - speed_error_deadband_mps_);
+      const double throttle_request = speed_error - speed_error_deadband_mps_;
+      throttle_val = static_cast<uint8_t>(
+        normalize(throttle_request, 0.0, throttle_span, throttle_min_, throttle_max_));
+    } else if (speed_error < -speed_error_deadband_mps_) {
+      const double brake_span = std::max(1e-3, brake_full_error_mps_ - speed_error_deadband_mps_);
+      const double brake_request = (-speed_error) - speed_error_deadband_mps_;
+      braking_val = static_cast<uint8_t>(
+        normalize(brake_request, 0.0, brake_span, braking_min_, braking_max_));
+    }
 
     return {throttle_val, steering_hi, steering_lo, braking_val};
   }
@@ -175,11 +190,14 @@ private:
       w_out = clamp(w_filt_, -curv_limit, curv_limit);
     }
 
-    double v_curr = have_odom_ ? odom_.twist.twist.linear.x : 0.0;
-    double v_acc = v_filt_ * 6 - v_curr;
-    RCLCPP_INFO(get_logger(), "%.3f %.3f", v_filt_, v_curr);
-    auto mapped = map_values(v_acc, w_out);
- 
+    const double v_curr = have_odom_ ? std::max(0.0, odom_.twist.twist.linear.x) : 0.0;
+    const double speed_error = v_filt_ - v_curr;
+    auto mapped = mapValues(speed_error, w_out);
+
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 500,
+      "cmd=%.2f cap=%.2f filt=%.2f odom=%.2f err=%.2f w=%.2f throttle=%u brake=%u",
+      v_cmd, active_speed_cap, v_filt_, v_curr, speed_error, w_out, mapped[0], mapped[3]);
 
     can_msgs::msg::Frame can_frame;
     can_frame.header.stamp = t;
@@ -212,6 +230,9 @@ private:
   double w_acc_max_{2.0};
   double speed_limit_timeout_s_{0.5};
   double min_turning_r_{2.8};
+  double speed_error_deadband_mps_{0.15};
+  double throttle_full_error_mps_{1.0};
+  double brake_full_error_mps_{1.5};
 
   geometry_msgs::msg::Twist cmd_in_;
   nav_msgs::msg::Odometry odom_;

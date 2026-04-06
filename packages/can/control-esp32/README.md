@@ -4,28 +4,26 @@ ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (J
 
 ## State Machine
 
-Control follows Safety's target state (`NOT_READY`/`READY`/`ENABLE`/`ACTIVE`) but owns its own live state machine.
+Control follows Safety's target state (`NOT_READY`/`READY`/`ENABLE`/`ACTIVE`) and reports retreat causes via heartbeat `stop_flags` (non-fault interventions) and `fault_flags` (issues).
 
 High-level rules:
 
 - `READY` means local preconditions are currently satisfied.
 - `NOT_READY` means local preconditions are not satisfied (not a fault).
-- `OVERRIDE` means a human-intervention retreat path (pedal/FR/position-error trigger while ACTIVE).
-- `FAULT` means a component/runtime error condition; it is distinct from `NOT_READY`.
-- Safety only commands target states `NOT_READY`/`READY`/`ENABLE`/`ACTIVE`; `OVERRIDE` and `FAULT` are local Control live states reported in Control heartbeat.
-- `FAULT` and `OVERRIDE` both recover to `NOT_READY` or `READY` based on current preconditions.
+- Driver intervention retreats to `NOT_READY` with operator bits in `stop_flags`.
+- Runtime issues retreat to `NOT_READY` with issue codes in `fault_flags`.
+- Safety only commands target states `NOT_READY`/`READY`/`ENABLE`/`ACTIVE`.
+- Issue/intervention causes clear back to `NODE_FAULT_NONE` when conditions recover, allowing `NOT_READY -> READY` when preconditions pass.
 
 ### States
 
-| State     | Description                                                                                                           |
-| --------- | --------------------------------------------------------------------------------------------------------------------- |
-| INIT      | Hardware initializing.                                                                                                |
-| NOT_READY | Manual mode, but local autonomy preconditions are not satisfied.                                                      |
-| READY     | Manual mode with local autonomy preconditions satisfied. Waiting for Safety to advance.                               |
-| ENABLE    | Enable relay energized, waiting to switch throttle source. Sets `HEARTBEAT_FLAG_ENABLE_COMPLETE` when done.           |
-| ACTIVE    | Autonomous mode. Executing throttle/steering/braking commands from Planner.                                           |
-| OVERRIDE  | Safe retreat after driver/manual intervention while ACTIVE. Autonomous outputs are disabled.                          |
-| FAULT     | Faulted state after local component/runtime error. Autonomous outputs are disabled until fault clears.                |
+| State     | Description                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------------------- |
+| INIT      | Hardware initializing.                                                                                        |
+| NOT_READY | Manual mode, but local autonomy preconditions are not satisfied.                                              |
+| READY     | Manual mode with local autonomy preconditions satisfied. Waiting for Safety to advance.                       |
+| ENABLE    | Enable relay energized, waiting to switch throttle source. Sets `NODE_STATUS_FLAG_ENABLE_COMPLETE` when done. |
+| ACTIVE    | Autonomous mode. Executing throttle/steering/braking commands from Planner.                                   |
 
 ### Transitions
 
@@ -36,9 +34,9 @@ High-level rules:
 - F/R switch not in Reverse (FORWARD or NEUTRAL both satisfy this)
 - Pedal not pressed
 - Pedal re-armed (released for 500ms after any press)
-- No active fault codes
+- No active issue code and no active stop flags
 
-Note: The anti-arcing microswitch is in series after the throttle microswitch. Before the pedal bypass relay (JD-2912) is energized during ENABLE, the anti-arcing switch cannot conduct. Pre-bypass, FORWARD reads as NEUTRAL and REVERSE reads as INVALID. The precondition check only requires "not in reverse" — NEUTRAL is accepted because it is indistinguishable from FORWARD pre-bypass.
+Note: The anti-arcing microswitch is in series after the throttle microswitch. Before the DPDT relay (MY5NJ) is energized during ENABLE, the anti-arcing switch cannot conduct. Pre-bypass, FORWARD reads as NEUTRAL and REVERSE reads as INVALID. The precondition check only requires "not in reverse" — NEUTRAL is accepted because it is indistinguishable from FORWARD pre-bypass.
 
 **`READY -> ENABLE`** requires all:
 
@@ -46,88 +44,79 @@ Note: The anti-arcing microswitch is in series after the throttle microswitch. B
 - F/R switch not in Reverse
 - Pedal not pressed
 - Pedal re-armed (released for 500ms after any press)
-- No active fault codes
+- No active issue code and no active stop flags
 
 **`ENABLE -> ACTIVE`** advances when Safety target reaches `ACTIVE`. It can abort back to `NOT_READY`/`READY` if Safety retreats, pedal is pressed, or F/R moves to Reverse. NEUTRAL during ENABLE is allowed.
 
-**`ACTIVE -> OVERRIDE`** is triggered immediately by any:
+**`ACTIVE -> NOT_READY`** is triggered immediately by any of these operator intervention causes (encoded in `stop_flags`):
 
 - Pedal press (no debounce - immediate response)
 - F/R switch moved to Reverse (debounced)
 - Steering position error (actual encoder diverged >200 pulses from commanded target after motion complete)
 - Braking position error (actual encoder diverged >200 pulses from commanded target after motion complete)
 
-Note: F/R NEUTRAL while ACTIVE does NOT trigger override. Instead, throttle is zeroed (cart can't drive in neutral anyway) while steering/braking continue. The system resumes normal throttle when FORWARD is engaged. F/R state is transmitted to the Orin via heartbeat byte 4 so it can prompt the user to put the cart in forward.
+Note: F/R NEUTRAL while ACTIVE does NOT trigger override. Instead, throttle is zeroed (cart can't drive in neutral anyway) while steering/braking continue. The system resumes normal throttle when FORWARD is engaged.
 
-**`ACTIVE -> NOT_READY/READY`** occurs when Safety target retreats (e-stop, node fault/override/timeout, or Planner/Orin autonomy halt / error).
+**`ACTIVE -> NOT_READY/READY`** occurs when Safety target retreats (stop/fault active, node timeout, or Planner/Orin autonomy halt).
 This is a commanded retreat from Safety, not a human override event.
 
-**`ANY -> FAULT`** occurs when a local component/runtime fault is detected.
-
-**`FAULT -> NOT_READY/READY`** occurs when local fault conditions clear and required components recover.
-
-**`OVERRIDE -> NOT_READY/READY`** auto-clears when all conditions are met:
+**Issue/stop clear conditions** (while in `NOT_READY`) include:
 
 - F/R switch not in Reverse or Invalid (FORWARD or NEUTRAL)
 - Pedal re-armed (released for 500ms)
 
-Recovery target is recomputed from current preconditions.
-
-Note: The system automatically returns to NOT_READY/READY based on current preconditions and can re-enable autonomous mode when conditions clear.
+Recovery target is recomputed from current preconditions (`NOT_READY` or `READY`).
 
 ## CAN Messages
 
 ### Receives (Standard 11-bit Frames)
 
-| ID    | Name             | Description                                                             |
-| ----- | ---------------- | ----------------------------------------------------------------------- |
-| 0x100 | SAFETY_HEARTBEAT | System target state, e-stop fault code (same `node_heartbeat_t` format) |
-| 0x111 | PLANNER_COMMAND  | Commands (sequence, throttle, steering_msb, steering_lsb for steering 0-720, braking; DLC=5) |
+| ID    | Name             | Description                                                                                  |
+| ----- | ---------------- | -------------------------------------------------------------------------------------------- |
+| 0x100 | SAFETY_HEARTBEAT | System target state + Safety `fault_flags` and `stop_flags` (same `node_heartbeat_t` format) |
+| 0x111 | PLANNER_COMMAND  | Commands (sequence, throttle 0-255, steering_pos, braking_pos)                               |
 
 ### Sends (Standard 11-bit Frames)
 
-| ID    | Name              | Rate                              | Description                                  |
-| ----- | ----------------- | --------------------------------- | -------------------------------------------- |
-| 0x120 | CONTROL_HEARTBEAT | 100ms + immediate on state change | Alive signal (seq, state, fault_code, flags) |
+| ID    | Name              | Rate                              | Description                                                      |
+| ----- | ----------------- | --------------------------------- | ---------------------------------------------------------------- |
+| 0x120 | CONTROL_HEARTBEAT | 100ms + immediate on state change | Alive signal (seq, state, fault_flags, stop_flags, status_flags) |
 
 ### Stale Planner Command Detection
 
-Control tracks the Planner command sequence number. If the same sequence is seen 10 consecutive times (`PLANNER_CMD_STALE_COUNT`), Control zeros the throttle as a safety measure.
+Control tracks the Planner command sequence number. If the same sequence is seen 10 consecutive times, Control zeros the throttle as a safety measure.
 
 ### UIM2852CA Motors (Extended 29-bit Frames)
 
 | Motor    | Node ID | Description                         |
 | -------- | ------- | ----------------------------------- |
-| Steering | 5       | Linear actuator for steering column |
+| Steering | 7       | Linear actuator for steering column |
 | Braking  | 6       | Linear actuator for brake pedal     |
 
-Master controller ID: 4. See `stepper_protocol_uim2852.h` for CAN ID encoding.
+See `stepper_protocol_uim2852.h` for CAN ID encoding.
 
 ## Pin Configuration
 
-| GPIO | Function        | Direction | Notes                                                           |
-| ---- | --------------- | --------- | --------------------------------------------------------------- |
-| 0    | Pedal ADC       | Analog In | ADC1_CH0, voltage divider (220k/100k), threshold 360mV          |
-| 2    | Throttle Mux A0 | Output    | DG408 address bit 0 (LSB)                                       |
-| 3    | Throttle Mux A1 | Output    | DG408 address bit 1                                             |
-| 4    | CAN TX          | Output    | TWAI peripheral (SN65HVD230 transceiver)                        |
-| 5    | CAN RX          | Input     | TWAI peripheral (SN65HVD230 transceiver)                        |
-| 6    | Throttle Mux A2 | Output    | DG408 address bit 2 (MSB)                                       |
-| 7    | Throttle Mux EN | Output    | DG408 enable (10k pull-down)                                    |
-| 8    | Status LED      | Output    | Onboard WS2812 RGB LED (no external wiring)                     |
-| 9    | Throttle Relay  | Output    | AEDIKO relay module (NO=autonomous)                             |
-| 10   | Enable BJT      | Output    | S8050 base via 680R (10k pull-down), bypasses pedal microswitch |
-| 22   | F/R Forward     | Input     | PC817 optocoupler, pull-up, active LOW                          |
-| 23   | F/R Reverse     | Input     | PC817 optocoupler, pull-up, active LOW                          |
+| GPIO | Function    | Direction | Notes                                                  |
+| ---- | ----------- | --------- | ------------------------------------------------------ |
+| 0    | Pedal ADC   | Analog In | ADC1_CH0, voltage divider (220k/100k), threshold 500mV |
+| 4    | CAN TX      | Output    | TWAI peripheral (SN65HVD230 transceiver)               |
+| 5    | CAN RX      | Input     | TWAI peripheral (SN65HVD230 transceiver)               |
+| 6    | DAC SDA     | I/O       | MCP4728 I2C data (4.7kΩ pull-up to 3.3V at throttle box) |
+| 7    | DAC SCL     | I/O       | MCP4728 I2C clock (4.7kΩ pull-up to 3.3V at throttle box) |
+| 8    | Status LED  | Output    | Onboard WS2812 RGB LED (no external wiring)            |
+| 10   | DPDT Relay  | Output    | 2N5551 base via 680R (10k pull-down), MY5NJ 24V coil   |
+| 22   | F/R Forward | Input     | PC817 optocoupler, pull-up, active LOW                 |
+| 23   | F/R Reverse | Input     | PC817 optocoupler, pull-up, active LOW                 |
 
 ### LED Behavior
 
-| Color        | State                                                |
-| ------------ | ---------------------------------------------------- |
-| Solid green  | Local Control state READY                            |
-| Solid blue   | Local Control state ACTIVE                           |
-| Solid red    | Local Control state FAULT                            |
-| Solid yellow | Local Control state INIT/NOT_READY/ENABLE/OVERRIDE |
+| Color        | State                                                 |
+| ------------ | ----------------------------------------------------- |
+| Solid green  | Local Control state READY                             |
+| Solid blue   | Local Control state ACTIVE                            |
+| Solid red    | Local Control state NOT_READY or fault overlay active |
+| Solid yellow | Local Control state INIT/ENABLE                       |
 
 ## Wiring
 
@@ -135,14 +124,13 @@ Each subsection covers production (on-cart) and bench wiring for Control ESP32 i
 
 ### Wiring Summary
 
-| Interface                                  | Bench vs Production                                            |
-| ------------------------------------------ | -------------------------------------------------------------- |
-| CAN bus (SN65HVD230)                       | Same — see [root README](../README.md#can-bus-wiring)          |
-| Throttle system (DG408 mux + AEDIKO relay) | Same hardware — bench output unloaded (no Curtis controller)   |
-| Pedal bypass relay (JD-2912 via S8050)     | Same hardware — bench relay switches with no 48V load          |
-| Pedal ADC                                  | Same — bench divider floating reads ~0mV (safe default)        |
-| F/R optocouplers (PC817)                   | Cart wiring only — production-style 48V switch wiring via 4.7k |
-| Status LED (WS2812)                        | Same                                                           |
+| Interface                                 | Bench vs Production                                            |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| CAN bus (SN65HVD230)                      | Same — see [root README](../README.md#can-bus-wiring)          |
+| Throttle system (MCP4728 + LM358 + MY5NJ) | Same hardware — bench: measure VOUTA directly (no op-amp needed) |
+| Pedal ADC                                 | Same — bench divider floating reads ~0mV (safe default)        |
+| F/R optocouplers (PC817)                  | Cart wiring only — production-style 48V switch wiring via 4.7k |
+| Status LED (WS2812)                       | Same                                                           |
 
 ### CAN Bus (SN65HVD230)
 
@@ -159,135 +147,228 @@ GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver mo
 
 ### Throttle Box Connectors
 
-All throttle-related components (DG408DJZ mux, resistor ladder, SRD-05VDC throttle relay, JD-2912 bypass relay, S8050, PC817 optocouplers, pedal ADC voltage divider) are housed in a separate throttle box perfboard powered from the cart's 12V fuse block. The Control ESP32 connects to the throttle box via four cables:
+All throttle-related components (MCP4728 DAC, LM358 op-amp, MY5NJ DPDT relay, 2N5551, PC817 optocouplers, pedal ADC voltage divider) are housed in a separate throttle box perfboard powered from the cart's 24V rail. The Control ESP32 connects to the throttle box via four cables:
 
 **ESP32-side connectors:**
 
-| Label  | Connector    | Pin 1                   | Pin 2                        | Pin 3                    | Pin 4                |
-| ------ | ------------ | ----------------------- | ---------------------------- | ------------------------ | -------------------- |
-| **J1** | 4-pin JST-PH | Mux A0 (GPIO 2) WHITE   | Mux A1 (GPIO 3) YELLOW       | Mux A2 (GPIO 6) GREEN    | Mux EN (GPIO 7) BLUE |
-| **J2** | 3-pin JST-PH | Relay IN (GPIO 21) WHITE | Bypass Base (GPIO 10) YELLOW | Pedal ADC (GPIO 0) GREEN |                      |
-| **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE | F/R Rev (GPIO 23) GREEN      |                          |                      |
-| **J9** | Single wire  | ESP32 GND BLACK         |                              |                          |                      |
+| Label  | Connector    | Pin 1                           | Pin 2                       |
+| ------ | ------------ | ------------------------------- | --------------------------- |
+| **J1** | 2-pin JST-PH | DAC SDA (GPIO 6) GREEN          | DAC SCL (GPIO 7) WHITE      |
+| **J2** | 2-pin JST-PH | DPDT Relay Base (GPIO 10) WHITE | Pedal ADC (GPIO 0) YELLOW   |
+| **J3** | 2-pin JST-PH | F/R Fwd (GPIO 22) WHITE         | F/R Rev (GPIO 23) GREEN     |
+| **J9** | 2-pin JST-PH | ESP32 GND BLACK                 | ESP32 3.3V RED              |
 
-J9 is a single black wire connecting an ESP32 GND pin to the throttle box GND bus rail. Required for signal reference between the ESP32 and the throttle box.
+J9 carries ESP32 GND (signal reference for the throttle box GND bus) and ESP32 3.3V (MCP4728 VDD + I2C pull-up supply). On the perfboard, connect J9 3.3V to the MCP4728 VDD pin. Place a 100nF (0.1µF) ceramic decoupling cap from VDD to GND close to the chip (parallel bypass, not in series with the supply). Add **4.7kΩ pull-up resistors** from J9 3.3V to each I2C line (SDA and SCL) at the throttle box end of the cable — these are required for reliable I2C over the ~7ft cable run. Tie the MCP4728 LDAC pin to GND for immediate output updates.
+
+**I2C pull-up placement:** The 4.7kΩ pull-ups go on the **perfboard** (throttle box end), not at the ESP32. Connect one 4.7kΩ resistor from the SDA pad (J1 Pin 1) to the 3.3V rail, and another 4.7kΩ from the SCL pad (J1 Pin 2) to the 3.3V rail. The ESP32's internal pull-ups (~45kΩ) are too weak for the cable capacitance. Twist the SDA and SCL wires together along the run to reduce EMI pickup.
 
 **Cart-side connectors (on the throttle box):**
 
-| Label  | Connector          | Pin 1                  | Pin 2                 | Pin 3          | Pin 4                 |
-| ------ | ------------------ | ---------------------- | --------------------- | -------------- | --------------------- |
-| **J4** | Anderson Powerpole | 12V+ RED               | GND BLACK             |                |                       |
-| **J5** | 4-pin JST-PH       | Curtis Pin 2 RED       | Curtis Pin 3 YELLOW   | Curtis B- BLUE | Pedal pot wiper GREEN |
-| **J6** | 2-pin JST-PH       | Bypass wire A YELLOW   | Bypass wire B WHITE   |                |                       |
-| **J7** | 2-pin JST-PH       | Anti-arc signal YELLOW | Anti-arc return GREEN |                |                       |
-| **J8** | 2-pin JST-PH       | Buzzer supply BLUE     | Buzzer signal WHITE   |                |                       |
+| Label  | Connector          | Pin 1                  | Pin 2                 | Pin 3 | Pin 4 |
+| ------ | ------------------ | ---------------------- | --------------------- | ----- | ----- |
+| **J4** | Anderson Powerpole | 24V+ RED               | GND BLACK             |       |       |
+| **J5** | 2-pin JST-PH       | Pedal pot wiper GREEN  | Curtis Pin 3 YELLOW   |       |       |
+| **J6** | 2-pin JST-PH       | Bypass wire A YELLOW   | Bypass wire B WHITE   |       |       |
+| **J7** | 2-pin JST-PH       | Anti-arc signal YELLOW | Anti-arc return GREEN |       |       |
+| **J8** | 2-pin JST-PH       | Buzzer supply BLUE     | Buzzer signal WHITE   |       |       |
 
-**Important:** J5 pin 3 (Curtis B-, blue wire) connects ONLY to the resistor ladder bottom — it is NOT connected to the throttle box GND bus. J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
+J7/J8 wires are galvanically isolated 48V circuits — they do NOT connect to GND bus or any ESP32 signal. See [F/R Optocouplers (PC817)](#fr-optocouplers-pc817) for the exact cart-side connection points for J7 and J8.
 
 **J5 internal throttle box connections:**
 
-The SRD-05VDC throttle relay on the throttle box perfboard switches the Curtis throttle input (Pin 3) between the manual pedal pot and the DG408 mux output. J5 connects the relay and resistor ladder to the cart-side Curtis controller and pedal pot:
+The MY5NJ DPDT relay Pole 1 on the throttle box perfboard switches the Curtis throttle input (Pin 3) between the manual pedal pot and the DAC/op-amp output. J5 connects the relay to the cart-side Curtis controller and pedal pot:
 
-| J5 Pin | Cart-Side Signal                    | Throttle Box Internal Connection |
-| ------ | ----------------------------------- | -------------------------------- |
-| Pin 1  | Curtis Pin 2 (pot high ref) RED     | Resistor ladder top              |
-| Pin 2  | Curtis Pin 3 (throttle input) YELLOW | Relay COM (output)              |
-| Pin 3  | Curtis B- BLUE                      | Resistor ladder bottom           |
-| Pin 4  | Pedal pot wiper GREEN               | Relay NC (input)                 |
+| J5 Pin | Cart-Side Signal                     | Throttle Box Internal Connection    |
+| ------ | ------------------------------------ | ----------------------------------- |
+| Pin 1  | Pedal pot wiper GREEN                | DPDT Relay Pole 1 NC (input)        |
+| Pin 2  | Curtis Pin 3 (throttle input) YELLOW | DPDT Relay Pole 1 COM (output)      |
 
-The relay switches Curtis Pin 3 between manual pedal pot (NC, de-energized) and mux output (NO, energized). In manual mode, the pot wiper signal passes through NC → COM → Curtis Pin 3. In autonomous mode, the mux output passes through NO → COM → Curtis Pin 3.
+The relay switches Curtis Pin 3 between manual pedal pot (NC, de-energized) and DAC/op-amp output (NO, energized). In manual mode, the pot wiper signal passes through NC → COM → Curtis Pin 3. In autonomous mode, the op-amp output passes through NO → COM → Curtis Pin 3.
+
+Curtis Pin 2 and B- are no longer connected to the throttle box — they remain in their original cart wiring (Pin 2 to pedal pot high terminal, B- to pedal pot low terminal). The DAC + op-amp generates the throttle voltage independently.
 
 **Curtis controller pinout (1999 Club Car DS 48V):**
 
-| Curtis Pin | Function              | Used by J5? |
-| ---------- | --------------------- | ----------- |
-| Pin 1      | Key switch            | No          |
-| Pin 2      | Pot high reference    | Yes (Pin 1) |
-| Pin 3      | Pot wiper / throttle input | Yes (Pin 2) |
-| B-         | Battery negative      | Yes (Pin 3) |
+| Curtis Pin | Function                   | Used by J5? |
+| ---------- | -------------------------- | ----------- |
+| Pin 1      | Key switch                 | No          |
+| Pin 2      | Pot high reference         | No (original pot wiring only) |
+| Pin 3      | Pot wiper / throttle input | Yes (Pin 1) |
+| B-         | Battery negative           | No (original pot wiring only) |
 
 **J5 cart-side wiring procedure:**
 
-The original cart wiring connects the pedal pot wiper directly to Curtis Pin 3. To intercept this signal for the throttle relay:
+The original cart wiring connects the pedal pot wiper directly to Curtis Pin 3. To intercept this signal for the DPDT relay:
 
 1. **CUT** the original pedal pot wiper → Curtis Pin 3 wire:
-   - Curtis Pin 3 side of the cut → J5 Pin 2 (YELLOW)
-   - Pedal pot wiper side of the cut → J5 Pin 4 (GREEN)
-2. **SPLICE** (do not cut) the Curtis Pin 2 wire:
-   - Original connection to pedal pot high terminal stays intact
-   - New branch → J5 Pin 1 (RED) for the resistor ladder
-3. **SPLICE** (do not cut) the Curtis B- wire:
-   - Original connection stays intact
-   - New branch → J5 Pin 3 (BLUE) for the resistor ladder bottom
+    - Pedal pot wiper side of the cut → J5 Pin 1 (GREEN)
+    - Curtis Pin 3 side of the cut → J5 Pin 2 (YELLOW)
+2. Curtis Pin 2 and B- remain in their **original unmodified wiring** — no splices needed
 
-Curtis Pin 2 must remain connected to the pedal pot high terminal so the pot retains its reference voltage for manual mode.
+### Throttle System (MCP4728 DAC + LM358 Op-Amp + MY5NJ Relay)
 
-### Throttle System (DG408DJZ Mux + AEDIKO Relay)
+MCP4728 12-bit I2C DAC provides 4096 output levels (0-4095) on channel A using VDD as the voltage reference, producing 0-VDD (~3.3V) output. An LM358 op-amp in non-inverting configuration (gain ~2.47) scales this to 0-8.5V for the Curtis 1204 throttle input. The op-amp output connects to the MY5NJ DPDT relay Pole 1 NO terminal.
 
-8-channel analog multiplexer selects throttle levels 0-7 using a 7-resistor voltage divider ladder optimized for fine low-speed control:
+**Signal chain:**
 
 ```
-Pin 2 (ref) ── R0(1k+510) ── T6 ── R1(330) ── T5 ── R2(330) ── T4 ── R3(330) ── T3 ── R4(330) ── T2 ── R5(330) ── T1 ── R6(2.2k) ── T0 ── B-
+ESP32 (I2C) → MCP4728 Ch.A (0-VDD, ~3.3V) → LM358 (gain 2.47) → 0-8.5V → Relay NO → Curtis Pin 3
 ```
 
-| Resistor # | Resistance (Ohms) | Rating | Notes                                       |
-| ---------- | ----------------- | ------ | ------------------------------------------- |
-| 0          | 1510 (1k + 510)   | 1/4W   | Top — caps max throttle below full speed    |
-| 1          | 330               | 1/4W   | Uniform step                                |
-| 2          | 330               | 1/4W   | Uniform step                                |
-| 3          | 330               | 1/4W   | Uniform step                                |
-| 4          | 330               | 1/4W   | Uniform step                                |
-| 5          | 330               | 1/4W   | Uniform step                                |
-| 6          | 2200              | 1/4W   | Bottom — jumps past Curtis deadband         |
+**MCP4728 DAC circuit (GY-MCP4728 breakout board):**
 
-The seven series resistors create seven physical ladder taps (`T0..T6`). R6 (2.2k) drops the voltage past the Curtis controller's deadband so that level 1 (T1) is the first tap that produces movement. R0 (1k + 510 in series) caps T6 well below the full reference voltage for a safe maximum speed. R1-R5 (330 each) create uniform ~500mV steps in the active throttle range.
+The GY-MCP4728 breakout has onboard 8.2kΩ I2C pull-ups and a decoupling cap. External 4.7kΩ pull-ups are added in parallel for stronger drive over the ~7ft I2C cable run (effective combined pull-up: ~3kΩ). No external decoupling cap needed on VDD.
 
-Approximate voltages assuming ~8.5V reference on Curtis Pin 2:
+Board pin labels: V G CL DA L R A B C D
 
-| Level | Tap | Voltage | % of ref | Behavior           |
-| ----- | --- | ------- | -------- | ------------------ |
-| 0     | T0  | 0.0V    | 0%       | Off (in deadband)  |
-| 1     | T1  | 3.5V    | 41%      | Barely creeping    |
-| 2     | T2  | 4.0V    | 47%      | Very slow          |
-| 3     | T3  | 4.5V    | 53%      | Slow               |
-| 4     | T4  | 5.1V    | 60%      | Moderate-slow      |
-| 5     | T5  | 5.6V    | 66%      | Moderate           |
-| 6     | T6  | 6.1V    | 72%      | Cruising           |
-| 7     | T6  | 6.1V    | 72%      | Duplicate of 6     |
+```
+J9 3.3V ──┬── V (VDD)
+           │
+           ├── R3 (4.7kΩ) ── J1 Pin 1 (SDA) ── DA
+           │
+           └── R4 (4.7kΩ) ── J1 Pin 2 (SCL) ── CL
 
-Mux channels are mapped `CH0..CH6 -> T0..T6`, and `CH7` is intentionally duplicated to `T6`.
+GND bus ──┬── G (VSS)
+           │
+           └── L (LDAC)
 
-**Tuning:** If level 1 doesn't produce movement, increase R6 (try 2.7k or 3.3k) to push T1 higher above the deadband. If max speed is too slow, decrease R0 (try 1k alone). If max speed is too fast, increase R0 (try 1k + 1k). Only R0 and R6 need to be changed for tuning — R1-R5 stay at 330.
+A (VOUTA) ── LM358 Pin 3 (non-inverting input)
+R, B, C, D ── (floating)
+```
 
-Address lines A0-A2 (GPIO 2/3/6) select the channel; EN (GPIO 7) gates the output. An AEDIKO SRD-05VDC-SL-C relay (GPIO 21) switches the Curtis controller throttle input between manual pedal pot (NC, de-energized) and mux output (NO, energized). EN has a 10k pull-down to ensure the mux is disabled on reset.
+| Board Pin | Full Name | Connect to |
+|-----------|-----------|-----------|
+| V | VDD | J9 3.3V rail |
+| G | GND | GND bus |
+| DA | SDA | J1 Pin 1 (GPIO 6) |
+| CL | SCL | J1 Pin 2 (GPIO 7) |
+| L | LDAC | GND bus (immediate update) |
+| A | VOUTA | LM358 pin 3 |
+| R | RDY/BSY | Floating |
+| B, C, D | VOUTB-D | Floating |
 
-**Production:** Mux output feeds into the Curtis motor controller throttle input through the relay. The ladder is tuned for low-speed autonomous operation with 7 usable levels concentrated in the Curtis controller's active throttle range.
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| R3 (4.7kΩ) | External I2C SDA pull-up | J9 3.3V → J1 Pin 1 (SDA), on perfboard |
+| R4 (4.7kΩ) | External I2C SCL pull-up | J9 3.3V → J1 Pin 2 (SCL), on perfboard |
 
-**Bench:** Same DG408 + resistor ladder + relay hardware. The mux output is unloaded (no Curtis controller connected). Useful for verifying channel selection with a DMM on the mux output. The relay will audibly click when energized — verifies GPIO 21 output.
+Internal DAC config (set by driver): channel A, VDD reference, 1x gain → 0-VDD (~3.3V) output range (~0.8 mV/step, 4096 levels). Power-on reset outputs 0V (safe default).
 
-### Pedal Bypass Relay (JD-2912 via S8050)
+**LM358 op-amp circuit (non-inverting amplifier):**
 
-ESP32 GPIO 10 drives an S8050 NPN transistor base through a 680 ohm current-limiting resistor, which switches the JD-2912 automotive relay coil (12V). The relay bypasses the accelerator pedal microswitch so the Curtis controller accepts throttle input during autonomous mode. 10k pull-down on the transistor base ensures the relay stays de-energized (manual pedal mode) on boot/reset. A 1N4007 flyback diode across the relay coil protects the transistor from back-EMF.
+```
+MCP4728 VOUTA ── LM358 Pin 3 (IN+)
 
-**Production:** Transistor switches 12V to the JD-2912 coil. Relay NO contacts wire across (in parallel with) the pedal microswitch in the cart's accelerator switch circuit.
+                    LM358 Pin 1 (OUT) ──┬── Relay Pole 1 NO
+                                        │
+                                        ├── R5 (100kΩ) ── GND    (failsafe)
+                                        │
+                                        └── R1 (10kΩ + 4.7kΩ) ──┬── LM358 Pin 2 (IN-)
+                                                                 │
+                                                                 R2 (10kΩ) ── GND
 
-**Bench:** Same hardware. Transistor/relay tested with 12V bench supply — relay clicks to verify switching. Without 12V, the GPIO output can be verified with a DMM on the transistor base.
+24V ──┬── LM358 Pin 8 (V+)
+      │
+      ├── C2 (100nF) ── GND             (decoupling, close to chip)
+      │
+      └── C3 (10µF) ── GND              (bulk decoupling, near chip)
+
+GND ──── LM358 Pin 4 (GND)
+
+LM358 Pins 5, 6, 7 ── (floating, unused channel B)
+```
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| LM358 Pin 1 (OUT_A) | Op-amp output | Relay Pole 1 NO + R5 + R1 |
+| LM358 Pin 2 (IN-_A) | Inverting input | Junction of R1 and R2 |
+| LM358 Pin 3 (IN+_A) | Non-inverting input | MCP4728 VOUTA |
+| LM358 Pin 4 (GND) | Ground | GND bus |
+| LM358 Pin 8 (V+) | Positive supply | 24V rail |
+| LM358 Pins 5-7 | Unused channel B | Floating |
+| R1 (10kΩ + 4.7kΩ) | Feedback resistor | LM358 pin 1 → LM358 pin 2 |
+| R2 (10kΩ) | Gain-set to GND | LM358 pin 2 → GND |
+| R5 (100kΩ) | Failsafe pull-down | LM358 pin 1 → GND (pulls output to 0V if DAC loses power) |
+| C2 (100nF ceramic) | HF decoupling | 24V → GND, close to LM358 pin 8 |
+| C3 (10µF electrolytic) | Bulk decoupling | 24V → GND, near LM358 (stripe/minus to GND) |
+
+Gain = 1 + (R1/R2) = 1 + (14.7kΩ / 10kΩ) = **2.47**. Max output = 3.3V × 2.47 = **8.15V** (varies slightly with VDD, software-capped at 8.5V).
+
+**Safe state:** DAC level 0 produces 0V on the op-amp output — well within the Curtis controller's deadband, producing no movement.
+
+**MY5NJ DPDT relay** (24V coil, driven via 2N5551 NPN transistor on GPIO 10):
+
+- Pole 1 switches Curtis Pin 3 between manual pedal pot (NC) and op-amp output (NO)
+- Pole 2 bypasses the pedal microswitch (NC = normal pedal operation, NO = bypassed)
+- Both poles switch simultaneously (DPDT)
+- De-energized = safe state (manual pedal control, no bypass)
+
+**2N5551 relay driver circuit:**
+
+```
+J2 Pin 1 (GPIO 10) ── 680Ω ──┬── 2N5551 Base
+                               │
+                             10kΩ
+                               │
+                              GND
+
+                    24V ──┬── MY5NJ Coil+ ── Coil- ──┬── 2N5551 Collector
+                          │                           │
+                          │    1N4007 (flyback)       │
+                          └──── Cathode ── Anode ─────┘
+                                (stripe)
+
+                              2N5551 Emitter ── GND
+```
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| 680Ω resistor | Base current limiter | J2 Pin 1 (GPIO 10) → 2N5551 base |
+| 10kΩ resistor | Base pull-down (ensures relay off when GPIO floats) | 2N5551 base → GND |
+| 2N5551 NPN | Relay coil switch | Collector → relay coil low side, Emitter → GND |
+| MY5NJ coil | 24V DPDT relay | High side → 24V rail, Low side → 2N5551 collector |
+| 1N4007 diode | Flyback clamp | Cathode (stripe) → 24V rail, Anode → 2N5551 collector |
+
+When GPIO 10 goes HIGH, ~3.8mA flows through the 680Ω into the 2N5551 base, saturating the transistor and energizing the relay coil. The 10kΩ pull-down ensures the base is LOW (relay off) during ESP32 boot when GPIOs are floating. The 1N4007 clamps the inductive back-EMF spike when the coil de-energizes.
+
+**Production:** Op-amp output feeds into the Curtis motor controller throttle input through the DPDT relay. The 4096 DAC levels span the Curtis controller's full throttle range with ~2.0 mV per step.
+
+**Bench:** Without the op-amp, measure MCP4728 VOUTA directly (0-VDD, ~3.3V). With the op-amp, measure the output (0-8.5V). The relay will audibly click when energized — verifies GPIO 10 output.
 
 ### Pedal ADC
 
-GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider (220k/100k). Threshold for "pressed" is 360 mV.
+GPIO 0 (ADC1_CH0) reads the accelerator pedal position through a voltage divider (220kΩ/100kΩ). Threshold for "pressed" is 500 mV.
 
-**Production:** Voltage divider connected to the cart's accelerator pedal potentiometer wiper. Pedal pressed produces >360 mV; released reads ~0 mV.
+**Pedal ADC voltage divider circuit:**
 
-**Bench:** Same voltage divider. With no pedal connected, the floating input reads ~0 mV (treated as "not pressed" — safe default).
+```
+Pedal pot wiper (0-8.5V) ── 220kΩ ──┬── GPIO 0 (ADC1_CH0)
+                                      │
+                                    100kΩ
+                                      │
+                                     GND
+```
+
+| Component | Value | Connection |
+|-----------|-------|-----------|
+| 220kΩ resistor | High-side divider | Pedal pot wiper (from relay Pole 1 NC / J5 Pin 2) → divider junction |
+| 100kΩ resistor | Low-side divider | Divider junction → GND bus |
+
+The divider scales the pedal pot's 0-8.5V range to 0-2.66V for the ESP32's 3.3V ADC. The divider junction connects to GPIO 0 via J2 Pin 2. The pedal pot wiper comes from the relay Pole 1 NC terminal (same wire as J5 Pin 2, pedal pot wiper side) — this reads the pedal position regardless of relay state since the divider taps before the relay.
+
+Note: the divider has high source impedance (~69kΩ = 220k||100k). The ESP32-C6 ADC handles this but readings may have slight noise. The 8-sample oversampling in the driver smooths this out.
+
+**Production:** Pedal pressed produces >500 mV; released reads ~0 mV.
+
+**Bench:** With no pedal connected, the floating input reads ~0 mV (treated as "not pressed" — safe default).
 
 ### F/R Optocouplers (PC817)
 
 The F/R decode is wired for a **1999 Club Car DS 48V** forward/reverse switch assembly. The switch has three microswitches; two are used for direction sensing:
 
-| Microswitch    | GPIO              | Active When                                                     | Circuit Position |
-| -------------- | ----------------- | --------------------------------------------------------------- | ---------------- |
-| Anti-arcing    | 22 (forward_gpio) | Forward **and** Reverse (opens solenoid coil during transition) | High-side switch (output → solenoid coil → B-) |
+| Microswitch    | GPIO              | Active When                                                     | Circuit Position                                       |
+| -------------- | ----------------- | --------------------------------------------------------------- | ------------------------------------------------------ |
+| Anti-arcing    | 22 (forward_gpio) | Forward **and** Reverse (opens solenoid coil during transition) | High-side switch (output → solenoid coil → B-)         |
 | Reverse buzzer | 23 (reverse_gpio) | Reverse only (activates backup buzzer)                          | Low-side switch (supply → buzzer → input, output → B-) |
 
 State decode (PC817 optocouplers, active LOW with internal pull-up):
@@ -316,10 +397,10 @@ Supply → Anti-arc microswitch → OUTPUT ──┬── Solenoid coil → B-
 - **J7 Pin 1 (YELLOW, "Anti-arc signal")**: Connect to the microswitch **output** terminal (the terminal that goes toward the solenoid coil — hot only when the switch is closed).
 - **J7 Pin 2 (GREEN, "Anti-arc return")**: Connect to **B-** (battery negative / chassis ground).
 
-| Switch State | OUTPUT Voltage | LED   | GPIO 22 | Software     |
-| ------------ | -------------- | ----- | ------- | ------------ |
-| Closed       | ~Supply        | ON    | LOW     | active ✓     |
-| Open         | ~B- (via coil) | OFF   | HIGH    | inactive ✓   |
+| Switch State | OUTPUT Voltage | LED | GPIO 22 | Software   |
+| ------------ | -------------- | --- | ------- | ---------- |
+| Closed       | ~Supply        | ON  | LOW     | active ✓   |
+| Open         | ~B- (via coil) | OFF | HIGH    | inactive ✓ |
 
 #### Reverse buzzer microswitch — low-side switch (J8)
 
@@ -336,10 +417,10 @@ Supply ──┬── Buzzer → Microswitch INPUT ──┬── Microswitch 
 - **J8 Pin 1 (BLUE, "Buzzer supply")**: Connect to the **supply wire** that feeds the buzzer circuit (the hot wire in the 48V domain, before the buzzer). This is upstream of the buzzer — find it with a multimeter: keyed on, F/R in neutral, the wire that reads ~48V against B- regardless of switch position.
 - **J8 Pin 2 (WHITE, "Buzzer signal")**: Connect to the microswitch **input** terminal (the terminal connected to the buzzer, NOT the terminal that goes to B-).
 
-| Switch State | Microswitch INPUT | LED Voltage          | LED   | GPIO 23 | Software     |
-| ------------ | ----------------- | -------------------- | ----- | ------- | ------------ |
-| Closed       | ~B- (via switch)  | Supply − B- ≈ 48V    | ON    | LOW     | active ✓     |
-| Open         | ~Supply (via buzzer, no current) | Supply − Supply ≈ 0V | OFF   | HIGH    | inactive ✓   |
+| Switch State | Microswitch INPUT                | LED Voltage          | LED | GPIO 23 | Software   |
+| ------------ | -------------------------------- | -------------------- | --- | ------- | ---------- |
+| Closed       | ~B- (via switch)                 | Supply − B- ≈ 48V    | ON  | LOW     | active ✓   |
+| Open         | ~Supply (via buzzer, no current) | Supply − Supply ≈ 0V | OFF | HIGH    | inactive ✓ |
 
 **Bench:** If cart F/R switch wiring is absent on bench, disconnected optocouplers read NEUTRAL (both HIGH). Pre-bypass, NEUTRAL passes preconditions (not-in-reverse), so the system can reach READY and ENABLE without the F/R sensor bypass. Use `CONFIG_BYPASS_INPUT_FR_SENSOR` only if you need to force FORWARD readings for testing post-bypass ACTIVE behavior.
 
@@ -349,67 +430,66 @@ GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status L
 
 ## Components
 
-| Component                  | Description                                                  |
-| -------------------------- | ------------------------------------------------------------ |
-| `multiplexer_dg408djz`     | DG408DJZ 8-channel analog mux for throttle level selection   |
-| `stepper_motor_uim2852`    | UIM2852CA closed-loop stepper motor control API              |
-| `relay_jd2912`             | JD-2912 pedal bypass relay driver (via S8050 NPN transistor) |
-| `adc_12bitsar`             | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper    |
-| `optocoupler_pc817`        | Dedicated F/R PC817 decode + debounce helper                 |
-| `can_twai`                 | CAN bus driver wrapper (shared)                              |
-| `can_protocol`             | Message definitions and encode/decode (shared)               |
-| `led_ws2812`               | WS2812 status LED driver (shared)                            |
-| `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared)                  |
-| `control_logic`            | Extracted state machine decision logic (shared, tested)      |
+| Component                  | Description                                                      |
+| -------------------------- | ---------------------------------------------------------------- |
+| `dac_mcp4728`              | MCP4728 I2C DAC for throttle level (12-bit, 4096 levels)        |
+| `stepper_motor_uim2852`    | UIM2852CA closed-loop stepper motor control API                  |
+| `relay_dpdt_my5nj`         | MY5NJ DPDT relay driver (24V coil via 2N5551 NPN transistor)     |
+| `adc_12bitsar`             | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper        |
+| `optocoupler_pc817`        | Dedicated F/R PC817 decode + debounce helper                     |
+| `can_twai`                 | CAN bus driver wrapper (shared)                                  |
+| `can_protocol`             | Message definitions and encode/decode (shared)                   |
+| `led_ws2812`               | WS2812 status LED driver (shared)                                |
+| `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared)                      |
+| `control_logic`            | Extracted state machine decision logic (shared, tested)          |
 
 ### Hardware Detection Limitations
 
 Not all components can detect physical absence at init or runtime. Components that are output-only GPIOs have no feedback path from the external hardware -- the ESP32 drives pins but receives no acknowledgment.
 
-| Component               | Detects absence? | Why                                                                                                                                                                                                                                          |
-| ----------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `multiplexer_dg408djz`  | No               | Output-only GPIO. Init readback tests the MCU output latch, not the external IC. The DG408DJZ is a purely analog device with no feedback path.                                                                                               |
-| `relay_jd2912`          | No               | Output-only GPIO. Same readback pattern as the mux -- verifies the MCU register, not whether the relay/transistor is physically present.                                                                                                     |
-| `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled. |
+| Component               | Detects absence? | Why                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dac_mcp4728`           | Yes              | Every I2C write is followed by a read-back verification. I2C NACK detects disconnected device immediately.                                                                                                                                                                                                                                          |
+| `relay_dpdt_my5nj`      | No               | Output-only GPIO. Same readback pattern as before — verifies the MCU register, not whether the relay/transistor is physically present.                                                                                                                                                                                                                                                        |
+| `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled.                                                                                                                                                  |
 | `optocoupler_pc817`     | No (pre-bypass)  | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. Pre-bypass, NEUTRAL is expected (FORWARD reads as NEUTRAL when anti-arc switch can't conduct). Hardware absence is indistinguishable from "cart in FORWARD/NEUTRAL." Post-bypass (ACTIVE), the full truth table is readable and a disconnected optocoupler would read NEUTRAL, which zeroes throttle but does not fault. |
-| `stepper_motor_uim2852` | Yes              | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                        |
-
-For the mux and relay, detecting hardware absence would require board-level changes (e.g., adding a sense/feedback line). For the pedal ADC, a plausibility range check on the idle reading could improve detection but is not yet implemented.
+| `stepper_motor_uim2852` | Yes              | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                                                                                                                                                                         |
 
 ## Throttle Control
 
-The throttle system uses an 8-channel analog multiplexer to select 8 levels from a 7-tap resistor ladder (top tap duplicated on CH7). The ladder is optimized for fine low-speed control with ~500mV steps in the active range:
+The throttle system uses an MCP4728 DAC + LM358 op-amp to provide 4096 output levels (0-4095) for continuous throttle level control:
 
-- Level 0: Off (in Curtis deadband, no movement)
-- Level 1: Barely creeping (~3.5V)
-- Level 7: Cruising (~6.1V, well below full throttle)
-- Slew rate limited: max 1 level change per 100ms
+- Level 0: Off (0V output, in Curtis deadband, no movement)
+- Levels 0-~800: Within Curtis deadband, no wheel movement
+- Level ~800: First wheel movement (deadband exit, ~1.6V at op-amp output)
+- Levels ~800-4095: Proportional speed control (~2.0 mV per step)
+- Level 4095: Maximum throttle (~8.24V output)
+- Slew rate limited: max 200 DAC steps per 100ms
 
 Enable sequence (READY -> ACTIVE):
 
-1. Set mux to level 0
-2. Energize pedal bypass relay (GPIO10) - JD-2912 bypasses pedal microswitch
-3. Wait 200ms enable dwell
-4. Enable steering and braking motors
-5. Energize throttle relay (GPIO9) - switches to mux output, then enable mux autonomous path
+1. Set DAC output to level 0
+2. Wait 200ms enable dwell
+3. Enable steering and braking motors
+4. Energize DPDT relay (GPIO 10) — both poles switch: throttle source to DAC/op-amp, pedal bypass active
+5. Enable DAC autonomous mode
 
 ## Test Bypasses
 
 Compile-time Kconfig flags for bench testing without the full system connected. All default to off (disabled). Enable via `idf.py menuconfig` under **Test Bypasses** (top-level), or add to `sdkconfig.defaults`:
 
-| Flag                                         | Effect                                                          |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| `CONFIG_BYPASS_SAFETY_TARGET_MIRROR`         | Force target_state to ACTIVE (ignore Safety target mirror)      |
-| `CONFIG_BYPASS_SAFETY_ESTOP_MIRROR`          | Force Safety estop_fault_code to NONE in Control inputs/logging |
-| `CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS`       | Ignore Safety heartbeat timeout (test without Safety on bus)    |
-| `CONFIG_BYPASS_PLANNER_COMMAND_INPUTS`       | Force Planner command inputs to zero throttle/steering/braking  |
-| `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Planner command timeout/stale checks                    |
-| `CONFIG_BYPASS_INPUT_PEDAL_ADC`              | Skip pedal ADC readings (always not pressed, always re-armed)   |
-| `CONFIG_BYPASS_INPUT_FR_SENSOR`              | Force F/R state to FORWARD (skip optocoupler channel reading)   |
-| `CONFIG_BYPASS_ACTUATOR_MULTIPLEXER`         | Skip multiplexer and throttle relay control                     |
-| `CONFIG_BYPASS_ACTUATOR_PEDAL_RELAY`         | Skip pedal bypass relay energize/de-energize                    |
-| `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING`    | Skip steering stepper motor (node 5) init/configure/commands    |
-| `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING`     | Skip braking stepper motor (node 6) init/configure/commands     |
+| Flag                                         | Effect                                                                                   |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `CONFIG_BYPASS_SAFETY_TARGET_MIRROR`         | Force target_state to ACTIVE (ignore Safety target mirror)                               |
+| `CONFIG_BYPASS_SAFETY_ESTOP_MIRROR`          | Force Safety mirror channels clear (`safety_fault_flags=NONE`, `safety_stop_flags=NONE`) |
+| `CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS`       | Ignore Safety heartbeat timeout (test without Safety on bus)                             |
+| `CONFIG_BYPASS_PLANNER_COMMAND_INPUTS`       | Force Planner command inputs to zero throttle/steering/braking                           |
+| `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Planner command timeout/stale checks                                             |
+| `CONFIG_BYPASS_INPUT_PEDAL_ADC`              | Skip pedal ADC readings (always not pressed, always re-armed)                            |
+| `CONFIG_BYPASS_INPUT_FR_SENSOR`              | Force F/R state to FORWARD (skip optocoupler channel reading)                            |
+| `CONFIG_BYPASS_ACTUATOR_THROTTLE`            | Skip DAC and DPDT relay control                                                          |
+| `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING`    | Skip steering stepper motor (node 7) init/configure/commands                             |
+| `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING`     | Skip braking stepper motor (node 6) init/configure/commands                              |
 
 ## Debug Logging
 
@@ -431,8 +511,8 @@ Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` u
 | `CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS` | on      | Log Safety heartbeat monitor lost/regained transitions        |
 | `CONFIG_LOG_CAN_RECOVERY`                  | off     | Log CAN bus recovery events (stop/start, reinstall, bus-off)  |
 | `CONFIG_LOG_RETRY_TWAI`                    | off     | Log repeated TWAI retry attempts (startup and runtime faults) |
-| `CONFIG_LOG_RETRY_MULTIPLEXER`             | off     | Log multiplexer retry attempts while faulted                  |
-| `CONFIG_LOG_RETRY_PEDAL_RELAY`             | off     | Log pedal relay retry attempts while faulted                  |
+| `CONFIG_LOG_RETRY_DAC`                     | off     | Log DAC retry attempts while faulted                          |
+| `CONFIG_LOG_RETRY_DPDT_RELAY`              | off     | Log DPDT relay retry attempts while faulted                   |
 | `CONFIG_LOG_RETRY_PEDAL_INPUT`             | off     | Log pedal ADC retry attempts while faulted                    |
 | `CONFIG_LOG_RETRY_FR_INPUT`                | off     | Log F/R input retry attempts while faulted                    |
 | `CONFIG_LOG_RETRY_STEPPER_STEERING`        | off     | Log steering stepper retry attempts                           |
@@ -442,33 +522,33 @@ Retries are unbounded for failed required components, paced at 500ms intervals (
 
 ### Control Logic
 
-| Flag                                       | Default | Effect                                                           |
-| ------------------------------------------ | ------- | ---------------------------------------------------------------- |
-| `CONFIG_LOG_CONTROL_STATE_CHANGES`         | on      | Log control state transitions and transition reasons             |
-| `CONFIG_LOG_CONTROL_FAULT_CHANGES`         | off     | Log control fault code changes                                   |
-| `CONFIG_LOG_CONTROL_STATE_TICK`            | off     | Log state-machine evaluation every 20ms cycle (very verbose)     |
-| `CONFIG_LOG_CONTROL_ENABLE_SEQUENCE`       | off     | Log enable/disable sequence steps (start, complete, abort)       |
-| `CONFIG_LOG_CONTROL_OVERRIDE`              | off     | Log driver override trigger events (pedal/F/R)                   |
-| `CONFIG_LOG_CONTROL_THROTTLE_CHANGES`      | off     | Log throttle level changes                                       |
-| `CONFIG_LOG_CONTROL_THROTTLE_TICK`         | off     | Log throttle current/target every 20ms cycle (very verbose)      |
-| `CONFIG_LOG_CONTROL_PRECONDITION_BLOCKED`  | on      | Log when enable preconditions block readiness/ENABLE transitions |
-| `CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES` | on      | Log received Safety target/fault changes seen by Control         |
+| Flag                                       | Default | Effect                                                                    |
+| ------------------------------------------ | ------- | ------------------------------------------------------------------------- |
+| `CONFIG_LOG_CONTROL_STATE_CHANGES`         | on      | Log control state transitions and transition reasons                      |
+| `CONFIG_LOG_CONTROL_FAULT_CHANGES`         | off     | Log control fault code changes                                            |
+| `CONFIG_LOG_CONTROL_STATE_TICK`            | off     | Log state-machine evaluation every 20ms cycle (very verbose)              |
+| `CONFIG_LOG_CONTROL_ENABLE_SEQUENCE`       | off     | Log enable/disable sequence steps (start, complete, abort)                |
+| `CONFIG_LOG_CONTROL_OVERRIDE`              | off     | Log driver override trigger events (reverse, throttle, steering, braking) |
+| `CONFIG_LOG_CONTROL_THROTTLE_CHANGES`      | off     | Log throttle level changes                                                |
+| `CONFIG_LOG_CONTROL_THROTTLE_TICK`         | off     | Log throttle current/target every 20ms cycle (very verbose)               |
+| `CONFIG_LOG_CONTROL_PRECONDITION_BLOCKED`  | on      | Log when enable preconditions block readiness/ENABLE transitions          |
+| `CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES` | on      | Log received Safety target/fault changes seen by Control                  |
 
 ### Inputs
 
-| Flag                           | Default | Effect                                               |
-| ------------------------------ | ------- | ---------------------------------------------------- |
-| `CONFIG_LOG_INPUT_PEDAL_ADC`   | off     | Log all pedal ADC millivolt readings every cycle (including below threshold; extremely verbose) |
-| `CONFIG_LOG_INPUT_PEDAL_EVENTS` | off     | Log edge-triggered pedal threshold/rearm events     |
-| `CONFIG_LOG_INPUT_FR_DEBOUNCE` | off     | Log F/R switch debounce transitions                  |
-| `CONFIG_LOG_INPUT_FR_STATE`    | off     | Log F/R selector state changes                       |
+| Flag                            | Default | Effect                                                                                          |
+| ------------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `CONFIG_LOG_INPUT_PEDAL_ADC`    | off     | Log all pedal ADC millivolt readings every cycle (including below threshold; extremely verbose) |
+| `CONFIG_LOG_INPUT_PEDAL_EVENTS` | off     | Log edge-triggered pedal threshold/rearm events                                                 |
+| `CONFIG_LOG_INPUT_FR_DEBOUNCE`  | off     | Log F/R switch debounce transitions                                                             |
+| `CONFIG_LOG_INPUT_FR_STATE`     | off     | Log F/R selector state changes                                                                  |
 
 ### Actuators
 
 | Flag                                     | Default | Effect                                              |
 | ---------------------------------------- | ------- | --------------------------------------------------- |
-| `CONFIG_LOG_ACTUATOR_MUX_LEVEL`          | off     | Log multiplexer level changes with A2/A1/A0 values  |
-| `CONFIG_LOG_ACTUATOR_PEDAL_RELAY`        | off     | Log pedal bypass relay energize/de-energize         |
+| `CONFIG_LOG_ACTUATOR_DAC_LEVEL`          | off     | Log DAC throttle level changes                      |
+| `CONFIG_LOG_ACTUATOR_DPDT_RELAY`         | off     | Log DPDT relay energize/de-energize                 |
 | `CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX` | off     | Log stepper position commands sent over CAN         |
 | `CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX`  | off     | Log stepper motion commands (PA/PR/ST)              |
 | `CONFIG_LOG_ACTUATOR_STEPPER_RX`         | off     | Log parsed stepper CAN RX frames (MS, params, ACKs) |
@@ -477,7 +557,6 @@ Retries are unbounded for failed required components, paced at 500ms intervals (
 
 | Flag                                     | Default | Effect                                                                |
 | ---------------------------------------- | ------- | --------------------------------------------------------------------- |
-| `CONFIG_LOG_HEARTBEAT_LED_STATE_CHANGES` | off     | Log HEARTBEAT_LED color/reason mode changes                           |
 | `CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES` | off     | Log every HEARTBEAT_LED color update with color/reason (very verbose) |
 
 ## Build

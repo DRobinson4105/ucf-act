@@ -3,10 +3,13 @@
 Host-native unit tests for the CAN bus shared protocol, logic, and component libraries. These compile and run on any dev machine — no ESP-IDF, FreeRTOS, or embedded toolchain required.
 
 The tests cover:
+
 - Pure protocol logic (`common/protocol/stepper_protocol_uim2852`, `common/protocol/can_protocol`)
 - Motor driver component (`control-esp32/components/stepper_motor_uim2852`) via mocked ESP-IDF APIs
 - Driver input hardware components (`control-esp32/components/adc_12bitsar`, `control-esp32/components/optocoupler_pc817`)
+- Actuator components (`control-esp32/components/relay_dpdt_my5nj`) via mocked ESP-IDF APIs
 - Extracted decision logic (`common/logic/safety_logic`, `common/logic/control_logic`, `common/logic/system_state`) — pure functions with no hardware deps
+- Integration tests combining Safety and Control state machines for full round-trip verification
 
 ## Prerequisites
 
@@ -27,18 +30,20 @@ make
 
 ### Other Commands
 
-| Command                       | Description                                    |
-|-------------------------------|------------------------------------------------|
-| `make`                        | Compile and run all test suites                |
-| `make test_stepper_protocol`  | Compile only the stepper protocol test binary  |
-| `make test_can_protocol`      | Compile only the CAN protocol test binary      |
-| `make test_motor_component`   | Compile only the motor component test binary   |
-| `make test_safety_logic`      | Compile only the safety logic test binary      |
-| `make test_control_logic`     | Compile only the control logic test binary     |
-| `make test_system_state`      | Compile only the system state test binary      |
-| `make test_heartbeat_monitor` | Compile only the heartbeat monitor test binary |
-| `make test_driver_inputs`     | Compile only the driver inputs test binary     |
-| `make clean`                  | Delete compiled binaries                       |
+| Command                               | Description                                    |
+| ------------------------------------- | ---------------------------------------------- |
+| `make`                                | Compile and run all test suites                |
+| `make test_stepper_protocol`          | Compile only the stepper protocol test binary  |
+| `make test_can_protocol`              | Compile only the CAN protocol test binary      |
+| `make test_motor_component`           | Compile only the motor component test binary   |
+| `make test_safety_logic`              | Compile only the safety logic test binary      |
+| `make test_control_logic`             | Compile only the control logic test binary     |
+| `make test_system_state`              | Compile only the system state test binary      |
+| `make test_heartbeat_monitor`         | Compile only the heartbeat monitor test binary |
+| `make test_driver_inputs`             | Compile only the driver inputs test binary     |
+| `make test_relay`                     | Compile only the relay test binary             |
+| `make test_integration_state_machine` | Compile only the integration test binary       |
+| `make clean`                          | Delete compiled binaries                       |
 
 To run a single suite after building:
 
@@ -54,7 +59,7 @@ make test_stepper_protocol
 Tests the `stepper_protocol_uim2852` library (CAN frame building and parsing for UIM2852 stepper motors).
 
 | Category              | What it covers                                                                                                                                       |
-|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | CAN ID encode/decode  | Round-trip for node IDs 0-31, ACK bit manipulation, NULL output safety, invalid ID rejection                                                         |
 | CW utility            | `cw_with_ack()`, `cw_ack_requested()`, `cw_base()`                                                                                                   |
 | Frame builders        | Every command type: MO, BG, ST, SD, PA, SP, MS, PP, AC, DC, JV, PR, IC/LM/QE set, OG, brake. Verifies byte layout matches the UIM2852 SimpleCAN spec |
@@ -70,134 +75,159 @@ Tests the `stepper_protocol_uim2852` library (CAN frame building and parsing for
 
 Tests the `can_protocol` header (shared protocol definitions used by all nodes).
 
-| Category                       | What it covers                                                                                             |
-|--------------------------------|------------------------------------------------------------------------------------------------------------|
-| LE16 pack/unpack               | Unsigned and signed 16-bit little-endian: zero, max, arbitrary value, INT16_MIN, INT16_MAX                 |
+| Category                       | What it covers                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| LE16 pack/unpack               | Unsigned and signed 16-bit little-endian: zero, max, arbitrary value, INT16_MIN, INT16_MAX                                |
 | Planner command encode/decode  | Round-trip with typical values and boundary values, short-DLC reject, throttle clamp, wire format byte order verification |
-| Safety heartbeat encode/decode | Round-trip advancing/retreating states, reserved byte zeroing                                              |
-| Heartbeat encode/decode        | Round-trip basic, with fault, with enable_complete flag, with autonomy_request flag, reserved byte zeroing |
-| String helpers                 | `node_state_to_string()` all values + unknown, `node_fault_to_string()` all ranges + unknown               |
-| CAN ID constants               | IDs fall within assigned ranges (0x100-0x10F, 0x110-0x11F, 0x120-0x12F), no collisions                     |
+| Safety heartbeat encode/decode | Round-trip advancing/retreating states, reserved byte zeroing                                                             |
+| Heartbeat encode/decode        | Round-trip basic, with fault, with enable_complete flag, with autonomy_request flag, reserved byte zeroing                |
+| String helpers                 | `node_state_to_string()` all values + unknown, `node_fault_to_string()` all ranges + unknown                              |
+| CAN ID constants               | IDs fall within assigned ranges (0x100-0x10F, 0x110-0x11F, 0x120-0x12F), no collisions                                    |
 
 ### `test_motor_component.cpp`
 
 Tests the `stepper_motor_uim2852` driver component using mocked ESP-IDF/FreeRTOS APIs (see `mocks/` directory).
 
-| Category                     | What it covers                                                              |
-|------------------------------|-----------------------------------------------------------------------------|
-| Init                         | Default/custom config, NULL motor, semaphore create failure                 |
-| Enable/disable               | MO frame send, TX failure handling, uninitialized motor guard               |
-| Stop                         | ST command, emergency stop (SD+ST sequence)                                 |
-| Go absolute/relative         | PA+BG sequence, negative positions, PA/BG failure, PR+BG, motion flag       |
-| Set origin                   | OG frame send, position clear                                               |
-| Set speed/accel/decel        | SP, AC, DC parameter frames                                                 |
-| Query status/position/clear  | MS query, PP query, MS clear                                                |
-| Process frame filtering      | NULL motor/msg, uninitialized, standard (non-extended) frame, wrong node ID |
-| Process frame MS             | MS[0] status/position/driver_enabled, MS[1] speed/position, negative values |
-| Process frame NOTIFY         | PTP complete, PTP callback, stall detection, stall callback                 |
-| Process frame ER             | Error flag, short data handling                                             |
-| Process frame MO ACK         | Enable/disable acknowledgment                                               |
-| Process frame param response | Query unblock, wrong idx/cw ignored, no pending query                       |
-| Process frame general        | Timestamp update, ACK pending clear                                         |
-| Query param                  | Send+block, timeout, NULL value, uninitialized                              |
-| Set param                    | Frame send, uninitialized guard                                             |
-| Configure                    | Timeout uses defaults, uninitialized guard, success updates microstep       |
-| Notify callback              | Set callback, NULL motor guard                                              |
-| Status accessors             | target_position zero after init, set by PT feed, position_error zero/positive/negative/saturation, feed failure no update |
-| Deinit/reinit safety         | Clears initialized flag, NULL motor, already-deinitialized, reinit safe, enable after deinit fails |
-| Liveness watchdog            | OK within timeout, timeout exceeded, not enabled, no response yet, exact boundary, tick wrap, NULL motor, uninitialized |
-| Set limits                   | Sends LM+IC frames, uninitialized guard, NULL motor, TX failure             |
-| PT mode API                  | Configure enables FIFO notifications, start sends PV, stop sends PV+ST, feed sends QF, feed clears FIFO flags, FIFO empty/low notifications, full lifecycle state tracking |
+| Category                     | What it covers                                                                                                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Init                         | Default/custom config, NULL motor, semaphore create failure                                                                                                                                                                           |
+| Enable/disable               | MO frame send, TX failure handling, uninitialized motor guard                                                                                                                                                                         |
+| Stop                         | ST command, emergency stop (SD+ST sequence)                                                                                                                                                                                           |
+| Go absolute/relative         | PA+BG sequence, negative positions, PA/BG failure, PR+BG, motion flag                                                                                                                                                                 |
+| Set origin                   | OG frame send, position clear                                                                                                                                                                                                         |
+| Set speed/accel/decel        | SP, AC, DC parameter frames                                                                                                                                                                                                           |
+| Query status/position/clear  | MS query, PP query, MS clear                                                                                                                                                                                                          |
+| Process frame filtering      | NULL motor/msg, uninitialized, standard (non-extended) frame, wrong node ID                                                                                                                                                           |
+| Process frame MS             | MS[0] status/position/driver_enabled, MS[1] speed/position, negative values                                                                                                                                                           |
+| Process frame NOTIFY         | PTP complete, PTP callback, stall detection, stall callback                                                                                                                                                                           |
+| Process frame ER             | Error flag, short data handling                                                                                                                                                                                                       |
+| Process frame MO ACK         | Enable/disable acknowledgment                                                                                                                                                                                                         |
+| Process frame param response | Query unblock, wrong idx/cw ignored, no pending query                                                                                                                                                                                 |
+| Process frame general        | Timestamp update, ACK pending clear                                                                                                                                                                                                   |
+| Query param                  | Send+block, timeout, NULL value, uninitialized                                                                                                                                                                                        |
+| Set param                    | Frame send, uninitialized guard                                                                                                                                                                                                       |
+| Configure                    | Timeout uses defaults, uninitialized guard, success updates microstep                                                                                                                                                                 |
+| Notify callback              | Set callback, NULL motor guard                                                                                                                                                                                                        |
+| Status accessors             | target_position zero after init, set by PT feed, position_error zero/positive/negative/saturation, feed failure no update                                                                                                             |
+| Deinit/reinit safety         | Clears initialized flag, NULL motor, already-deinitialized, reinit safe, enable after deinit fails                                                                                                                                    |
+| Liveness watchdog            | OK within timeout, timeout exceeded, not enabled, no response yet, exact boundary, tick wrap, NULL motor, uninitialized                                                                                                               |
+| Set limits                   | Sends LM+IC frames, uninitialized guard, NULL motor, TX failure                                                                                                                                                                       |
+| PT mode API                  | Configure sets PT FIFO MP/IE parameters, start sends PV row select, stop sends ST, feed writes PT rows on the configured cadence and auto-sends BG after startup prefill, FIFO empty/low notifications, full lifecycle state tracking |
 
 ### `test_safety_logic.cpp`
 
-Tests the pure `safety_logic` module (e-stop bitmask evaluation, ultrasonic fail-safe, relay decisions).
+Tests the pure `safety_logic` module (stop/fault bitmask evaluation, ultrasonic fail-safe).
 
-| Category                         | What it covers                                                                                            |
-|----------------------------------|-----------------------------------------------------------------------------------------------------------|
-| Ultrasonic trigger               | Clear path, obstacle detected, sensor unhealthy (fail-safe), both bad                                     |
-| E-stop bitmask                   | All clear, each individual source, and combined conditions represented as OR'ed fault bits                |
-| Ultrasonic fail-safe in evaluate | Unhealthy sensor triggers estop, healthy+clear passes                                                     |
-| Relay output                     | Enabled when safe, disabled on estop, disabled on timeout                                                 |
-| Combined scenarios               | Multiple simultaneous faults (all bits preserved), estop on/off transition, ultrasonic fault alone blocks |
-| NULL input guard                 | `safety_evaluate(NULL)` returns fail-safe defaults (estop=true, relay=false)                              |
+| Category              | What it covers                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------ |
+| Ultrasonic trigger    | Clear path, obstacle detected, sensor unhealthy (fail-safe), both bad                      |
+| Stop-only inputs      | Local stop inputs (push button, remote, ultrasonic) produce stop_flags with no fault_flags |
+| Stop forwarding       | Planner/Control stop_flags forwarded into Safety stop_flags                                |
+| Fault-only inputs     | Timeouts and issues produce fault_flags with no stop_flags                                 |
+| Combined stop + fault | Multiple simultaneous causes in both channels (all bits preserved)                         |
+| NULL input guard      | `safety_evaluate(NULL)` returns fail-safe defaults (stop_active=true)                      |
 
 ### `test_control_logic.cpp`
 
-Tests the pure `control_logic` module (state machine, throttle slew, preconditions, fault injection, envelope clamping). 63 tests covering all public functions and every state machine branch.
+Tests the pure `control_logic` module (state machine, throttle slew, preconditions, fault injection, envelope clamping). 87 tests covering all public functions and every state machine branch.
 
-| Category                        | What it covers                                                                                          |
-|---------------------------------|---------------------------------------------------------------------------------------------------------|
-| State transitions (16)          | INIT/NOT_READY/READY/ENABLE/ACTIVE/OVERRIDE/FAULT transitions, precondition-driven readiness            |
-| Precondition checker (5)        | NULL returns ALL, FR not forward, pedal not rearmed, active fault, multiple combine as bitmask           |
-| Throttle slew (6)               | At target (no change), step up/down by 1, rate limited, NULL inputs, uint32 timer overflow               |
-| Command clamping (3)            | Below min, above max, in range                                                                          |
-| INIT edge cases (2)             | Stays when dwell not expired, uint32 timer wrap still transitions                                       |
-| ENABLE abort (5)                | Safety retreat, FR not forward, timer not expired (stays), complete fires once, exact timer boundary     |
-| ACTIVE override (4)             | FR changed, steering error, braking error, safety retreat priority over pedal override                   |
-| ACTIVE throttle + steering (7)  | Slew applies APPLY_THROTTLE, at target no action, steering dedup (same skips, changed sends),           |
-|                                 | dedup reset always sends, unconfigured envelope forces neutral, envelope clamps out-of-range             |
-| Motor fault injection (4)       | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), from READY (FAULT only), ignored if faulted |
-| FR_INVALID sensor fault (3)     | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), no re-trigger when already faulted          |
-| OVERRIDE recovery (2)           | Stays when pedal not rearmed, stays when FR not forward                                                  |
-| FAULT recovery (3)              | MOTOR_COMM clears when motor OK, SENSOR_INVALID clears when FR valid, unknown fault stays with RECOVERY |
-| Target sanitization (1)         | Invalid target (0xFF) treated as NOT_READY, triggers safety retreat from ACTIVE                          |
-| Safe outputs (1)                | Override zeros throttle, resets stepper dedup trackers to sentinel                                       |
-| NULL inputs (1)                 | `control_compute_step(state, fault, NULL)` returns safe zero-init defaults                               |
+| Category                       | What it covers                                                                                                          |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| State transitions (16)         | INIT/NOT_READY/READY/ENABLE/ACTIVE transitions, precondition-driven readiness, operator-stop retreat/recovery           |
+| Precondition checker (7)       | NULL returns ALL, FR reverse/invalid/neutral, pedal not rearmed, active fault, multiple combine as bitmask              |
+| Throttle slew (6)              | At target (no change), step up/down by 1, rate limited, NULL inputs, uint32 timer overflow                              |
+| Command clamping (4)           | Below min, above max, in range, misconfigured (min > max) returns neutral                                               |
+| INIT edge cases (2)            | Stays when dwell not expired, uint32 timer wrap still transitions                                                       |
+| ENABLE abort (6)               | Safety retreat, FR reverse, neutral doesn't abort, timer not expired (stays), complete fires once, exact timer boundary |
+| ACTIVE override (6)            | FR changed, neutral zeros throttle, neutral at zero no change, steering error, braking error, safety retreat priority   |
+| ACTIVE throttle + steering (9) | Slew applies APPLY_THROTTLE, at target no action, clamps to envelope, unconfigured forces neutral,                      |
+|                                | steering dedup (same skips, changed sends), braking dedup reset always sends,                                           |
+|                                | envelope unconfigured forces neutral, envelope clamps out-of-range                                                      |
+| Motor fault injection (4)      | From ACTIVE (DISABLE_AUTONOMY), from ENABLE (ABORT_ENABLE), from READY (FAULT only), ignored if faulted                 |
+| FR_INVALID sensor fault (5)    | From ACTIVE, from ENABLE, from NOT_READY (no fault), from READY (no fault), no re-trigger when faulted                  |
+| OVERRIDE recovery (3)          | Stays when pedal not rearmed, stays when FR reverse, recovers when FR neutral                                           |
+| FAULT recovery (3)             | MOTOR_COMM clears when motor OK, SENSOR_INVALID clears when FR valid, unknown fault stays with RECOVERY                 |
+| Target sanitization (1)        | Invalid target (0xFF) treated as NOT_READY, triggers safety retreat from ACTIVE                                         |
+| Safe outputs (1)               | Override zeros throttle, resets stepper dedup trackers to sentinel                                                      |
+| NULL inputs (1)                | `control_compute_step(state, fault, NULL)` returns safe zero-init defaults                                              |
 
 ### `test_system_state.cpp`
 
 Tests the pure `system_state` module (Safety's target state advancement logic).
 
-| Category                       | What it covers                                                                    |
-|--------------------------------|-----------------------------------------------------------------------------------|
-| INIT -> NOT_READY              | Transitions after boot dwell                                                      |
-| NOT_READY -> READY             | Both nodes READY, both alive, no e-stop                                           |
-| READY -> ENABLE                | Both nodes READY and autonomy_request asserted                                    |
-| ENABLE -> ACTIVE               | Both nodes ENABLE with enable_complete flag                                       |
-| ENABLE stays                   | One node complete, no nodes complete                                              |
-| ACTIVE stays                   | Normal operation                                                                  |
-| Autonomy halt retreat          | ENABLE/ACTIVE retreat to READY/NOT_READY when Planner drops autonomy hold request |
-| E-stop retreat                 | From READY, ENABLE, ACTIVE -- all retreat to NOT_READY                            |
-| Fault/override/timeout retreat | Planner/Control hard negatives retreat target to NOT_READY                        |
-| Edge cases                     | Unknown state retreats to NOT_READY                                               |
+| Category              | What it covers                                                                    |
+| --------------------- | --------------------------------------------------------------------------------- |
+| INIT -> NOT_READY     | Transitions after boot dwell                                                      |
+| NOT_READY -> READY    | Both nodes READY, both alive, no stop/fault active                                |
+| READY -> ENABLE       | Both nodes READY and autonomy_request asserted                                    |
+| ENABLE -> ACTIVE      | Both nodes ENABLE with enable_complete flag                                       |
+| ENABLE stays          | One node complete, no nodes complete                                              |
+| ACTIVE stays          | Normal operation                                                                  |
+| Autonomy halt retreat | ENABLE/ACTIVE retreat to READY/NOT_READY when Planner drops autonomy hold request |
+| Problem retreat       | From READY, ENABLE, ACTIVE -- stop/fault active retreats to NOT_READY             |
+| Timeout retreat       | Planner/Control liveness loss retreats target to NOT_READY                        |
+| Edge cases            | Unknown state retreats to NOT_READY                                               |
 
 ### `test_heartbeat_monitor.cpp`
 
 Tests the `heartbeat_monitor` component (name handling, timeout transitions, and mask reporting).
 
-| Category          | What it covers                                                          |
-|-------------------|-------------------------------------------------------------------------|
-| Init/tag behavior | Config-derived tag (`<name>_HB`) and null-config fallback (`HEARTBEAT`) |
-| Node registration | Null name fallback to `"unknown"`, copied-name lifetime safety          |
-| Timeout/liveness  | Alive -> timeout -> alive transition and timeout mask bit behavior      |
-| Capacity limits   | Registration failure when max nodes reached                             |
-| all_alive          | True when all updated, false when one timed out, false when never seen, vacuous truth (zero nodes), recovers after update |
-| Tick wrap          | Timeout detection works correctly when uint32 tick counter wraps past UINT32_MAX |
+| Category          | What it covers                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Init/tag behavior | Config-derived tag (`<name>_HB`) and null-config fallback (`HEARTBEAT`)                                                   |
+| Node registration | Null name fallback to `"unknown"`, copied-name lifetime safety                                                            |
+| Timeout/liveness  | Alive -> timeout -> alive transition and timeout mask bit behavior                                                        |
+| Capacity limits   | Registration failure when max nodes reached                                                                               |
+| all_alive         | True when all updated, false when one timed out, false when never seen, vacuous truth (zero nodes), recovers after update |
+| Tick wrap         | Timeout detection works correctly when uint32 tick counter wraps past UINT32_MAX                                          |
 
 ### `test_driver_inputs.cpp`
 
 Tests the split hardware input components used by Control: `adc_12bitsar` and `optocoupler_pc817`.
 
 | Category         | What it covers                                                       |
-|------------------|----------------------------------------------------------------------|
+| ---------------- | -------------------------------------------------------------------- |
 | Pedal ADC        | Raw conversion path, calibration path, ADC init failure handling     |
 | F/R debounce     | Debounced transition requires stable `FR_PC817_DEBOUNCE_MS` interval |
 | F/R raw mapping  | PC817 active-low mapping for Forward/Reverse/Neutral/Invalid         |
 | F/R init failure | GPIO setup failure propagates init failure                           |
 
+### `test_relay.cpp`
+
+Tests the `relay_dpdt_my5nj` driver component (MY5NJ DPDT relay with 2N5551 transistor driver) using mocked ESP-IDF APIs.
+
+| Category            | What it covers                                          |
+| ------------------- | ------------------------------------------------------- |
+| Pre-init state      | `is_energized` returns false before init                |
+| Init                | Success, NULL config, GPIO failure, preloads safe level |
+| Energize/deenergize | GPIO level changes, cycle, set_level failure handling   |
+| State query         | `is_energized` reflects actual GPIO level               |
+
+### `test_integration_state_machine.cpp`
+
+Integration tests exercising both `system_state_step` (Safety) and `control_compute_step` (Control) together, simulating the CAN message exchange across state transitions.
+
+| Category                 | What it covers                                                       |
+| ------------------------ | -------------------------------------------------------------------- |
+| Full round-trip          | INIT -> NOT_READY -> READY -> ENABLE -> ACTIVE -> NOT_READY (e-stop) |
+| ENABLE timeout           | Safety retreats when nodes fail to complete within 5s window         |
+| Override during ACTIVE   | Pedal press triggers override, Safety sees retreat                   |
+| Autonomy halt            | Planner drops autonomy hold, Safety retreats                         |
+| FR_INVALID during ACTIVE | Wiring fault triggers override with SENSOR_INVALID fault             |
+| Stale planner command    | Zeroed throttle slews down, steering preserved via dedup             |
+
 ## Mock Infrastructure
 
 The `mocks/` directory provides stub implementations of ESP-IDF and FreeRTOS APIs so that the motor component can be compiled and tested on the host:
 
-| File                    | Purpose                                                                                                                                         |
-|-------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| File                      | Purpose                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `esp_idf_mock.h` / `.cpp` | Core types, error codes, mock state variables (`mock_sent_frames[]`, `mock_tick_count`, etc.), semaphore callback injection, `mock_reset_all()` |
-| `can_twai.h`            | Mock CAN send that captures frames to `mock_sent_frames[]`, `can_twai_bus_ok()` stub                                                            |
-| `freertos/FreeRTOS.h`   | FreeRTOS type stubs and tick macros                                                                                                             |
-| `driver/twai.h`         | TWAI message type, status info struct, driver stub functions                                                                                    |
-| `esp_log.h`             | No-op logging macros                                                                                                                            |
-| `esp_err.h`             | Error code definitions                                                                                                                          |
+| `can_twai.h`              | Mock CAN send that captures frames to `mock_sent_frames[]`, `can_twai_bus_ok()` stub                                                            |
+| `freertos/FreeRTOS.h`     | FreeRTOS type stubs and tick macros                                                                                                             |
+| `driver/twai.h`           | TWAI message type, status info struct, driver stub functions                                                                                    |
+| `esp_log.h`               | No-op logging macros                                                                                                                            |
+| `esp_err.h`               | Error code definitions                                                                                                                          |
 
 The mock include path (`-Imocks`) is placed **first** so that `#include "esp_log.h"` etc. in the component source resolves to mock headers instead of real ESP-IDF ones.
 
