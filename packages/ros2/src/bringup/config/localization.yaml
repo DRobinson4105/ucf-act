@@ -42,6 +42,21 @@ navsat_transform_node:
     transform_timeout: 0.2
     broadcast_cartesian_transform: false
     broadcast_cartesian_transform_as_parent_frame: false
+
+gps_local_fusion_node:
+  ros__parameters:
+    local_odom_topic: /odometry/local
+    gps_odom_topic: /odometry/gps
+    output_topic: /odometry/gps_fused
+    publish_hz: 20.0
+    local_stale_timeout_s: 0.5
+    gps_stale_timeout_s: 1.0
+    full_gps_covariance_m2: 0.5
+    zero_gps_covariance_m2: 9.0
+    anchor_covariance_m2: 0.5
+    max_anchor_innovation_m: 3.0
+    dead_reckoning_drift_m2_per_s: 0.05
+    reanchor_after_good_gps_samples: 3
     
 ekf_global_node:
   ros__parameters:
@@ -71,7 +86,7 @@ ekf_global_node:
     odom0_queue_size: 5
     odom0_differential: false
     odom0_relative: false
-    odom1: /odometry/gps
+    odom1: /odometry/gps_fused
     odom1_config: [
       true, true, false,
       false, false, false,
