@@ -1,0 +1,105 @@
+menu "TWAI Port Configuration"
+
+    config APP_TWAI_TX_GPIO
+        int "TX GPIO number"
+        default 5
+        range 0 48
+        help
+            GPIO pin connected to the CAN transceiver TX line.
+
+    config APP_TWAI_RX_GPIO
+        int "RX GPIO number"
+        default 5
+        range 0 48
+        help
+            GPIO pin connected to the CAN transceiver RX line.
+
+    choice APP_TWAI_BITRATE_CHOICE
+        prompt "Bitrate"
+        default APP_TWAI_BITRATE_1M
+        help
+            CAN bus bitrate.
+
+        config APP_TWAI_BITRATE_125K
+            bool "125 kbit/s"
+        config APP_TWAI_BITRATE_250K
+            bool "250 kbit/s"
+        config APP_TWAI_BITRATE_500K
+            bool "500 kbit/s"
+        config APP_TWAI_BITRATE_800K
+            bool "800 kbit/s"
+        config APP_TWAI_BITRATE_1M
+            bool "1 Mbit/s"
+    endchoice
+
+    config APP_TWAI_BITRATE
+        int
+        default 125000 if APP_TWAI_BITRATE_125K
+        default 250000 if APP_TWAI_BITRATE_250K
+        default 500000 if APP_TWAI_BITRATE_500K
+        default 800000 if APP_TWAI_BITRATE_800K
+        default 1000000 if APP_TWAI_BITRATE_1M
+
+    config APP_TWAI_TX_QUEUE_LEN
+        int "TX queue length"
+        default 8
+        range 1 100
+
+    config APP_TWAI_RX_QUEUE_LEN
+        int "RX queue length"
+        default 8
+        range 1 100
+
+    config APP_TWAI_DEFAULT_TIMEOUT_MS
+        int "Default send/receive timeout (ms)"
+        default 100
+        range 1 10000
+
+    choice APP_TWAI_MODE
+        prompt "TWAI operating mode"
+        default APP_TWAI_MODE_NORMAL
+        help
+            Select the TWAI controller operating mode.
+
+        config APP_TWAI_MODE_NORMAL
+            bool "Normal"
+            help
+                Standard CAN operation. Requires at least one other node on
+                the bus to acknowledge transmitted frames.
+
+        config APP_TWAI_MODE_LISTEN_ONLY
+            bool "Listen-only"
+            help
+                The controller receives frames but does not transmit. Useful
+                for bus monitoring.
+
+        config APP_TWAI_MODE_NO_ACK
+            bool "No-ACK (test only — do not use in production)"
+            help
+                The controller transmits without waiting for an acknowledgement
+                bit. Use only when testing with a single node and no other CAN
+                device on the bus. Not suitable for production.
+
+    endchoice
+
+    menu "Logging"
+
+        config APP_TWAI_LOG_TX
+            bool "Log TX frames"
+            default y
+
+        config APP_TWAI_LOG_RX
+            bool "Log RX frames"
+            default y
+
+        config APP_TWAI_LOG_ALERTS
+            bool "Log alerts and state transitions"
+            default y
+
+        config APP_TWAI_LOG_EXT_ONLY
+            bool "Limit frame logging to extended IDs only"
+            default n
+
+    endmenu
+
+endmenu

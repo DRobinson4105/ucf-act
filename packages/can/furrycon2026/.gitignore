@@ -1,0 +1,6 @@
+build/
+built-test/
+
+sdkconfig.old
+
+.DS_Store

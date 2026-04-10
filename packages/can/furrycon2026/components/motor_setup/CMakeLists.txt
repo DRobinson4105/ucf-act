@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "src/motor_setup_binding.c"
+        "src/motor_setup.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src"
+    REQUIRES
+        freertos
+        log
+        motor_exec
+)
