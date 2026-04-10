@@ -5,6 +5,7 @@
 #include "app_twai_config.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "motor_setup.h"
@@ -18,6 +19,53 @@ static const char *TAG = "brakingMotor";
 #define SETUP_RX_TIMEOUT_MS 1000U
 #define SETUP_TASK_STACK_SIZE 8192U
 #define SETUP_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
+#define PT_LOOP_PERIOD_MS     500U
+
+static const motor_setup_step_t s_pt_zero_step = {
+    .name = "PT[0] set 0",
+    .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+    .exec_action = {
+        .role = MOTOR_EXEC_ROLE_BRAKE,
+        .node_id = SETUP_MOTOR_NODE_ID,
+        .operation = MOTOR_EXEC_OPERATION_SET,
+        .object = MOTOR_OBJECT_PT,
+        .ack_requested = false,
+        .has_index = true,
+        .index = 0U,
+        .has_value = true,
+        .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+    },
+    .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+};
+
+static const motor_setup_plan_t s_pt_zero_plan = {
+    .name = "pt zero loop",
+    .steps = &s_pt_zero_step,
+    .step_count = 1U,
+};
+
+static const motor_setup_step_t s_pt_800_step = {
+    .name = "PT[0] set 800",
+    .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+    .exec_action = {
+        .role = MOTOR_EXEC_ROLE_BRAKE,
+        .node_id = SETUP_MOTOR_NODE_ID,
+        .operation = MOTOR_EXEC_OPERATION_SET,
+        .object = MOTOR_OBJECT_PT,
+        .ack_requested = false,
+        .has_index = true,
+        .index = 0U,
+        .has_value = true,
+        .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 800},
+    },
+    .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+};
+
+static const motor_setup_plan_t s_pt_800_plan = {
+    .name = "pt 800 loop",
+    .steps = &s_pt_800_step,
+    .step_count = 1U,
+};
 
 /* TWAI Lifecycle */
 static twai_port_cfg_t build_twai_cfg(uint32_t bitrate)
@@ -231,6 +279,21 @@ static esp_err_t run_setup_flow(void)
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
         vTaskDelay(pdMS_TO_TICKS(100));
         err = run_named_plan(motor_setup_brake_pt_pv_demo_plan());
+        if (err == ESP_OK) {
+            TickType_t last_wake = xTaskGetTickCount();
+            const TickType_t period_ticks = pdMS_TO_TICKS(PT_LOOP_PERIOD_MS);
+            const motor_setup_plan_t *plan = &s_pt_zero_plan;
+
+            while (1) {
+                err = run_named_plan(plan);
+                if (err != ESP_OK) {
+                    break;
+                }
+                xTaskDelayUntil(&last_wake, period_ticks);
+
+                plan = (plan == &s_pt_zero_plan) ? &s_pt_800_plan : &s_pt_zero_plan;
+            }
+        }
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
