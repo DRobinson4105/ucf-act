@@ -6,4 +6,4 @@ endif()
 
 idf_component_register(SRCS ${main_srcs}
                     INCLUDE_DIRS "."
-                    REQUIRES twai_port motor_protocol motor_diag motor_dispatch motor_setup esp_timer)
+                    REQUIRES twai_port motor_protocol motor_diag motor_dispatch motor_setup esp_timer serial_input)
