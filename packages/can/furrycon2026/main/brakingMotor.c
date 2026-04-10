@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "motor_setup.h"
+#include "serial_input.h"
 #include "twai_port.h"
 
 static const char *TAG = "brakingMotor";
@@ -293,13 +294,20 @@ static void setup_task(void *arg)
 
 void app_main(void)
 {
-    BaseType_t rc;
+    BaseType_t   rc;
+    esp_err_t    err;
+    serial_input_frame_t frame;
 
     ESP_LOGI(TAG,
              "Creating setup task stack_size=%u priority=%u main_stack_hwm_words=%u",
              (unsigned)SETUP_TASK_STACK_SIZE,
              (unsigned)SETUP_TASK_PRIORITY,
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
+    err = serial_input_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "serial_input_init failed: %s", esp_err_to_name(err));
+    }
 
     rc = xTaskCreate(setup_task,
                      "setup_task",
@@ -313,4 +321,16 @@ void app_main(void)
     }
 
     ESP_LOGI(TAG, "Setup task created");
+
+    while (true) {
+        err = serial_input_read(&frame, pdMS_TO_TICKS(200));
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG,
+                     "serial seq=%u throttle=%u steering=%u braking=%u",
+                     (unsigned)frame.seq,
+                     (unsigned)frame.throttle,
+                     (unsigned)frame.steering,
+                     (unsigned)frame.braking);
+        }
+    }
 }
