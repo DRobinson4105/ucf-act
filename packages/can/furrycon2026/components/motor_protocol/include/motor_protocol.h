@@ -48,6 +48,10 @@ esp_err_t motor_cmd_pa_set(uint8_t target_id, bool ack_requested, int32_t positi
 
 esp_err_t motor_cmd_mp_get(uint8_t target_id, bool ack_requested, motor_mp_index_t index, motor_cmd_t *out);
 esp_err_t motor_cmd_mp_set_u16(uint8_t target_id, bool ack_requested, motor_mp_index_t index, uint16_t value, motor_cmd_t *out);
+esp_err_t motor_cmd_pv_get(uint8_t target_id, bool ack_requested, motor_cmd_t *out);
+esp_err_t motor_cmd_pv_set(uint8_t target_id, bool ack_requested, uint16_t value, motor_cmd_t *out);
+esp_err_t motor_cmd_pt_get(uint8_t target_id, bool ack_requested, uint16_t row_index, motor_cmd_t *out);
+esp_err_t motor_cmd_pt_set(uint8_t target_id, bool ack_requested, uint16_t row_index, int32_t queued_position, motor_cmd_t *out);
 
 esp_err_t motor_cmd_og_set_origin(uint8_t target_id, bool ack_requested, motor_cmd_t *out);
 

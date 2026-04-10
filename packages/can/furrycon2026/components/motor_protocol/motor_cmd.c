@@ -18,8 +18,10 @@
 #define MOTOR_CMD_BASE_BG 0x16U
 #define MOTOR_CMD_BASE_ST 0x17U
 #define MOTOR_CMD_BASE_PA 0x20U
+#define MOTOR_CMD_BASE_PV 0x23U
 #define MOTOR_CMD_BASE_MP 0x22U
 #define MOTOR_CMD_BASE_OG 0x21U
+#define MOTOR_CMD_BASE_PT 0x24U
 #define MOTOR_CMD_BASE_LM 0x2CU
 #define MOTOR_CMD_BASE_BL 0x2DU
 #define MOTOR_CMD_BASE_IL 0x34U
@@ -33,11 +35,14 @@
  * Payload families currently covered in this file:
  * - no payload
  * - u8 payload
+ * - u16 payload
  * - i32 payload
  * - index only
  * - index + u8
  * - index + u16
  * - index + i32
+ * - row(u16) only
+ * - row(u16) + i32 + reserved zeros
  */
 
 static bool validate_target_id(uint8_t target_id)
@@ -227,7 +232,6 @@ static bool validate_lm_value(motor_lm_index_t index, int32_t value)
 static void set_index_metadata(motor_cmd_t *out, uint16_t index)
 {
     assert(out != NULL);
-    assert(index <= UINT8_MAX);
 
     out->has_index = true;
     out->index = index;
@@ -312,6 +316,33 @@ static esp_err_t build_u8_payload(uint8_t target_id,
 
     assert(out->msg.data_length_code <= 8U);
     out->msg.data[0] = value;
+    return ESP_OK;
+}
+
+static esp_err_t build_u16_payload(uint8_t target_id,
+                                   motor_section_t section,
+                                   motor_object_t object,
+                                   uint8_t base_code,
+                                   bool ack_requested,
+                                   uint16_t value,
+                                   const char *name,
+                                   motor_cmd_t *out)
+{
+    esp_err_t err = validate_out_and_target(target_id, out);
+
+    assert(name != NULL);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = motor_codec_init_cmd(target_id, section, object, base_code, ack_requested, 2U, name, out);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    assert(out->msg.data_length_code <= 8U);
+    motor_codec_pack_u16_le(&out->msg.data[0], value);
     return ESP_OK;
 }
 
@@ -459,6 +490,66 @@ static esp_err_t build_index_i32(uint8_t target_id,
     out->msg.data[0] = (uint8_t)index;
     motor_codec_pack_i32_le(&out->msg.data[1], value);
     set_index_metadata(out, index);
+    return ESP_OK;
+}
+
+static esp_err_t build_row_u16(uint8_t target_id,
+                               motor_section_t section,
+                               motor_object_t object,
+                               uint8_t base_code,
+                               bool ack_requested,
+                               uint16_t row_index,
+                               const char *name,
+                               motor_cmd_t *out)
+{
+    esp_err_t err = validate_out_and_target(target_id, out);
+
+    assert(name != NULL);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = motor_codec_init_cmd(target_id, section, object, base_code, ack_requested, 2U, name, out);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    assert(out->msg.data_length_code <= 8U);
+    motor_codec_pack_u16_le(&out->msg.data[0], row_index);
+    set_index_metadata(out, row_index);
+    return ESP_OK;
+}
+
+static esp_err_t build_row_i32_reserved(uint8_t target_id,
+                                        motor_section_t section,
+                                        motor_object_t object,
+                                        uint8_t base_code,
+                                        bool ack_requested,
+                                        uint16_t row_index,
+                                        int32_t value,
+                                        const char *name,
+                                        motor_cmd_t *out)
+{
+    esp_err_t err = validate_out_and_target(target_id, out);
+
+    assert(name != NULL);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = motor_codec_init_cmd(target_id, section, object, base_code, ack_requested, 8U, name, out);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    assert(out->msg.data_length_code <= 8U);
+    motor_codec_pack_u16_le(&out->msg.data[0], row_index);
+    motor_codec_pack_i32_le(&out->msg.data[2], value);
+    out->msg.data[6] = 0U;
+    out->msg.data[7] = 0U;
+    set_index_metadata(out, row_index);
     return ESP_OK;
 }
 
@@ -686,6 +777,30 @@ esp_err_t motor_cmd_mp_set_u16(uint8_t target_id, bool ack_requested, motor_mp_i
 
     return build_index_u16(target_id, MOTOR_SECTION_INTERPOLATED_MOTION, MOTOR_OBJECT_MP,
                            MOTOR_CMD_BASE_MP, ack_requested, (uint16_t)index, value, "MP_SET_U16", out);
+}
+
+esp_err_t motor_cmd_pv_get(uint8_t target_id, bool ack_requested, motor_cmd_t *out)
+{
+    return build_no_payload(target_id, MOTOR_SECTION_INTERPOLATED_MOTION, MOTOR_OBJECT_PV,
+                            MOTOR_CMD_BASE_PV, ack_requested, "PV_GET", out);
+}
+
+esp_err_t motor_cmd_pv_set(uint8_t target_id, bool ack_requested, uint16_t value, motor_cmd_t *out)
+{
+    return build_u16_payload(target_id, MOTOR_SECTION_INTERPOLATED_MOTION, MOTOR_OBJECT_PV,
+                             MOTOR_CMD_BASE_PV, ack_requested, value, "PV_SET", out);
+}
+
+esp_err_t motor_cmd_pt_get(uint8_t target_id, bool ack_requested, uint16_t row_index, motor_cmd_t *out)
+{
+    return build_row_u16(target_id, MOTOR_SECTION_INTERPOLATED_MOTION, MOTOR_OBJECT_PT,
+                         MOTOR_CMD_BASE_PT, ack_requested, row_index, "PT_GET", out);
+}
+
+esp_err_t motor_cmd_pt_set(uint8_t target_id, bool ack_requested, uint16_t row_index, int32_t queued_position, motor_cmd_t *out)
+{
+    return build_row_i32_reserved(target_id, MOTOR_SECTION_INTERPOLATED_MOTION, MOTOR_OBJECT_PT,
+                                  MOTOR_CMD_BASE_PT, ack_requested, row_index, queued_position, "PT_SET", out);
 }
 
 esp_err_t motor_cmd_og_set_origin(uint8_t target_id, bool ack_requested, motor_cmd_t *out)

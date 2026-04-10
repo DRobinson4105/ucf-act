@@ -30,6 +30,7 @@ static const motor_diag_param_meta_t *lookup_ack_param(const motor_rx_t *rx, uin
     motor_il_index_t il_index;
     motor_mp_index_t mp_index;
     motor_lm_index_t lm_index;
+    uint16_t row_index;
 
     switch (rx->object) {
         case MOTOR_OBJECT_PP:
@@ -73,6 +74,7 @@ static const motor_diag_param_meta_t *lookup_ack_param(const motor_rx_t *rx, uin
         case MOTOR_OBJECT_ST:
         case MOTOR_OBJECT_SD:
         case MOTOR_OBJECT_PA:
+        case MOTOR_OBJECT_PV:
         case MOTOR_OBJECT_BL:
         case MOTOR_OBJECT_OG:
             *out_index = 0U;
@@ -87,6 +89,12 @@ static const motor_diag_param_meta_t *lookup_ack_param(const motor_rx_t *rx, uin
             if (motor_rx_ack_lm_get(rx, &lm_index, NULL) || motor_rx_ack_lm_set(rx, &lm_index, NULL)) {
                 *out_index = lm_index;
                 return motor_diag_lookup_param(MOTOR_OBJECT_LM, lm_index);
+            }
+            break;
+        case MOTOR_OBJECT_PT:
+            if (motor_rx_ack_pt(rx, &row_index, NULL)) {
+                *out_index = row_index;
+                return motor_diag_lookup_param(MOTOR_OBJECT_PT, 0U);
             }
             break;
         case MOTOR_OBJECT_DV:
@@ -127,6 +135,7 @@ static void describe_ack(const motor_rx_t *rx, motor_diag_rx_desc_t *out)
         rx->object == MOTOR_OBJECT_IL ||
         rx->object == MOTOR_OBJECT_MP ||
         rx->object == MOTOR_OBJECT_LM ||
+        rx->object == MOTOR_OBJECT_PT ||
         rx->object == MOTOR_OBJECT_DV) {
         out->has_index = true;
         out->index = index;

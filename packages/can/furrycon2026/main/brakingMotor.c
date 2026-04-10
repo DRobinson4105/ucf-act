@@ -19,34 +19,6 @@ static const char *TAG = "brakingMotor";
 #define SETUP_TASK_STACK_SIZE 8192U
 #define SETUP_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
 
-/* Plan Step Helpers */
-#define READ_STEP(name_, object_, index_) \
-    { \
-        .name = (name_), \
-        .kind = MOTOR_SETUP_STEP_KIND_READ_ONLY, \
-        .exec_action = { \
-            .role = MOTOR_EXEC_ROLE_BRAKE, \
-            .node_id = SETUP_MOTOR_NODE_ID, \
-            .operation = MOTOR_EXEC_OPERATION_GET, \
-            .object = (object_), \
-            .ack_requested = true, \
-            .has_index = true, \
-            .index = (uint16_t)(index_), \
-        }, \
-        .compare_kind = MOTOR_SETUP_COMPARE_NONE, \
-    }
-
-/* Setup Plans */
-static const motor_setup_step_t s_setup_steps[] = {
-    READ_STEP("PP GET CAN bitrate", MOTOR_OBJECT_PP, MOTOR_PP_INDEX_BITRATE),
-};
-
-static const motor_setup_plan_t s_setup_plan = {
-    .name = "brake motor setup",
-    .steps = s_setup_steps,
-    .step_count = sizeof(s_setup_steps) / sizeof(s_setup_steps[0]),
-};
-
 /* TWAI Lifecycle */
 static twai_port_cfg_t build_twai_cfg(uint32_t bitrate)
 {
@@ -258,7 +230,7 @@ static esp_err_t run_setup_flow(void)
                  "Setup task TWAI initialized stack_hwm_words=%u",
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
         vTaskDelay(pdMS_TO_TICKS(100));
-        err = run_named_plan(&s_setup_plan);
+        err = run_named_plan(motor_setup_brake_pt_pv_demo_plan());
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));

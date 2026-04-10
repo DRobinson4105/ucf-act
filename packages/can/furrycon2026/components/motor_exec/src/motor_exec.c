@@ -996,6 +996,46 @@ motor_exec_submit_result_t motor_exec_brake_mp_set_u16(uint8_t node_id,
     return submit_from_builder(motor_cmd_mp_set_u16(node_id, ack_requested, index, value, &cmd), &cmd, opts);
 }
 
+motor_exec_submit_result_t motor_exec_brake_pv_get(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   const motor_exec_submit_opts_t *opts)
+{
+    motor_cmd_t cmd;
+
+    return submit_from_builder(motor_cmd_pv_get(node_id, ack_requested, &cmd), &cmd, opts);
+}
+
+motor_exec_submit_result_t motor_exec_brake_pv_set(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   uint16_t value,
+                                                   const motor_exec_submit_opts_t *opts)
+{
+    motor_cmd_t cmd;
+
+    return submit_from_builder(motor_cmd_pv_set(node_id, ack_requested, value, &cmd), &cmd, opts);
+}
+
+motor_exec_submit_result_t motor_exec_brake_pt_get(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   uint16_t row_index,
+                                                   const motor_exec_submit_opts_t *opts)
+{
+    motor_cmd_t cmd;
+
+    return submit_from_builder(motor_cmd_pt_get(node_id, ack_requested, row_index, &cmd), &cmd, opts);
+}
+
+motor_exec_submit_result_t motor_exec_brake_pt_set(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   uint16_t row_index,
+                                                   int32_t queued_position,
+                                                   const motor_exec_submit_opts_t *opts)
+{
+    motor_cmd_t cmd;
+
+    return submit_from_builder(motor_cmd_pt_set(node_id, ack_requested, row_index, queued_position, &cmd), &cmd, opts);
+}
+
 motor_exec_submit_result_t motor_exec_brake_og_set_origin(uint8_t node_id,
                                                           bool ack_requested,
                                                           const motor_exec_submit_opts_t *opts)

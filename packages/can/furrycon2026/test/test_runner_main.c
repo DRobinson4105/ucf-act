@@ -11,6 +11,9 @@
 #include "unity.h"
 #include "test_log.h"
 
+#define TEST_RUNNER_STACK_SIZE 12288U
+#define TEST_RUNNER_PRIORITY   (tskIDLE_PRIORITY + 1U)
+
 void test_twai_port_set_up(void);
 void test_twai_port_tear_down(void);
 
@@ -37,8 +40,10 @@ void tearDown(void)
     test_twai_port_tear_down();
 }
 
-void app_main(void)
+static void unity_runner_task(void *arg)
 {
+    (void)arg;
+
     const int test_count = unity_get_test_count();
 
     TEST_LOG_BANNER("Running all registered tests");
@@ -73,4 +78,27 @@ void app_main(void)
     while (1) {
         vTaskDelay(portMAX_DELAY);
     }
+}
+
+void app_main(void)
+{
+    BaseType_t rc;
+
+    TEST_LOG_BANNER("Starting Unity runner task");
+    LOG_OUTPUT("stack_size=%u priority=%u", (unsigned)TEST_RUNNER_STACK_SIZE, (unsigned)TEST_RUNNER_PRIORITY);
+
+    rc = xTaskCreate(unity_runner_task,
+                     "unity_runner",
+                     TEST_RUNNER_STACK_SIZE,
+                     NULL,
+                     TEST_RUNNER_PRIORITY,
+                     NULL);
+    if (rc != pdPASS) {
+        LOG_ERROR("failed to create Unity runner task");
+        while (1) {
+            vTaskDelay(portMAX_DELAY);
+        }
+    }
+
+    vTaskDelete(NULL);
 }

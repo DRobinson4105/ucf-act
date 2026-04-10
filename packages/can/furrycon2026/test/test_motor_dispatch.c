@@ -565,6 +565,41 @@ TEST_CASE("motor dispatch completes LM set through 0x24 response shape", "[motor
     dispatch_test_end();
 }
 
+TEST_CASE("motor dispatch correlates PT remote errors without forcing ER subindex semantics onto 16-bit rows", "[motor_dispatch]")
+{
+    motor_cmd_t cmd;
+    motor_rx_t related_error;
+    uint8_t er_data[] = {0x00, 0x33, 0xA4, 0x07, 0x00, 0x00};
+
+    dispatch_test_begin();
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x0A, true, 266U, 100000, &cmd));
+    queue_rx_frame(make_ext_frame(0x0A, 0x0F, 6U, er_data));
+
+    TEST_ASSERT_EQUAL(MOTOR_DISPATCH_RESULT_REMOTE_ERROR,
+                      motor_dispatch_exec(&cmd, pdMS_TO_TICKS(20), pdMS_TO_TICKS(5), NULL, NULL, &related_error));
+    TEST_ASSERT_TRUE(motor_rx_er_is_thrown_error(&related_error));
+    TEST_ASSERT_FALSE(motor_rx_matches_cmd(&related_error, &cmd));
+
+    dispatch_test_end();
+}
+
+TEST_CASE("motor dispatch requires exact PT row match when ER metadata can represent the row", "[motor_dispatch]")
+{
+    motor_cmd_t cmd;
+    uint8_t wrong_er_data[] = {0x00, 0x33, 0xA4, 0x0B, 0x00, 0x00};
+
+    dispatch_test_begin();
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x0A, true, 10U, 100000, &cmd));
+    queue_rx_frame(make_ext_frame(0x0A, 0x0F, 6U, wrong_er_data));
+
+    TEST_ASSERT_EQUAL(MOTOR_DISPATCH_RESULT_TIMEOUT,
+                      motor_dispatch_exec(&cmd, pdMS_TO_TICKS(20), pdMS_TO_TICKS(5), NULL, NULL, NULL));
+
+    dispatch_test_end();
+}
+
 TEST_CASE("motor dispatch ignores malformed near-match and waits for real response", "[motor_dispatch]")
 {
     motor_cmd_t cmd;

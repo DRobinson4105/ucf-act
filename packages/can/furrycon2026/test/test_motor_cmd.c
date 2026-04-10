@@ -210,6 +210,39 @@ TEST_CASE("motor cmd composes literal ACK and no-ACK CW values for new families"
     TEST_ASSERT_EQUAL_HEX8(0xAD, cmd.cw_raw);
 }
 
+TEST_CASE("motor cmd builds PV and PT frames exactly from the documented wire contracts", "[motor_protocol]")
+{
+    motor_cmd_t cmd;
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pv_get(0x05, true, &cmd));
+    assert_frame_core(&cmd, 0x05, 0x23, true, 0U);
+    TEST_ASSERT_FALSE(cmd.has_index);
+    TEST_ASSERT_EQUAL_STRING("PV_GET", cmd.name);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pv_set(0x05, true, 2U, &cmd));
+    assert_frame_core(&cmd, 0x05, 0x23, true, 2U);
+    TEST_ASSERT_FALSE(cmd.has_index);
+    TEST_ASSERT_EQUAL_UINT16(2U, motor_codec_unpack_u16_le(&cmd.msg.data[0]));
+    TEST_ASSERT_EQUAL_STRING("PV_SET", cmd.name);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_get(0x05, true, 266U, &cmd));
+    assert_frame_core(&cmd, 0x05, 0x24, true, 2U);
+    TEST_ASSERT_TRUE(cmd.has_index);
+    TEST_ASSERT_EQUAL_UINT16(266U, cmd.index);
+    TEST_ASSERT_EQUAL_UINT16(266U, motor_codec_unpack_u16_le(&cmd.msg.data[0]));
+    TEST_ASSERT_EQUAL_STRING("PT_GET", cmd.name);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x05, true, 266U, 100000, &cmd));
+    assert_frame_core(&cmd, 0x05, 0x24, true, 8U);
+    TEST_ASSERT_TRUE(cmd.has_index);
+    TEST_ASSERT_EQUAL_UINT16(266U, cmd.index);
+    TEST_ASSERT_EQUAL_UINT16(266U, motor_codec_unpack_u16_le(&cmd.msg.data[0]));
+    TEST_ASSERT_EQUAL_INT32(100000, motor_codec_unpack_i32_le(&cmd.msg.data[2]));
+    TEST_ASSERT_EQUAL_HEX8(0x00, cmd.msg.data[6]);
+    TEST_ASSERT_EQUAL_HEX8(0x00, cmd.msg.data[7]);
+    TEST_ASSERT_EQUAL_STRING("PT_SET", cmd.name);
+}
+
 TEST_CASE("motor cmd builds manual IE QE IL MP SD and BL example frames exactly", "[motor_protocol]")
 {
     motor_cmd_t cmd;

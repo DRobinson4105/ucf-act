@@ -23,6 +23,7 @@
 #define MOTOR_DIAG_RX_BASE_PA      0x20U
 #define MOTOR_DIAG_RX_BASE_OG      0x21U
 #define MOTOR_DIAG_RX_BASE_MP      0x22U
+#define MOTOR_DIAG_RX_BASE_PV      0x23U
 #define MOTOR_DIAG_RX_BASE_LM_SET  0x24U
 #define MOTOR_DIAG_RX_BASE_LM_GET  0x2CU
 #define MOTOR_DIAG_RX_BASE_BL      0x2DU
@@ -81,6 +82,8 @@ static const motor_diag_family_meta_t s_family_meta[] = {
     {MOTOR_OBJECT_SD, "SD", "Stop deceleration"},
     {MOTOR_OBJECT_PA, "PA", "Absolute position"},
     {MOTOR_OBJECT_MP, "MP", "PVT motion parameter"},
+    {MOTOR_OBJECT_PV, "PV", "PVT motion row selector"},
+    {MOTOR_OBJECT_PT, "PT", "PT queue row position"},
     {MOTOR_OBJECT_OG, "OG", "Set origin"},
     {MOTOR_OBJECT_LM, "LM", "Limit"},
     {MOTOR_OBJECT_BL, "BL", "Backlash compensation"},
@@ -192,6 +195,8 @@ static const motor_diag_param_meta_t s_param_meta[] = {
      NULL, 0U, NULL},
     {MOTOR_OBJECT_MP, MOTOR_MP_INDEX_NEXT_AVAILABLE_WRITING_ROW, "Next available writing row",
      MOTOR_DIAG_VALUE_KIND_U16, NULL, 0U, NULL},
+    {MOTOR_OBJECT_PV, 0U, "PVT row index", MOTOR_DIAG_VALUE_KIND_U16, NULL, 0U, NULL},
+    {MOTOR_OBJECT_PT, 0U, "PT queued position", MOTOR_DIAG_VALUE_KIND_I32, NULL, 0U, "pulse"},
     {MOTOR_OBJECT_OG, 0U, "Set origin", MOTOR_DIAG_VALUE_KIND_NONE, NULL, 0U, NULL},
     {MOTOR_OBJECT_LM, MOTOR_LM_INDEX_MAX_SPEED, "Maximum Speed", MOTOR_DIAG_VALUE_KIND_I32, NULL, 0U, "pulse/sec"},
     {MOTOR_OBJECT_LM, MOTOR_LM_INDEX_LOWER_WORKING_LIMIT, "Lower Working Limit", MOTOR_DIAG_VALUE_KIND_I32, NULL, 0U, "pulse"},
@@ -324,9 +329,12 @@ const char *motor_diag_family_symbol_from_base(uint8_t base_code)
             return "PA";
         case MOTOR_DIAG_RX_BASE_MP:
             return "MP";
+        case MOTOR_DIAG_RX_BASE_PV:
+            return "PV";
         case MOTOR_DIAG_RX_BASE_OG:
             return "OG";
         case MOTOR_DIAG_RX_BASE_LM_SET:
+            return "PT/LM";
         case MOTOR_DIAG_RX_BASE_LM_GET:
             return "LM";
         case MOTOR_DIAG_RX_BASE_BL:
@@ -441,11 +449,23 @@ bool motor_diag_decode_cmd_value(const motor_cmd_t *cmd,
             }
             raw_value = cmd->msg.data[0];
             return apply_param_value(raw_value, param_meta, out_value);
+        case MOTOR_OBJECT_PV:
+            if (cmd->msg.data_length_code < 2U) {
+                return false;
+            }
+            raw_value = motor_codec_unpack_u16_le(&cmd->msg.data[0]);
+            return apply_param_value(raw_value, param_meta, out_value);
         case MOTOR_OBJECT_PA:
             if (cmd->msg.data_length_code < 4U) {
                 return false;
             }
             raw_value = motor_codec_unpack_i32_le(&cmd->msg.data[0]);
+            return apply_param_value(raw_value, param_meta, out_value);
+        case MOTOR_OBJECT_PT:
+            if (cmd->msg.data_length_code < 6U) {
+                return false;
+            }
+            raw_value = motor_codec_unpack_i32_le(&cmd->msg.data[2]);
             return apply_param_value(raw_value, param_meta, out_value);
         case MOTOR_OBJECT_SD:
         case MOTOR_OBJECT_BL:
@@ -479,6 +499,7 @@ bool motor_diag_describe_ack_value(const motor_rx_t *rx,
     motor_lm_index_t lm_index;
     uint8_t u8_value;
     uint16_t u16_value;
+    uint16_t row_index;
     int32_t i32_value;
     uint32_t u32_value;
 
@@ -523,6 +544,12 @@ bool motor_diag_describe_ack_value(const motor_rx_t *rx,
         case MOTOR_OBJECT_MP:
             return motor_rx_ack_mp(rx, &mp_index, &u16_value) &&
                    apply_param_value(u16_value, param_meta, &out->value);
+        case MOTOR_OBJECT_PV:
+            return motor_rx_ack_pv(rx, &u16_value) &&
+                   apply_param_value(u16_value, param_meta, &out->value);
+        case MOTOR_OBJECT_PT:
+            return motor_rx_ack_pt(rx, &row_index, &i32_value) &&
+                   apply_param_value(i32_value, param_meta, &out->value);
         case MOTOR_OBJECT_OG:
             return motor_rx_ack_og(rx) &&
                    apply_param_value(0, param_meta, &out->value);

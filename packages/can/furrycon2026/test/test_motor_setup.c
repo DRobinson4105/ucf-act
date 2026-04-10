@@ -164,6 +164,26 @@ TEST_CASE("motor setup binding support stays aligned with exposed command surfac
         .has_value = true,
         .value = {.kind = MOTOR_SETUP_VALUE_KIND_U32, .as.u32 = 321000U},
     };
+    motor_setup_action_t supported_pv = {
+        .role = MOTOR_EXEC_ROLE_BRAKE,
+        .node_id = 6U,
+        .operation = MOTOR_EXEC_OPERATION_SET,
+        .object = MOTOR_OBJECT_PV,
+        .ack_requested = true,
+        .has_value = true,
+        .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 2U},
+    };
+    motor_setup_action_t supported_pt = {
+        .role = MOTOR_EXEC_ROLE_BRAKE,
+        .node_id = 6U,
+        .operation = MOTOR_EXEC_OPERATION_SET,
+        .object = MOTOR_OBJECT_PT,
+        .ack_requested = true,
+        .has_index = true,
+        .index = 266U,
+        .has_value = true,
+        .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 100000},
+    };
     motor_setup_action_t supported_sy_action = {
         .role = MOTOR_EXEC_ROLE_BRAKE,
         .node_id = 6U,
@@ -189,9 +209,90 @@ TEST_CASE("motor setup binding support stays aligned with exposed command surfac
     TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&supported_set));
     TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&supported_new_indexed_family));
     TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&supported_new_scalar));
+    TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&supported_pv));
+    TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&supported_pt));
     TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&supported_sy_action));
     TEST_ASSERT_TRUE(motor_setup_action_binding_supported(&unsupported_shape));
     TEST_ASSERT_FALSE(motor_setup_action_binding_supported(NULL));
+}
+
+TEST_CASE("motor setup supports PT and PV actions within the current declarative model", "[motor_setup]")
+{
+    static motor_setup_result_t result;
+    static motor_setup_step_result_t history[2];
+    static const motor_setup_step_t steps[] = {
+        {
+            .name = "read pv current row",
+            .kind = MOTOR_SETUP_STEP_KIND_READ_ONLY,
+            .exec_action = {
+                .role = MOTOR_EXEC_ROLE_BRAKE,
+                .node_id = 6U,
+                .operation = MOTOR_EXEC_OPERATION_GET,
+                .object = MOTOR_OBJECT_PV,
+                .ack_requested = true,
+                .has_index = false,
+            },
+            .compare_kind = MOTOR_SETUP_COMPARE_INT_EQ,
+            .expected_value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 33U},
+        },
+        {
+            .name = "write pt row 266",
+            .kind = MOTOR_SETUP_STEP_KIND_WRITE_THEN_VERIFY,
+            .exec_action = {
+                .role = MOTOR_EXEC_ROLE_BRAKE,
+                .node_id = 6U,
+                .operation = MOTOR_EXEC_OPERATION_SET,
+                .object = MOTOR_OBJECT_PT,
+                .ack_requested = true,
+                .has_index = true,
+                .index = 266U,
+                .has_value = true,
+                .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 100000},
+            },
+            .compare_kind = MOTOR_SETUP_COMPARE_INT_EQ,
+            .expected_value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 100000},
+            .verify_action = {
+                .role = MOTOR_EXEC_ROLE_BRAKE,
+                .node_id = 6U,
+                .operation = MOTOR_EXEC_OPERATION_GET,
+                .object = MOTOR_OBJECT_PT,
+                .ack_requested = true,
+                .has_index = true,
+                .index = 266U,
+            },
+        },
+    };
+    static const motor_setup_plan_t plan = {
+        .name = "pt pv setup",
+        .steps = steps,
+        .step_count = 2U,
+    };
+    const motor_setup_run_cfg_t cfg = {
+        .step_results = history,
+        .step_results_capacity = 2U,
+    };
+
+    motor_setup_test_begin();
+    memset(&result, 0, sizeof(result));
+    memset(history, 0, sizeof(history));
+    s_fake.submits[0] = (motor_exec_submit_result_t){.accepted = true, .code = MOTOR_EXEC_SUBMIT_OK, .err = ESP_OK, .request_id = 1U};
+    s_fake.submits[1] = (motor_exec_submit_result_t){.accepted = true, .code = MOTOR_EXEC_SUBMIT_OK, .err = ESP_OK, .request_id = 2U};
+    s_fake.submits[2] = (motor_exec_submit_result_t){.accepted = true, .code = MOTOR_EXEC_SUBMIT_OK, .err = ESP_OK, .request_id = 3U};
+    s_fake.results[0] = make_success_result(MOTOR_OBJECT_PV, MOTOR_EXEC_VALUE_KIND_U16, 33);
+    s_fake.results[1] = make_success_result(MOTOR_OBJECT_PT, MOTOR_EXEC_VALUE_KIND_I32, 100000);
+    s_fake.results[2] = make_success_result(MOTOR_OBJECT_PT, MOTOR_EXEC_VALUE_KIND_I32, 100000);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_setup_run_plan(&plan, &cfg, &result));
+    TEST_ASSERT_EQUAL(MOTOR_SETUP_STATUS_SUCCESS, result.status);
+    TEST_ASSERT_EQUAL_INT(3, s_fake.call_count);
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PV, s_fake.actions[0].object);
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, s_fake.actions[1].object);
+    TEST_ASSERT_EQUAL_UINT16(266U, s_fake.actions[1].index);
+    TEST_ASSERT_EQUAL_INT32(100000, s_fake.actions[1].value.as.i32);
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, s_fake.actions[2].object);
+    TEST_ASSERT_TRUE(history[0].comparison_success);
+    TEST_ASSERT_TRUE(history[1].comparison_success);
+    motor_setup_test_end();
 }
 
 TEST_CASE("motor setup supports representative new family read-only steps", "[motor_setup]")

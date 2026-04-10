@@ -280,6 +280,58 @@ TEST_CASE("motor diag describes new indexed families and enum semantics truthful
     TEST_ASSERT_EQUAL_STRING("RX node=5 ACK QE[3] Battery voltage = 24000 (units are not yet verified)", line);
 }
 
+TEST_CASE("motor diag describes PT and PV commands and ACKs without inventing extra semantics", "[motor_diag]")
+{
+    motor_cmd_t cmd;
+    motor_diag_cmd_desc_t cmd_desc;
+    motor_rx_t rx;
+    motor_diag_rx_desc_t rx_desc;
+    char line[200];
+    twai_message_t pv_msg = make_ext_frame(0x06, 0x23, 8U,
+                                           (const uint8_t[]){0x21, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF});
+    twai_message_t pt_msg = make_ext_frame(0x06, 0x24, 8U,
+                                           (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x12, 0x34});
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pv_set(0x06, true, 2U, &cmd));
+    TEST_ASSERT_TRUE(motor_diag_describe_cmd(&cmd, &cmd_desc));
+    TEST_ASSERT_EQUAL(MOTOR_DIAG_CMD_KIND_SET, cmd_desc.kind);
+    TEST_ASSERT_EQUAL_STRING("PV", cmd_desc.family_symbol);
+    TEST_ASSERT_FALSE(cmd_desc.has_index);
+    TEST_ASSERT_EQUAL_STRING("PVT row index", cmd_desc.semantic_name);
+    TEST_ASSERT_TRUE(cmd_desc.value.has_value);
+    motor_diag_format_cmd(line, sizeof(line), &cmd_desc);
+    TEST_ASSERT_EQUAL_STRING("TX node=6 PV SET (PVT row index) = 2", line);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x06, true, 266U, 100000, &cmd));
+    TEST_ASSERT_TRUE(motor_diag_describe_cmd(&cmd, &cmd_desc));
+    TEST_ASSERT_EQUAL(MOTOR_DIAG_CMD_KIND_SET, cmd_desc.kind);
+    TEST_ASSERT_EQUAL_STRING("PT", cmd_desc.family_symbol);
+    TEST_ASSERT_TRUE(cmd_desc.has_index);
+    TEST_ASSERT_EQUAL_UINT16(266U, cmd_desc.index);
+    TEST_ASSERT_EQUAL_STRING("PT queued position", cmd_desc.semantic_name);
+    motor_diag_format_cmd(line, sizeof(line), &cmd_desc);
+    TEST_ASSERT_EQUAL_STRING("TX node=6 PT[266] SET (PT queued position) = 100000 pulse", line);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pv_msg, &rx));
+    TEST_ASSERT_TRUE(motor_diag_describe_rx(&rx, &rx_desc));
+    TEST_ASSERT_EQUAL_STRING("PV", rx_desc.family_symbol);
+    TEST_ASSERT_FALSE(rx_desc.has_index);
+    TEST_ASSERT_EQUAL_STRING("PVT row index", rx_desc.semantic_name);
+    TEST_ASSERT_EQUAL_INT32(33, rx_desc.value.raw_number);
+    motor_diag_format_rx(line, sizeof(line), &rx_desc);
+    TEST_ASSERT_EQUAL_STRING("RX node=6 ACK PV PVT row index = 33", line);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_msg, &rx));
+    TEST_ASSERT_TRUE(motor_diag_describe_rx(&rx, &rx_desc));
+    TEST_ASSERT_EQUAL_STRING("PT", rx_desc.family_symbol);
+    TEST_ASSERT_TRUE(rx_desc.has_index);
+    TEST_ASSERT_EQUAL_UINT16(266U, rx_desc.index);
+    TEST_ASSERT_EQUAL_STRING("PT queued position", rx_desc.semantic_name);
+    TEST_ASSERT_EQUAL_INT32(100000, rx_desc.value.raw_number);
+    motor_diag_format_rx(line, sizeof(line), &rx_desc);
+    TEST_ASSERT_EQUAL_STRING("RX node=6 ACK PT[266] PT queued position = 100000 pulse", line);
+}
+
 TEST_CASE("motor diag describes SD and BL scalar u32 values", "[motor_diag]")
 {
     motor_cmd_t cmd;

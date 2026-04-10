@@ -78,6 +78,7 @@ static bool related_error_matches_cmd(const motor_rx_t *rx, const motor_cmd_t *c
 {
     uint8_t related_base = 0U;
     uint8_t related_subindex = 0U;
+    uint16_t pt_row_index = 0U;
 
     if (rx == NULL || cmd == NULL || !motor_rx_er_is_thrown_error(rx)) {
         return false;
@@ -101,6 +102,24 @@ static bool related_error_matches_cmd(const motor_rx_t *rx, const motor_cmd_t *c
     }
 
     if (!cmd->has_index) {
+        return true;
+    }
+
+    if (cmd->object == MOTOR_OBJECT_PT) {
+        /*
+         * PT carries a 16-bit queue row selector in payload bytes d0..d1.
+         * ER side-traffic exposes only a single-byte related subindex. When the
+         * queued PT row fits in 8 bits we can require an exact match on that
+         * low byte; otherwise the error frame does not provide enough metadata
+         * to distinguish 16-bit rows, so base-level correlation is the safe
+         * fallback.
+         */
+        pt_row_index = (uint16_t)cmd->index;
+        if (pt_row_index <= UINT8_MAX &&
+            motor_rx_error_related_subindex(rx, &related_subindex)) {
+            return related_subindex == (uint8_t)pt_row_index;
+        }
+
         return true;
     }
 

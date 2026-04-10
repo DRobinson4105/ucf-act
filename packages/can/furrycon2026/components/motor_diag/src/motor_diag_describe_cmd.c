@@ -10,19 +10,54 @@
 static void copy_raw_value(const motor_cmd_t *cmd, motor_diag_value_desc_t *value)
 {
     uint8_t raw_len;
+    uint8_t value_offset = 0U;
 
-    if (cmd->msg.data_length_code <= 1U) {
+    if (cmd == NULL || value == NULL) {
         return;
     }
 
-    raw_len = cmd->has_index ? (uint8_t)(cmd->msg.data_length_code - 1U) : cmd->msg.data_length_code;
+    switch (cmd->object) {
+        case MOTOR_OBJECT_PT:
+            if (cmd->msg.data_length_code <= 2U) {
+                return;
+            }
+            value_offset = 2U;
+            break;
+        case MOTOR_OBJECT_PP:
+        case MOTOR_OBJECT_IC:
+        case MOTOR_OBJECT_IE:
+        case MOTOR_OBJECT_QE:
+        case MOTOR_OBJECT_MT:
+        case MOTOR_OBJECT_IL:
+        case MOTOR_OBJECT_MP:
+        case MOTOR_OBJECT_LM:
+        case MOTOR_OBJECT_ER:
+        case MOTOR_OBJECT_SY:
+            if (cmd->msg.data_length_code <= 1U) {
+                return;
+            }
+            value_offset = 1U;
+            break;
+        default:
+            if (cmd->msg.data_length_code == 0U) {
+                return;
+            }
+            value_offset = 0U;
+            break;
+    }
+
+    if (cmd->msg.data_length_code <= value_offset) {
+        return;
+    }
+
+    raw_len = (uint8_t)(cmd->msg.data_length_code - value_offset);
     if (raw_len > sizeof(value->raw)) {
         raw_len = sizeof(value->raw);
     }
 
     value->kind = MOTOR_DIAG_VALUE_KIND_RAW_BYTES;
     value->raw_len = raw_len;
-    memcpy(value->raw, &cmd->msg.data[cmd->has_index ? 1U : 0U], raw_len);
+    memcpy(value->raw, &cmd->msg.data[value_offset], raw_len);
 }
 
 static motor_diag_cmd_kind_t classify_cmd_kind(const motor_cmd_t *cmd)
@@ -39,8 +74,13 @@ static motor_diag_cmd_kind_t classify_cmd_kind(const motor_cmd_t *cmd)
         case MOTOR_OBJECT_MT:
         case MOTOR_OBJECT_IL:
         case MOTOR_OBJECT_MP:
+            return cmd->msg.data_length_code == 1U ? MOTOR_DIAG_CMD_KIND_GET : MOTOR_DIAG_CMD_KIND_SET;
         case MOTOR_OBJECT_LM:
             return cmd->msg.data_length_code == 1U ? MOTOR_DIAG_CMD_KIND_GET : MOTOR_DIAG_CMD_KIND_SET;
+        case MOTOR_OBJECT_PV:
+            return cmd->msg.data_length_code == 0U ? MOTOR_DIAG_CMD_KIND_GET : MOTOR_DIAG_CMD_KIND_SET;
+        case MOTOR_OBJECT_PT:
+            return cmd->msg.data_length_code == 2U ? MOTOR_DIAG_CMD_KIND_GET : MOTOR_DIAG_CMD_KIND_SET;
         case MOTOR_OBJECT_MO:
         case MOTOR_OBJECT_SD:
         case MOTOR_OBJECT_BL:
@@ -70,8 +110,13 @@ static const motor_diag_param_meta_t *lookup_cmd_param(const motor_cmd_t *cmd)
         cmd->object == MOTOR_OBJECT_ST ||
         cmd->object == MOTOR_OBJECT_SD ||
         cmd->object == MOTOR_OBJECT_PA ||
+        cmd->object == MOTOR_OBJECT_PV ||
         cmd->object == MOTOR_OBJECT_BL ||
         cmd->object == MOTOR_OBJECT_OG) {
+        return motor_diag_lookup_param(cmd->object, 0U);
+    }
+
+    if (cmd->object == MOTOR_OBJECT_PT) {
         return motor_diag_lookup_param(cmd->object, 0U);
     }
 

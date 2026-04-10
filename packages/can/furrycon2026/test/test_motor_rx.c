@@ -231,6 +231,50 @@ TEST_CASE("motor rx parses SD and BL scalar ACKs", "[motor_protocol]")
     TEST_ASSERT_EQUAL_UINT32(65535U, value);
 }
 
+TEST_CASE("motor rx parses PV and PT ACK payloads with documented don't-care handling", "[motor_protocol]")
+{
+    twai_message_t pv_get_msg = make_ext_frame(0x06, 0x23, 8U,
+                                               (const uint8_t[]){0x21, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF});
+    twai_message_t pv_set_msg = make_ext_frame(0x06, 0x23, 2U,
+                                               (const uint8_t[]){0x02, 0x00});
+    twai_message_t pt_msg = make_ext_frame(0x06, 0x24, 8U,
+                                           (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x12, 0x34});
+    motor_rx_t rx;
+    uint16_t row;
+    int32_t position;
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pv_get_msg, &rx));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PV, rx.object);
+    TEST_ASSERT_TRUE(motor_rx_ack_pv(&rx, &row));
+    TEST_ASSERT_EQUAL_UINT16(33U, row);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pv_set_msg, &rx));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PV, rx.object);
+    TEST_ASSERT_TRUE(motor_rx_ack_pv(&rx, &row));
+    TEST_ASSERT_EQUAL_UINT16(2U, row);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_msg, &rx));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, rx.object);
+    TEST_ASSERT_TRUE(motor_rx_ack_pt(&rx, &row, &position));
+    TEST_ASSERT_EQUAL_UINT16(266U, row);
+    TEST_ASSERT_EQUAL_INT32(100000, position);
+}
+
+TEST_CASE("motor rx disambiguates 0x24 ACK payloads between PT and LM using DLC", "[motor_protocol]")
+{
+    twai_message_t pt_msg = make_ext_frame(0x06, 0x24, 8U,
+                                           (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x12, 0x34});
+    twai_message_t lm_msg = make_ext_frame(0x06, 0x24, 5U,
+                                           (const uint8_t[]){MOTOR_LM_INDEX_MAX_ACCEL_DECEL, 0xD2, 0x1E, 0x00, 0x00});
+    motor_rx_t rx;
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_msg, &rx));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, rx.object);
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&lm_msg, &rx));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_LM, rx.object);
+}
+
 TEST_CASE("motor rx keeps new ACK helpers strict on DLC base and index", "[motor_protocol]")
 {
     twai_message_t ie_wrong_dlc_msg = make_ext_frame(0x22, 0x07, 2U,
@@ -593,6 +637,80 @@ TEST_CASE("motor rx matches new indexed and scalar command families", "[motor_pr
 
     TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&bl_msg, &rx));
     TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &bl_cmd));
+}
+
+TEST_CASE("motor rx matches PT and PV commands using only the contractually meaningful bytes", "[motor_protocol]")
+{
+    twai_message_t pv_get_msg = make_ext_frame(0x06, 0x23, 8U,
+                                               (const uint8_t[]){0x21, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF});
+    twai_message_t pv_set_msg = make_ext_frame(0x06, 0x23, 8U,
+                                               (const uint8_t[]){0x02, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF});
+    twai_message_t pt_get_msg = make_ext_frame(0x06, 0x24, 8U,
+                                               (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x12, 0x34});
+    twai_message_t pt_set_msg = make_ext_frame(0x06, 0x24, 8U,
+                                               (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x56, 0x78});
+    motor_cmd_t pv_get_cmd;
+    motor_cmd_t pv_set_cmd;
+    motor_cmd_t pt_get_cmd;
+    motor_cmd_t pt_set_cmd;
+    motor_rx_t rx;
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pv_get(0x06, true, &pv_get_cmd));
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pv_set(0x06, true, 2U, &pv_set_cmd));
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_get(0x06, true, 266U, &pt_get_cmd));
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x06, true, 266U, 100000, &pt_set_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pv_get_msg, &rx));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &pv_get_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pv_set_msg, &rx));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &pv_set_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_get_msg, &rx));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &pt_get_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_set_msg, &rx));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &pt_set_cmd));
+}
+
+TEST_CASE("motor rx rejects PT and PV mismatches on meaningful bytes only", "[motor_protocol]")
+{
+    twai_message_t pv_wrong_value_msg = make_ext_frame(0x06, 0x23, 2U, (const uint8_t[]){0x03, 0x00});
+    twai_message_t pt_wrong_row_msg = make_ext_frame(0x06, 0x24, 8U,
+                                                     (const uint8_t[]){0x0B, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x00, 0x00});
+    twai_message_t pt_wrong_position_msg = make_ext_frame(0x06, 0x24, 8U,
+                                                          (const uint8_t[]){0x0A, 0x01, 0xA1, 0x86, 0x01, 0x00, 0x00, 0x00});
+    motor_cmd_t pv_set_cmd;
+    motor_cmd_t pt_set_cmd;
+    motor_rx_t rx;
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pv_set(0x06, true, 2U, &pv_set_cmd));
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x06, true, 266U, 100000, &pt_set_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pv_wrong_value_msg, &rx));
+    TEST_ASSERT_FALSE(motor_rx_matches_cmd(&rx, &pv_set_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_wrong_row_msg, &rx));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &pt_set_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_wrong_position_msg, &rx));
+    TEST_ASSERT_FALSE(motor_rx_matches_cmd(&rx, &pt_set_cmd));
+}
+
+TEST_CASE("motor rx keeps PT GET strict on row match while relaxing PT SET row echo", "[motor_protocol]")
+{
+    twai_message_t pt_wrong_row_msg = make_ext_frame(0x06, 0x24, 8U,
+                                                     (const uint8_t[]){0x0B, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x00, 0x00});
+    motor_cmd_t pt_get_cmd;
+    motor_cmd_t pt_set_cmd;
+    motor_rx_t rx;
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_get(0x06, true, 266U, &pt_get_cmd));
+    TEST_ASSERT_EQUAL(ESP_OK, motor_cmd_pt_set(0x06, true, 266U, 100000, &pt_set_cmd));
+
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&pt_wrong_row_msg, &rx));
+    TEST_ASSERT_FALSE(motor_rx_matches_cmd(&rx, &pt_get_cmd));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&rx, &pt_set_cmd));
 }
 
 TEST_CASE("motor rx matches ER queried-history responses using exact d0 semantics", "[motor_protocol]")

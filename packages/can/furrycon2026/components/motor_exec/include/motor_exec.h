@@ -135,6 +135,22 @@ motor_exec_submit_result_t motor_exec_brake_mp_set_u16(uint8_t node_id,
                                                        motor_mp_index_t index,
                                                        uint16_t value,
                                                        const motor_exec_submit_opts_t *opts);
+motor_exec_submit_result_t motor_exec_brake_pv_get(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   const motor_exec_submit_opts_t *opts);
+motor_exec_submit_result_t motor_exec_brake_pv_set(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   uint16_t value,
+                                                   const motor_exec_submit_opts_t *opts);
+motor_exec_submit_result_t motor_exec_brake_pt_get(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   uint16_t row_index,
+                                                   const motor_exec_submit_opts_t *opts);
+motor_exec_submit_result_t motor_exec_brake_pt_set(uint8_t node_id,
+                                                   bool ack_requested,
+                                                   uint16_t row_index,
+                                                   int32_t queued_position,
+                                                   const motor_exec_submit_opts_t *opts);
 
 motor_exec_submit_result_t motor_exec_brake_og_set_origin(uint8_t node_id,
                                                           bool ack_requested,

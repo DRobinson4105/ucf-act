@@ -263,6 +263,137 @@ TEST_CASE("motor exec surfaces command-builder validation failure at submit time
     motor_exec_test_end();
 }
 
+TEST_CASE("motor exec submits PT and PV wrappers with typed summaries", "[motor_exec]")
+{
+    callback_ctx_t pv_ctx = {0};
+    callback_ctx_t pt_ctx = {0};
+    motor_exec_submit_opts_t pv_opts;
+    motor_exec_submit_opts_t pt_opts;
+    motor_exec_submit_result_t submit;
+
+    motor_exec_test_begin();
+
+    pv_ctx.done_sem = xSemaphoreCreateBinary();
+    pv_opts = make_opts(&pv_ctx);
+    s_fake_dispatch.fill_response = true;
+    s_fake_dispatch.response_msg = make_ext_frame(6U, 0x23, 8U,
+                                                  (const uint8_t[]){0x21, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF});
+
+    submit = motor_exec_brake_pv_get(6U, true, &pv_opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(pv_ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PV, s_fake_dispatch.last_cmd.object);
+    TEST_ASSERT_EQUAL_UINT8(0U, s_fake_dispatch.last_cmd.msg.data_length_code);
+    TEST_ASSERT_EQUAL_STRING("PV", pv_ctx.last_result.command_family_symbol);
+    TEST_ASSERT_EQUAL_STRING("PVT row index", pv_ctx.last_result.parameter_name);
+    TEST_ASSERT_EQUAL_STRING("RX node=6 ACK PV PVT row index = 33", pv_ctx.last_result.completion_summary);
+
+    reset_fake_dispatch();
+    pt_ctx.done_sem = xSemaphoreCreateBinary();
+    pt_opts = make_opts(&pt_ctx);
+    s_fake_dispatch.fill_response = true;
+    s_fake_dispatch.response_msg = make_ext_frame(6U, 0x24, 8U,
+                                                  (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x12, 0x34});
+
+    submit = motor_exec_brake_pt_set(6U, true, 266U, 100000, &pt_opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(pt_ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, s_fake_dispatch.last_cmd.object);
+    TEST_ASSERT_EQUAL_UINT8(8U, s_fake_dispatch.last_cmd.msg.data_length_code);
+    TEST_ASSERT_EQUAL_UINT16(266U, s_fake_dispatch.last_cmd.index);
+    TEST_ASSERT_EQUAL_STRING("PT", pt_ctx.last_result.command_family_symbol);
+    TEST_ASSERT_TRUE(pt_ctx.last_result.has_parameter_index);
+    TEST_ASSERT_EQUAL_UINT16(266U, pt_ctx.last_result.parameter_index);
+    TEST_ASSERT_EQUAL_STRING("PT queued position", pt_ctx.last_result.parameter_name);
+    TEST_ASSERT_EQUAL_STRING("100000 pulse", pt_ctx.last_result.response_value_summary);
+    TEST_ASSERT_EQUAL_STRING("RX node=6 ACK PT[266] PT queued position = 100000 pulse",
+                             pt_ctx.last_result.completion_summary);
+
+    vSemaphoreDelete(pv_ctx.done_sem);
+    vSemaphoreDelete(pt_ctx.done_sem);
+    motor_exec_test_end();
+}
+
+TEST_CASE("motor exec validates PT write then readback through wrappers and parsed ACKs", "[motor_exec]")
+{
+    callback_ctx_t set_ctx = {0};
+    callback_ctx_t get_ctx = {0};
+    motor_exec_submit_opts_t set_opts;
+    motor_exec_submit_opts_t get_opts;
+    motor_exec_submit_result_t submit;
+    motor_rx_t parsed_response;
+    const uint16_t row_index = 266U;
+    const int32_t queued_position = 100000;
+
+    motor_exec_test_begin();
+
+    set_ctx.done_sem = xSemaphoreCreateBinary();
+    set_opts = make_opts(&set_ctx);
+    s_fake_dispatch.fill_response = true;
+    s_fake_dispatch.response_msg = make_ext_frame(6U, 0x24, 8U,
+                                                  (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x12, 0x34});
+
+    submit = motor_exec_brake_pt_set(6U, true, row_index, queued_position, &set_opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(set_ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_STATUS_SUCCESS, set_ctx.last_result.status);
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, s_fake_dispatch.last_cmd.object);
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&s_fake_dispatch.response_msg, &parsed_response));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&parsed_response, &s_fake_dispatch.last_cmd));
+    TEST_ASSERT_TRUE(set_ctx.last_result.has_response_value);
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_VALUE_KIND_I32, set_ctx.last_result.response_value.kind);
+    TEST_ASSERT_EQUAL_INT32(queued_position, (int32_t)set_ctx.last_result.response_value.raw_number);
+
+    reset_fake_dispatch();
+    get_ctx.done_sem = xSemaphoreCreateBinary();
+    get_opts = make_opts(&get_ctx);
+    s_fake_dispatch.fill_response = true;
+    s_fake_dispatch.response_msg = make_ext_frame(6U, 0x24, 8U,
+                                                  (const uint8_t[]){0x0A, 0x01, 0xA0, 0x86, 0x01, 0x00, 0x56, 0x78});
+
+    submit = motor_exec_brake_pt_get(6U, true, row_index, &get_opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(get_ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_STATUS_SUCCESS, get_ctx.last_result.status);
+    TEST_ASSERT_EQUAL(MOTOR_OBJECT_PT, s_fake_dispatch.last_cmd.object);
+    TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&s_fake_dispatch.response_msg, &parsed_response));
+    TEST_ASSERT_TRUE(motor_rx_matches_cmd(&parsed_response, &s_fake_dispatch.last_cmd));
+    TEST_ASSERT_TRUE(get_ctx.last_result.has_response_value);
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_VALUE_KIND_I32, get_ctx.last_result.response_value.kind);
+    TEST_ASSERT_EQUAL_INT32(queued_position, (int32_t)get_ctx.last_result.response_value.raw_number);
+    TEST_ASSERT_EQUAL_STRING("RX node=6 ACK PT[266] PT queued position = 100000 pulse",
+                             get_ctx.last_result.completion_summary);
+
+    vSemaphoreDelete(set_ctx.done_sem);
+    vSemaphoreDelete(get_ctx.done_sem);
+    motor_exec_test_end();
+}
+
+TEST_CASE("motor exec accepts PT SET ACKs that echo a different row with the requested position", "[motor_exec]")
+{
+    callback_ctx_t ctx = {0};
+    motor_exec_submit_opts_t opts;
+    motor_exec_submit_result_t submit;
+
+    motor_exec_test_begin();
+
+    ctx.done_sem = xSemaphoreCreateBinary();
+    opts = make_opts(&ctx);
+    s_fake_dispatch.fill_response = true;
+    s_fake_dispatch.response_msg = make_ext_frame(6U, 0x24, 8U,
+                                                  (const uint8_t[]){0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+
+    submit = motor_exec_brake_pt_set(6U, true, 0U, 0, &opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_STATUS_SUCCESS, ctx.last_result.status);
+    TEST_ASSERT_EQUAL_STRING("RX node=6 ACK PT[1] PT queued position = 0 pulse",
+                             ctx.last_result.completion_summary);
+
+    vSemaphoreDelete(ctx.done_sem);
+    motor_exec_test_end();
+}
+
 TEST_CASE("motor exec callback fires only on terminal completion", "[motor_exec]")
 {
     callback_ctx_t ctx = {0};

@@ -21,6 +21,8 @@
 #define MOTOR_RX_BASE_PA          0x20U
 #define MOTOR_RX_BASE_OG          0x21U
 #define MOTOR_RX_BASE_MP          0x22U
+#define MOTOR_RX_BASE_PV          0x23U
+#define MOTOR_RX_BASE_PT          0x24U
 #define MOTOR_RX_BASE_LM_SET      0x24U
 #define MOTOR_RX_BASE_LM_GET      0x2CU
 #define MOTOR_RX_BASE_BL          0x2DU
@@ -32,6 +34,9 @@
 #define MOTOR_RX_NOTIFY_ALARM_D0  0x00U
 #define MOTOR_RX_NOTIFY_POS_OFFSET 2U
 #define MOTOR_RX_DV_SUBINDEX_PA_ABSOLUTE 4U
+#define MOTOR_RX_PV_ROW_OFFSET    0U
+#define MOTOR_RX_PT_ROW_OFFSET    0U
+#define MOTOR_RX_PT_POSITION_OFFSET 2U
 
 static bool validate_pp_index(uint8_t index)
 {
@@ -143,6 +148,28 @@ static bool rx_is_base(const motor_rx_t *rx, uint8_t base_code)
     return rx != NULL && rx->base_code == base_code;
 }
 
+static void map_ambiguous_base_0x24(uint8_t dl,
+                                    motor_section_t *out_section,
+                                    motor_object_t *out_object)
+{
+    /*
+     * Protocol base 0x24 is ambiguous on the wire:
+     * - PT ACK replies use base 0x24 with DLC 8
+     * - LM replies may also use base 0x24 with their own shorter payloads
+     *
+     * Keep the disambiguation rule centralized here so every parsed 0x24 frame
+     * resolves to the same semantic object.
+     */
+    if (dl == 8U) {
+        *out_section = MOTOR_SECTION_INTERPOLATED_MOTION;
+        *out_object = MOTOR_OBJECT_PT;
+        return;
+    }
+
+    *out_section = MOTOR_SECTION_MOTION_CONTROL;
+    *out_object = MOTOR_OBJECT_LM;
+}
+
 static bool classify_ack_base(uint8_t base_code)
 {
     switch (base_code) {
@@ -157,6 +184,7 @@ static bool classify_ack_base(uint8_t base_code)
         case MOTOR_RX_BASE_PA:
         case MOTOR_RX_BASE_OG:
         case MOTOR_RX_BASE_MP:
+        case MOTOR_RX_BASE_PV:
         case MOTOR_RX_BASE_LM_SET:
         case MOTOR_RX_BASE_LM_GET:
         case MOTOR_RX_BASE_BL:
@@ -187,6 +215,7 @@ static motor_rx_kind_t classify_kind(uint8_t base_code)
 }
 
 static void map_base_code(uint8_t base_code,
+                          uint8_t dl,
                           motor_section_t *out_section,
                           motor_object_t *out_object)
 {
@@ -251,9 +280,15 @@ static void map_base_code(uint8_t base_code,
             object = MOTOR_OBJECT_MP;
             break;
         case MOTOR_RX_BASE_LM_SET:
+            map_ambiguous_base_0x24(dl, &section, &object);
+            break;
         case MOTOR_RX_BASE_LM_GET:
             section = MOTOR_SECTION_MOTION_CONTROL;
             object = MOTOR_OBJECT_LM;
+            break;
+        case MOTOR_RX_BASE_PV:
+            section = MOTOR_SECTION_INTERPOLATED_MOTION;
+            object = MOTOR_OBJECT_PV;
             break;
         case MOTOR_RX_BASE_BL:
             section = MOTOR_SECTION_MOTION_CONTROL;
@@ -455,6 +490,12 @@ static bool expected_response_base(const motor_cmd_t *cmd, uint8_t *out_base)
         case MOTOR_OBJECT_MP:
             response_base = MOTOR_RX_BASE_MP;
             break;
+        case MOTOR_OBJECT_PV:
+            response_base = MOTOR_RX_BASE_PV;
+            break;
+        case MOTOR_OBJECT_PT:
+            response_base = MOTOR_RX_BASE_PT;
+            break;
         case MOTOR_OBJECT_OG:
             response_base = MOTOR_RX_BASE_OG;
             break;
@@ -492,7 +533,7 @@ esp_err_t motor_rx_parse(const twai_message_t *msg, motor_rx_t *out)
     out->base_code = motor_codec_base_code(out->cw_raw);
     out->dl = msg->data_length_code;
     out->kind = classify_kind(out->base_code);
-    map_base_code(out->base_code, &out->section, &out->object);
+    map_base_code(out->base_code, out->dl, &out->section, &out->object);
     memcpy(out->data, msg->data, out->dl);
 
     populate_error_overlay(out);
@@ -869,6 +910,49 @@ bool motor_rx_ack_mp(const motor_rx_t *rx, motor_mp_index_t *out_index, uint16_t
     return true;
 }
 
+bool motor_rx_ack_pv(const motor_rx_t *rx, uint16_t *out_row_index)
+{
+    /*
+     * PV ACK contract:
+     * - d0..d1 carry the current PVT row index
+     * - any trailing bytes are intentionally ignored
+     */
+    if (!motor_rx_is_ack(rx) ||
+        !rx_is_base(rx, MOTOR_RX_BASE_PV) ||
+        (rx->dl != 2U && rx->dl != 8U)) {
+        return false;
+    }
+
+    if (out_row_index != NULL) {
+        *out_row_index = motor_codec_unpack_u16_le(&rx->data[MOTOR_RX_PV_ROW_OFFSET]);
+    }
+
+    return true;
+}
+
+bool motor_rx_ack_pt(const motor_rx_t *rx, uint16_t *out_row_index, int32_t *out_position)
+{
+    /*
+     * PT ACK contract:
+     * - d0..d1 carry the queued row index
+     * - d2..d5 carry the queued position
+     * - d6..d7 are reserved / don't-care and must not affect parsing
+     */
+    if (!ack_shape(rx, MOTOR_RX_BASE_PT, 8U)) {
+        return false;
+    }
+
+    if (out_row_index != NULL) {
+        *out_row_index = motor_codec_unpack_u16_le(&rx->data[MOTOR_RX_PT_ROW_OFFSET]);
+    }
+
+    if (out_position != NULL) {
+        *out_position = motor_codec_unpack_i32_le(&rx->data[MOTOR_RX_PT_POSITION_OFFSET]);
+    }
+
+    return true;
+}
+
 bool motor_rx_ack_og(const motor_rx_t *rx)
 {
     return ack_shape(rx, MOTOR_RX_BASE_OG, 0U);
@@ -954,6 +1038,7 @@ bool motor_rx_matches_cmd(const motor_rx_t *rx, const motor_cmd_t *cmd)
     motor_lm_index_t lm_index;
     uint8_t u8_value;
     uint16_t u16_value;
+    uint16_t row_index;
     int32_t i32_value;
     uint32_t u32_value;
 
@@ -1038,6 +1123,28 @@ bool motor_rx_matches_cmd(const motor_rx_t *rx, const motor_cmd_t *cmd)
             }
 
             return cmd->msg.data_length_code != 3U || u16_value == motor_codec_unpack_u16_le(&cmd->msg.data[1]);
+        case MOTOR_OBJECT_PV:
+            if (!motor_rx_ack_pv(rx, &u16_value)) {
+                return false;
+            }
+
+            return cmd->msg.data_length_code != 2U || u16_value == motor_codec_unpack_u16_le(&cmd->msg.data[0]);
+        case MOTOR_OBJECT_PT:
+            if (!motor_rx_ack_pt(rx, &row_index, &i32_value)) {
+                return false;
+            }
+
+            /*
+             * PT SET ACKs observed from the target may advance or otherwise echo
+             * queue-row state instead of the requested row. Keep GET strict on
+             * row correlation, but treat SET ACK row bytes as informational and
+             * match on queued position only.
+             */
+            if (cmd->msg.data_length_code != 8U && row_index != cmd->index) {
+                return false;
+            }
+
+            return cmd->msg.data_length_code != 8U || i32_value == motor_codec_unpack_i32_le(&cmd->msg.data[2]);
         case MOTOR_OBJECT_OG:
             return motor_rx_ack_og(rx);
         case MOTOR_OBJECT_LM:

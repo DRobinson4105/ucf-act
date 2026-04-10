@@ -61,6 +61,8 @@ bool motor_rx_ack_st(const motor_rx_t *rx);
 bool motor_rx_ack_pa_get(const motor_rx_t *rx, int32_t *out_position);
 bool motor_rx_ack_pa_set(const motor_rx_t *rx, int32_t *out_position);
 bool motor_rx_ack_mp(const motor_rx_t *rx, motor_mp_index_t *out_index, uint16_t *out_value);
+bool motor_rx_ack_pv(const motor_rx_t *rx, uint16_t *out_row_index);
+bool motor_rx_ack_pt(const motor_rx_t *rx, uint16_t *out_row_index, int32_t *out_position);
 bool motor_rx_ack_og(const motor_rx_t *rx);
 bool motor_rx_ack_lm_get(const motor_rx_t *rx, motor_lm_index_t *out_index, int32_t *out_value);
 bool motor_rx_ack_lm_set(const motor_rx_t *rx, motor_lm_index_t *out_index, int32_t *out_value);

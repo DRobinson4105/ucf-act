@@ -32,6 +32,8 @@ static bool action_supported_for_brake(const motor_setup_action_t *action)
         case MOTOR_OBJECT_MO:
         case MOTOR_OBJECT_PA:
         case MOTOR_OBJECT_MP:
+        case MOTOR_OBJECT_PV:
+        case MOTOR_OBJECT_PT:
         case MOTOR_OBJECT_LM:
         case MOTOR_OBJECT_SD:
         case MOTOR_OBJECT_BL:
@@ -194,6 +196,30 @@ static motor_exec_submit_result_t submit_brake_action(const motor_setup_action_t
                                                        (uint16_t)action->value.as.enum_value :
                                                        action->value.as.u16,
                                                opts);
+        case MOTOR_OBJECT_PV:
+            if (action->operation == MOTOR_EXEC_OPERATION_GET) {
+                return motor_exec_brake_pv_get(action->node_id, action->ack_requested, opts);
+            }
+            return motor_exec_brake_pv_set(action->node_id,
+                                           action->ack_requested,
+                                           action->value.kind == MOTOR_SETUP_VALUE_KIND_BOOL ?
+                                               (uint16_t)(action->value.as.boolean ? 1U : 0U) :
+                                               action->value.kind == MOTOR_SETUP_VALUE_KIND_ENUM ?
+                                                   (uint16_t)action->value.as.enum_value :
+                                                   action->value.as.u16,
+                                           opts);
+        case MOTOR_OBJECT_PT:
+            if (action->operation == MOTOR_EXEC_OPERATION_GET) {
+                return motor_exec_brake_pt_get(action->node_id,
+                                               action->ack_requested,
+                                               action->index,
+                                               opts);
+            }
+            return motor_exec_brake_pt_set(action->node_id,
+                                           action->ack_requested,
+                                           action->index,
+                                           action->value.as.i32,
+                                           opts);
         case MOTOR_OBJECT_OG:
             return motor_exec_brake_og_set_origin(action->node_id, action->ack_requested, opts);
         case MOTOR_OBJECT_LM:
