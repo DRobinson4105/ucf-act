@@ -298,29 +298,29 @@ void app_main(void)
     esp_err_t    err;
     serial_input_frame_t frame;
 
-    ESP_LOGI(TAG,
-             "Creating setup task stack_size=%u priority=%u main_stack_hwm_words=%u",
-             (unsigned)SETUP_TASK_STACK_SIZE,
-             (unsigned)SETUP_TASK_PRIORITY,
-             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    // ESP_LOGI(TAG,
+    //          "Creating setup task stack_size=%u priority=%u main_stack_hwm_words=%u",
+    //          (unsigned)SETUP_TASK_STACK_SIZE,
+    //          (unsigned)SETUP_TASK_PRIORITY,
+    //          (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
     err = serial_input_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "serial_input_init failed: %s", esp_err_to_name(err));
     }
 
-    rc = xTaskCreate(setup_task,
-                     "setup_task",
-                     SETUP_TASK_STACK_SIZE,
-                     NULL,
-                     SETUP_TASK_PRIORITY,
-                     NULL);
-    if (rc != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create setup task");
-        return;
-    }
+    // rc = xTaskCreate(setup_task,
+    //                  "setup_task",
+    //                  SETUP_TASK_STACK_SIZE,
+    //                  NULL,
+    //                  SETUP_TASK_PRIORITY,
+    //                  NULL);
+    // if (rc != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create setup task");
+    //     return;
+    // }
 
-    ESP_LOGI(TAG, "Setup task created");
+    // ESP_LOGI(TAG, "Setup task created");
 
     while (true) {
         err = serial_input_read(&frame, pdMS_TO_TICKS(200));
