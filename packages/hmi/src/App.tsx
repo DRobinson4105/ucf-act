@@ -173,7 +173,7 @@ function App() {
       </div>
 
       {/* ── RIGHT PANEL: Map ──────────────────────────────────────────────── */}
-      <div className="w-1/2 h-full relative bg-background">
+      <div className="w-1/2 h-full relative" style={{ background: '#faf9f6' }}>
 
         {/* Map */}
         <div className="absolute inset-0 z-0">
@@ -181,75 +181,75 @@ function App() {
         </div>
 
         {/* Top bar: time */}
-        <div className="absolute top-0 right-0 w-full p-4 z-10 flex justify-end items-center gap-4 bg-gradient-to-b from-background/70 to-transparent pointer-events-none">
-          <div className="flex items-center gap-2 text-text-primary font-medium drop-shadow-md">
+        <div className="absolute top-0 right-0 w-full p-4 z-10 flex justify-end items-center gap-4 pointer-events-none">
+          <div className="flex items-center gap-2 text-gray-700 font-medium drop-shadow-sm">
             <span>72°F</span>
             <span>{currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             <Wifi size={16} />
           </div>
         </div>
 
-        {/* Trip info card — matches mobile app ride card */}
-        <div className="absolute top-12 left-6 w-80 bg-surface rounded-[20px] shadow-2xl border border-border p-[18px] flex flex-col gap-1">
+        {/* Trip info card */}
+        <div className="absolute top-12 left-6 w-80 bg-white/90 backdrop-blur-md rounded-[20px] shadow-lg border border-gray-200 p-[18px] flex flex-col gap-1">
           {/* Status row */}
           <div className="flex items-center gap-2 mb-1">
             <div className={`w-2 h-2 rounded-full shrink-0 ${phaseDotColor(rideStatus)} ${rideStatus ? 'animate-pulse' : ''}`} />
-            <h3 className="font-bold text-text-primary text-[17px] leading-tight truncate">
+            <h3 className="font-bold text-gray-900 text-[17px] leading-tight truncate">
               {status.isConnected ? phaseLabel(rideStatus) : 'Connecting...'}
             </h3>
           </div>
-          <p className="text-[13px] text-text-secondary mb-3 pl-4">
+          <p className="text-[13px] text-gray-500 mb-3 pl-4">
             {status.isConnected ? phaseSub(rideStatus) : 'Establishing connection'}
           </p>
 
           {/* Route chip — origin → destination when ride is active */}
           {rideStatus !== null && (
-            <div className="flex items-center gap-1.5 bg-surfaceLight rounded-xl px-3.5 py-2.5 mb-3 border border-border">
-              <div className="w-[7px] h-[7px] rounded-full bg-text-secondary shrink-0" />
-              <span className="text-[13px] text-text-secondary truncate flex-1">{originName}</span>
-              <span className="text-[13px] text-text-secondary mx-0.5">→</span>
+            <div className="flex items-center gap-1.5 bg-gray-100 rounded-xl px-3.5 py-2.5 mb-3 border border-gray-200">
+              <div className="w-[7px] h-[7px] rounded-full bg-gray-400 shrink-0" />
+              <span className="text-[13px] text-gray-500 truncate flex-1">{originName}</span>
+              <span className="text-[13px] text-gray-400 mx-0.5">→</span>
               <div className="w-[7px] h-[7px] rounded-sm bg-primary shrink-0" />
-              <span className="text-[13px] font-semibold text-text-primary truncate flex-1">{destinationName}</span>
+              <span className="text-[13px] font-semibold text-gray-900 truncate flex-1">{destinationName}</span>
             </div>
           )}
 
           {/* Cart info row */}
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-surfaceLight border border-border flex items-center justify-center">
+            <div className="w-11 h-11 rounded-xl bg-gray-100 border border-gray-200 flex items-center justify-center">
               <Navigation size={18} className="text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-semibold text-text-primary">ACT-001</p>
-              <p className="text-[13px] text-text-secondary">Autonomous Golf Cart</p>
+              <p className="text-[15px] font-semibold text-gray-900">ACT-001</p>
+              <p className="text-[13px] text-gray-500">Autonomous Golf Cart</p>
             </div>
           </div>
 
           {/* Waypoint count when route is active */}
           {waypoints.length > 0 && (
-            <p className="text-xs text-text-muted pl-14 -mt-1">
+            <p className="text-xs text-gray-400 pl-14 -mt-1">
               {waypoints.length} waypoints
             </p>
           )}
 
           {/* No ride state */}
           {rideStatus === null && (
-            <p className="text-xs text-text-muted pl-14 -mt-1">No active ride</p>
+            <p className="text-xs text-gray-400 pl-14 -mt-1">No active ride</p>
           )}
         </div>
 
         {/* Music dock */}
-        <div className="absolute bottom-8 right-8 w-96 bg-surface/90 backdrop-blur-md rounded-xl shadow-2xl border border-border p-4 flex items-center gap-4">
-          <div className="w-12 h-12 bg-surfaceLight rounded-lg flex items-center justify-center border border-border">
-            <Music size={20} className="text-text-secondary" />
+        <div className="absolute bottom-8 right-8 w-96 bg-white/90 backdrop-blur-md rounded-xl shadow-lg border border-gray-200 p-4 flex items-center gap-4">
+          <div className="w-12 h-12 bg-gray-100 rounded-lg flex items-center justify-center border border-gray-200">
+            <Music size={20} className="text-gray-500" />
           </div>
           <div className="flex-1 overflow-hidden">
-            <h4 className="font-medium text-text-primary truncate">Usseewa</h4>
-            <p className="text-xs text-text-secondary truncate">Ado · Kyogen</p>
+            <h4 className="font-medium text-gray-900 truncate">Usseewa</h4>
+            <p className="text-xs text-gray-500 truncate">Ado · Kyogen</p>
           </div>
           <div className="flex items-center gap-3">
-            <SkipBack size={20} className="text-text-secondary" />
-            <Play size={24} fill="currentColor" className="text-text-primary" />
-            <SkipForward size={20} className="text-text-secondary" />
+            <SkipBack size={20} className="text-gray-400" />
+            <Play size={24} fill="currentColor" className="text-gray-700" />
+            <SkipForward size={20} className="text-gray-400" />
           </div>
         </div>
       </div>

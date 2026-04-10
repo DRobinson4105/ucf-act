@@ -13,6 +13,36 @@ interface MapViewProps {
 // Teal accent matching the mobile app
 const ACCENT = '#2DD4BF'
 
+// Build the icon HTML once — the arrow rotation is handled via CSS class
+function buildMarkerIcon(): L.DivIcon {
+  return L.divIcon({
+    className: 'custom-marker',
+    html: `<div style="
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: ${ACCENT};
+      border: 3px solid white;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    ">
+      <div class="heading-arrow" style="
+        width: 0;
+        height: 0;
+        border-left: 5px solid transparent;
+        border-right: 5px solid transparent;
+        border-bottom: 8px solid white;
+        margin-top: -1px;
+        transition: transform 0.4s ease;
+      "></div>
+    </div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14]
+  })
+}
+
 export const MapView: React.FC<MapViewProps> = ({ position, path, heading = 0 }) => {
   const mapRef = useRef<L.Map | null>(null)
   const markerRef = useRef<L.Marker | null>(null)
@@ -66,58 +96,40 @@ export const MapView: React.FC<MapViewProps> = ({ position, path, heading = 0 })
     pathRef.current.setLatLngs(path.length > 0 ? path : [])
   }, [path])
 
-  // Follow cart GPS — marker is only created/moved when real position is available
+  // Follow cart GPS — marker created once, then moved
   useEffect(() => {
     if (!mapRef.current || !position) return
 
-    // Skip if coordinates haven't actually changed (guards against stale effect fires)
+    // Skip if coordinates haven't actually changed
     const last = lastPanRef.current
     if (last && last.lat === position.lat && last.lng === position.lng) return
     lastPanRef.current = { lat: position.lat, lng: position.lng }
 
-    // Directional arrow marker — rotates with heading
-    const createIcon = (hdg: number) => L.divIcon({
-      className: 'custom-marker',
-      html: `<div style="
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
-        background: ${ACCENT};
-        border: 3px solid white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      ">
-        <div style="
-          width: 0;
-          height: 0;
-          border-left: 5px solid transparent;
-          border-right: 5px solid transparent;
-          border-bottom: 8px solid white;
-          transform: rotate(${hdg}deg);
-          margin-top: -1px;
-        "></div>
-      </div>`,
-      iconSize: [28, 28],
-      iconAnchor: [14, 14]
-    })
-
     if (!markerRef.current) {
-      // First real GPS fix — create marker and fly to cart position
-      markerRef.current = L.marker([position.lat, position.lng], { icon: createIcon(heading) })
+      // First real GPS fix — create marker once and set view
+      markerRef.current = L.marker([position.lat, position.lng], { icon: buildMarkerIcon() })
         .addTo(mapRef.current)
       mapRef.current.setView([position.lat, position.lng], 17, { animate: false })
     } else {
       markerRef.current.setLatLng([position.lat, position.lng])
-      markerRef.current.setIcon(createIcon(heading))
       mapRef.current.panTo([position.lat, position.lng], { animate: true, duration: 1 })
     }
-  }, [position, heading])
+  }, [position])
+
+  // Rotate the heading arrow via CSS transform — no icon recreation
+  useEffect(() => {
+    if (!markerRef.current) return
+    const el = markerRef.current.getElement()
+    if (!el) return
+    const arrow = el.querySelector('.heading-arrow') as HTMLElement | null
+    if (arrow) {
+      arrow.style.transform = `rotate(${heading}deg)`
+    }
+  }, [heading])
 
   return (
-    <div className="w-full h-full bg-background">
-      <div ref={mapContainerRef} className="w-full h-full" style={{ background: '#faf9f6' }} />
+    <div className="w-full h-full" style={{ background: '#e8e5df' }}>
+      <div ref={mapContainerRef} className="w-full h-full" style={{ background: '#e8e5df' }} />
     </div>
   )
 }

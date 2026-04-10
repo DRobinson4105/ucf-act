@@ -45,22 +45,26 @@
 }
 
 .leaflet-container {
-  background: #111111 !important;
+  background: #e8e5df !important;
+}
+
+.leaflet-tile {
+  filter: brightness(0.88) saturate(0.85) contrast(1.05);
 }
 
 .leaflet-control-container .leaflet-control {
-  background: rgba(26, 26, 26, 0.9) !important;
-  border: 1px solid #2A2A2A !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
   border-radius: 8px !important;
-  color: #F5F5F5 !important;
+  color: #333 !important;
 }
 
 .leaflet-control-zoom a {
-  background: rgba(26, 26, 26, 0.9) !important;
-  color: #F5F5F5 !important;
-  border: 1px solid #2A2A2A !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+  color: #333 !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
 }
 
 .leaflet-control-zoom a:hover {
-  background: rgba(34, 34, 34, 0.9) !important;
+  background: rgba(240, 240, 240, 0.9) !important;
 }

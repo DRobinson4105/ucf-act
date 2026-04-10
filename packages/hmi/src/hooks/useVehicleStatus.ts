@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@convex-api'
 import { Id } from '@convex-types'
@@ -29,23 +29,42 @@ export const useCartData = () => {
     return () => clearInterval(interval)
   }, [])
 
-  const status: VehicleStatus = {
-    battery: cart?.batteryLevel ?? 0,
-    speed: cart?.speed ?? 0,
-    heading: cart?.location?.heading ?? 0,
-    connectivity: cart ? 'excellent' : 'none',
-    isConnected: !!cart,
-  }
+  // Hold last-known values so a brief undefined during Convex reactive
+  // update cycles doesn't flash speed/heading/battery to 0.
+  const lastStatusRef = useRef<VehicleStatus>({
+    battery: 0,
+    speed: 0,
+    heading: 0,
+    connectivity: 'none',
+    isConnected: false,
+  })
 
-  // Memoize so the object reference only changes when the actual coordinates change,
-  // not on every App re-render (e.g. the 1-second currentTime tick).
+  const status = useMemo<VehicleStatus>(() => {
+    if (cart === undefined) return lastStatusRef.current
+    const next: VehicleStatus = {
+      battery: cart?.batteryLevel ?? lastStatusRef.current.battery,
+      speed: cart?.speed ?? lastStatusRef.current.speed,
+      heading: cart?.location?.heading ?? lastStatusRef.current.heading,
+      connectivity: cart ? 'excellent' : 'none',
+      isConnected: !!cart,
+    }
+    lastStatusRef.current = next
+    return next
+  }, [cart])
+
+  // Hold last-known position — never flick to null mid-session.
+  const lastPositionRef = useRef<GPSPosition | null>(null)
+
   const position = useMemo<GPSPosition | null>(() => {
-    if (!cart?.location?.latitude) return null
-    return {
+    if (cart === undefined) return lastPositionRef.current
+    if (!cart?.location?.latitude) return lastPositionRef.current
+    const next: GPSPosition = {
       lat: cart.location.latitude,
       lng: cart.location.longitude,
       timestamp: cart.lastUpdated,
     }
+    lastPositionRef.current = next
+    return next
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart?.location?.latitude, cart?.location?.longitude, cart?.lastUpdated])
 
