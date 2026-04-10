@@ -40,6 +40,7 @@ TELEMETRY_INTERVAL = 2.0    # seconds
 POLL_INTERVAL = 5.0         # seconds
 BOARD_POLL_INTERVAL = 2.0   # seconds -- how often to check if user has boarded
 SPEED_MPS = 4.0             # metres per second (~9 mph golf cart speed)
+SPEED_MPH = SPEED_MPS * 2.23694  # converted for HMI display
 COMPLETION_DIST_M = 8.0     # metres -- trigger action when within this distance
 
 
@@ -103,6 +104,7 @@ class CartSimulator:
         self.lat = IDLE_LAT
         self.lon = IDLE_LON
         self.heading = 0.0
+        self.speed_mph = 0.0
 
         self.active_ride: Optional[dict] = None
         self.phase: str = PHASE_IDLE
@@ -141,12 +143,16 @@ class CartSimulator:
     def _step_position(self, now: float) -> None:
         """Move along the pre-computed path at SPEED_MPS."""
         if self.phase not in (PHASE_TO_PICKUP, PHASE_TO_DEST):
+            self.speed_mph = 0.0
             return
         if self.drive_start is None or not self.path:
+            self.speed_mph = 0.0
             return
 
         elapsed = now - self.drive_start
         distance_traveled = elapsed * SPEED_MPS
+        total = self.path_dists[-1] if self.path_dists else 0
+        self.speed_mph = SPEED_MPH if distance_traveled < total else 0.0
         self.lat, self.lon, self.heading = interpolate_along_path(
             self.path, self.path_dists, distance_traveled
         )
@@ -160,8 +166,9 @@ class CartSimulator:
                 heading=self.heading,
                 battery_level=95.0,
                 status=status,
+                speed=self.speed_mph,
             )
-            print(f"[SIM] Telemetry ({self.phase}) -> ({self.lat:.5f}, {self.lon:.5f}) hdg={self.heading:.0f}")
+            print(f"[SIM] Telemetry ({self.phase}) -> ({self.lat:.5f}, {self.lon:.5f}) hdg={self.heading:.0f}° spd={self.speed_mph:.1f}mph")
         except Exception as e:
             print(f"[SIM] Telemetry failed: {e}")
 
@@ -219,6 +226,7 @@ class CartSimulator:
         origin = self.active_ride["origin"]
         self.lat = origin["latitude"]
         self.lon = origin["longitude"]
+        self.speed_mph = 0.0
         try:
             arrived_at_pickup(ride_id)
             print(f"[SIM] Arrived at pickup! Notified server. Waiting for user to board...")
@@ -287,6 +295,7 @@ class CartSimulator:
         dest = self.active_ride["destination"]
         self.lat = dest["latitude"]
         self.lon = dest["longitude"]
+        self.speed_mph = 0.0
         try:
             complete_ride(ride_id)
             print(f"[SIM] Ride {ride_id} completed!")

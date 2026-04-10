@@ -7,9 +7,13 @@ import { UCF_CENTER } from '../constants/campus-locations'
 interface MapViewProps {
   position: GPSPosition | null
   path: [number, number][]
+  heading?: number
 }
 
-export const MapView: React.FC<MapViewProps> = ({ position, path }) => {
+// Teal accent matching the mobile app
+const ACCENT = '#2DD4BF'
+
+export const MapView: React.FC<MapViewProps> = ({ position, path, heading = 0 }) => {
   const mapRef = useRef<L.Map | null>(null)
   const markerRef = useRef<L.Marker | null>(null)
   const pathRef = useRef<L.Polyline | null>(null)
@@ -36,8 +40,8 @@ export const MapView: React.FC<MapViewProps> = ({ position, path }) => {
       }).addTo(mapRef.current)
 
       pathRef.current = L.polyline(path, {
-        color: '#3b82f6',
-        weight: 5,
+        color: ACCENT,
+        weight: 4,
         opacity: 0.8,
         lineCap: 'round',
         lineJoin: 'round'
@@ -71,27 +75,49 @@ export const MapView: React.FC<MapViewProps> = ({ position, path }) => {
     if (last && last.lat === position.lat && last.lng === position.lng) return
     lastPanRef.current = { lat: position.lat, lng: position.lng }
 
-    const customIcon = L.divIcon({
+    // Directional arrow marker — rotates with heading
+    const createIcon = (hdg: number) => L.divIcon({
       className: 'custom-marker',
-      html: '<div style="background: #3b82f6; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>',
-      iconSize: [16, 16],
-      iconAnchor: [8, 8]
+      html: `<div style="
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: ${ACCENT};
+        border: 3px solid white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      ">
+        <div style="
+          width: 0;
+          height: 0;
+          border-left: 5px solid transparent;
+          border-right: 5px solid transparent;
+          border-bottom: 8px solid white;
+          transform: rotate(${hdg}deg);
+          margin-top: -1px;
+        "></div>
+      </div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
     })
 
     if (!markerRef.current) {
       // First real GPS fix — create marker and fly to cart position
-      markerRef.current = L.marker([position.lat, position.lng], { icon: customIcon })
+      markerRef.current = L.marker([position.lat, position.lng], { icon: createIcon(heading) })
         .addTo(mapRef.current)
       mapRef.current.setView([position.lat, position.lng], 17, { animate: false })
     } else {
       markerRef.current.setLatLng([position.lat, position.lng])
+      markerRef.current.setIcon(createIcon(heading))
       mapRef.current.panTo([position.lat, position.lng], { animate: true, duration: 1 })
     }
-  }, [position])
+  }, [position, heading])
 
   return (
-    <div className="w-full h-full bg-gray-900">
-      <div ref={mapContainerRef} className="w-full h-full" style={{ background: '#111' }} />
+    <div className="w-full h-full bg-background">
+      <div ref={mapContainerRef} className="w-full h-full" style={{ background: '#111111' }} />
     </div>
   )
 }

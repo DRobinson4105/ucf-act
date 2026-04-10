@@ -32,6 +32,7 @@ export const useCartData = () => {
   const status: VehicleStatus = {
     battery: cart?.batteryLevel ?? 0,
     speed: cart?.speed ?? 0,
+    heading: cart?.location?.heading ?? 0,
     connectivity: cart ? 'excellent' : 'none',
     isConnected: !!cart,
   }

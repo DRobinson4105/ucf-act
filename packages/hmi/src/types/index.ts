@@ -10,6 +10,7 @@ export interface Zone {
 export interface VehicleStatus {
   battery: number
   speed: number
+  heading: number
   connectivity: 'excellent' | 'good' | 'poor' | 'none'
   isConnected: boolean
 }

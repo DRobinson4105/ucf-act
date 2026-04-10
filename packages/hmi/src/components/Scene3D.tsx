@@ -16,6 +16,9 @@ const NUM_DASHES  = 22          // covers ~121 world-X units of road
 const DASH_START_X = 0          // first dash at cart position
 const ROAD_HEIGHT = 0.02        // height of road markings above surface
 
+// Teal accent matching the mobile app (#2DD4BF)
+const ACCENT_COLOR = '#2DD4BF'
+
 // ─── Animated center dashes ──────────────────────────────────────────────────
 function CenterDashes({ speed }: { speed: number }) {
   const groupRef = useRef<THREE.Group>(null)
@@ -75,10 +78,10 @@ export const Scene3D: React.FC<Scene3DProps> = ({ speed }) => {
             args={[60, 40]}
             cellSize={2}
             cellThickness={0.5}
-            cellColor="#222"
+            cellColor="#1A1A1A"
             sectionSize={10}
             sectionThickness={1}
-            sectionColor="#333"
+            sectionColor="#2A2A2A"
             fadeDistance={35}
             fadeStrength={1}
             infiniteGrid
@@ -88,7 +91,7 @@ export const Scene3D: React.FC<Scene3DProps> = ({ speed }) => {
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[20, 0, 0]}>
             <planeGeometry args={[100, 6]} />
             <meshStandardMaterial
-              color="#222"
+              color="#1A1A1A"
               roughness={0.9}
               polygonOffset
               polygonOffsetFactor={1}
@@ -99,13 +102,13 @@ export const Scene3D: React.FC<Scene3DProps> = ({ speed }) => {
           {/* Left edge line (negative Z) */}
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[20, ROAD_HEIGHT, -2.5]}>
             <planeGeometry args={[100, 0.2]} />
-            <meshBasicMaterial color="#3b82f6" toneMapped={false} />
+            <meshBasicMaterial color={ACCENT_COLOR} toneMapped={false} />
           </mesh>
 
           {/* Right edge line (positive Z) */}
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[20, ROAD_HEIGHT, 2.5]}>
             <planeGeometry args={[100, 0.2]} />
-            <meshBasicMaterial color="#3b82f6" toneMapped={false} />
+            <meshBasicMaterial color={ACCENT_COLOR} toneMapped={false} />
           </mesh>
 
           {/* Center dashes — speed-driven scrolling */}

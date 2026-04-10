@@ -4,7 +4,7 @@ import { RouteInstructions } from './components/RouteInstructions'
 import { useCartData } from './hooks/useVehicleStatus'
 import {
   Battery, Wifi, WifiOff, Music, SkipBack, SkipForward, Play,
-  MapPin, Navigation, Clock, CheckCircle2,
+  Navigation, Clock, Compass,
 } from 'lucide-react'
 
 // ─── Ride phase helpers ────────────────────────────────────────────────────────
@@ -13,30 +13,35 @@ type RideStatus = 'assigned' | 'arriving' | 'in_progress' | null
 
 function phaseLabel(rideStatus: RideStatus): string {
   switch (rideStatus) {
-    case 'assigned':    return 'Heading to pickup'
-    case 'arriving':    return 'Awaiting passenger'
-    case 'in_progress': return 'En route'
+    case 'assigned':    return 'Cart on the way'
+    case 'arriving':    return 'Cart has arrived!'
+    case 'in_progress': return 'On your way'
     default:            return 'Idle'
+  }
+}
+
+function phaseSub(rideStatus: RideStatus): string {
+  switch (rideStatus) {
+    case 'assigned':    return 'Heading to pickup location'
+    case 'arriving':    return 'Waiting for passenger to board'
+    case 'in_progress': return 'En route to destination'
+    default:            return 'Waiting for ride assignment'
   }
 }
 
 function phaseDotColor(rideStatus: RideStatus): string {
   switch (rideStatus) {
-    case 'assigned':    return 'bg-yellow-400'
-    case 'arriving':    return 'bg-green-400'
-    case 'in_progress': return 'bg-blue-500'
-    default:            return 'bg-gray-500'
+    case 'assigned':    return 'bg-primary'
+    case 'arriving':    return 'bg-success'
+    case 'in_progress': return 'bg-primary'
+    default:            return 'bg-text-secondary'
   }
 }
 
-function PhaseIcon({ status }: { status: RideStatus }) {
-  const cls = 'shrink-0'
-  switch (status) {
-    case 'assigned':    return <Navigation size={16} className={`${cls} text-yellow-400`} />
-    case 'arriving':    return <Clock      size={16} className={`${cls} text-green-400`} />
-    case 'in_progress': return <MapPin     size={16} className={`${cls} text-blue-400`} />
-    default:            return <CheckCircle2 size={16} className={`${cls} text-gray-500`} />
-  }
+const COMPASS_DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
+
+function compassDir(heading: number): string {
+  return COMPASS_DIRS[Math.round(heading / 45) % 8]
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -48,29 +53,23 @@ function App() {
   const originName      = ride?.origin?.name      ?? 'Pickup'
   const destinationName = ride?.destination?.name ?? 'Destination'
 
-  // What to show in the route destination sub-label
-  const routeTarget =
-    rideStatus === 'in_progress' ? destinationName :
-    rideStatus === 'assigned'    ? originName :
-    null
-
   // Show the "arriving" banner instead of turn-by-turn when cart is waiting
   const showArrivalBanner = rideStatus === 'arriving'
 
   return (
-    <div className="h-full w-full bg-black text-white overflow-hidden flex flex-row font-sans">
+    <div className="h-full w-full bg-background text-text-primary overflow-hidden flex flex-row font-sans">
 
       {/* ── LEFT PANEL: 3D visualization ─────────────────────────────────── */}
-      <div className="w-1/2 h-full relative border-r border-gray-800 bg-gradient-to-b from-[#1a1a1a] to-[#000000]">
+      <div className="w-1/2 h-full relative border-r border-border bg-gradient-to-b from-surface to-background">
 
         {/* Turn-by-turn banner OR arrival banner */}
         {showArrivalBanner ? (
           <div className="absolute top-0 left-0 right-0 z-20 mx-4 mt-4">
-            <div className="bg-green-900/80 backdrop-blur-md border border-green-700 rounded-2xl px-5 py-3 flex items-center gap-4 shadow-2xl">
-              <Clock size={28} className="text-green-400 shrink-0" />
+            <div className="bg-success/20 backdrop-blur-md border border-success/40 rounded-2xl px-5 py-3 flex items-center gap-4 shadow-2xl">
+              <Clock size={28} className="text-success shrink-0" />
               <div>
-                <p className="text-white font-semibold text-lg leading-tight">Awaiting passenger</p>
-                <p className="text-green-300 text-sm">At {originName}</p>
+                <p className="text-text-primary font-semibold text-lg leading-tight">Cart has arrived!</p>
+                <p className="text-success text-sm">Waiting at {originName}</p>
               </div>
             </div>
           </div>
@@ -82,17 +81,27 @@ function App() {
           />
         )}
 
-        {/* Speed + gear overlay */}
+        {/* Speed + heading overlay */}
         <div className="absolute top-0 left-0 w-full p-4 z-10 flex justify-between items-start pt-20">
           <div className="flex flex-col">
-            <span className="text-6xl font-medium tracking-tighter">{Math.round(status.speed)}</span>
-            <span className="text-sm text-gray-400 font-medium uppercase tracking-widest pl-1">MPH</span>
+            <span className="text-6xl font-medium tracking-tighter text-text-primary">
+              {Math.round(status.speed)}
+            </span>
+            <span className="text-sm text-text-secondary font-medium uppercase tracking-widest pl-1">MPH</span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1 text-gray-400">
+          <div className="flex items-center gap-4">
+            {/* Heading */}
+            <div className="flex items-center gap-2 bg-surfaceLight/80 backdrop-blur-sm rounded-xl px-3 py-2 border border-border">
+              <Compass size={16} className="text-primary" />
+              <span className="text-sm font-semibold text-text-primary">{Math.round(status.heading)}°</span>
+              <span className="text-xs text-text-secondary">{compassDir(status.heading)}</span>
+            </div>
+
+            {/* Gear */}
+            <div className="flex items-center gap-1 text-text-secondary">
               <span className="text-sm font-medium">PRND</span>
-              <span className="text-blue-500 font-bold ml-1">
+              <span className="text-primary font-bold ml-1">
                 {rideStatus === null ? 'P' : 'D'}
               </span>
             </div>
@@ -106,15 +115,15 @@ function App() {
 
         {/* Battery / connectivity */}
         <div className="absolute bottom-20 left-0 w-full px-6 py-4 flex justify-between items-end z-10">
-          <div className="flex items-center gap-2 text-green-400">
+          <div className="flex items-center gap-2 text-success">
             <Battery size={24} fill="currentColor" />
             <span className="text-xl font-medium">{Math.floor(status.battery)}%</span>
           </div>
 
-          <div className="flex items-center gap-2 text-gray-400">
+          <div className="flex items-center gap-2 text-text-secondary">
             {status.isConnected
-              ? <Wifi size={18} className="text-green-400" />
-              : <WifiOff size={18} className="text-red-400" />
+              ? <Wifi size={18} className="text-success" />
+              : <WifiOff size={18} className="text-danger" />
             }
             <span className="text-xs">{status.connectivity}</span>
           </div>
@@ -122,84 +131,83 @@ function App() {
       </div>
 
       {/* ── RIGHT PANEL: Map ──────────────────────────────────────────────── */}
-      <div className="w-1/2 h-full relative bg-gray-900">
+      <div className="w-1/2 h-full relative bg-background">
 
         {/* Map */}
         <div className="absolute inset-0 z-0">
-          <MapView position={position} path={path} />
+          <MapView position={position} path={path} heading={status.heading} />
         </div>
 
         {/* Top bar: time */}
-        <div className="absolute top-0 right-0 w-full p-4 z-10 flex justify-end items-center gap-4 bg-gradient-to-b from-black/50 to-transparent pointer-events-none">
-          <div className="flex items-center gap-2 text-white font-medium drop-shadow-md">
+        <div className="absolute top-0 right-0 w-full p-4 z-10 flex justify-end items-center gap-4 bg-gradient-to-b from-background/70 to-transparent pointer-events-none">
+          <div className="flex items-center gap-2 text-text-primary font-medium drop-shadow-md">
             <span>72°F</span>
             <span>{currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
             <Wifi size={16} />
           </div>
         </div>
 
-        {/* Trip info card */}
-        <div className="absolute top-12 left-6 w-80 bg-[#1a1a1a] rounded-xl shadow-2xl border border-gray-800 p-4 flex flex-col gap-2">
+        {/* Trip info card — matches mobile app ride card */}
+        <div className="absolute top-12 left-6 w-80 bg-surface rounded-[20px] shadow-2xl border border-border p-[18px] flex flex-col gap-1">
           {/* Status row */}
-          <div className="flex items-center gap-3">
-            <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${phaseDotColor(rideStatus)}`} />
-            <div className="flex items-center gap-2 min-w-0">
-              <PhaseIcon status={rideStatus} />
-              <h3 className="font-semibold text-white text-sm truncate">
-                {status.isConnected ? phaseLabel(rideStatus) : 'Connecting…'}
-              </h3>
-            </div>
+          <div className="flex items-center gap-2 mb-1">
+            <div className={`w-2 h-2 rounded-full shrink-0 ${phaseDotColor(rideStatus)} ${rideStatus ? 'animate-pulse' : ''}`} />
+            <h3 className="font-bold text-text-primary text-[17px] leading-tight truncate">
+              {status.isConnected ? phaseLabel(rideStatus) : 'Connecting...'}
+            </h3>
           </div>
+          <p className="text-[13px] text-text-secondary mb-3 pl-4">
+            {status.isConnected ? phaseSub(rideStatus) : 'Establishing connection'}
+          </p>
 
-          {/* Route detail — origin → destination when ride is active */}
+          {/* Route chip — origin → destination when ride is active */}
           {rideStatus !== null && (
-            <div className="flex flex-col gap-1 pl-5 border-l border-gray-700 ml-1">
-              {rideStatus === 'in_progress' ? (
-                <>
-                  <div className="flex items-center gap-2 text-xs text-gray-400">
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                    <span className="truncate">{originName}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-white font-medium">
-                    <div className="w-1.5 h-1.5 rounded-sm bg-blue-400" />
-                    <span className="truncate">{destinationName}</span>
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center gap-2 text-xs text-gray-300">
-                  <MapPin size={11} className="text-yellow-400 shrink-0" />
-                  <span className="truncate">{routeTarget}</span>
-                </div>
-              )}
+            <div className="flex items-center gap-1.5 bg-surfaceLight rounded-xl px-3.5 py-2.5 mb-3 border border-border">
+              <div className="w-[7px] h-[7px] rounded-full bg-text-secondary shrink-0" />
+              <span className="text-[13px] text-text-secondary truncate flex-1">{originName}</span>
+              <span className="text-[13px] text-text-secondary mx-0.5">→</span>
+              <div className="w-[7px] h-[7px] rounded-sm bg-primary shrink-0" />
+              <span className="text-[13px] font-semibold text-text-primary truncate flex-1">{destinationName}</span>
             </div>
           )}
 
+          {/* Cart info row */}
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-surfaceLight border border-border flex items-center justify-center">
+              <Navigation size={18} className="text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[15px] font-semibold text-text-primary">ACT-001</p>
+              <p className="text-[13px] text-text-secondary">Autonomous Golf Cart</p>
+            </div>
+          </div>
+
           {/* Waypoint count when route is active */}
           {waypoints.length > 0 && (
-            <p className="text-xs text-gray-500 pl-5">
+            <p className="text-xs text-text-muted pl-14 -mt-1">
               {waypoints.length} waypoints
             </p>
           )}
 
           {/* No ride state */}
           {rideStatus === null && (
-            <p className="text-xs text-gray-500 pl-5">No active ride</p>
+            <p className="text-xs text-text-muted pl-14 -mt-1">No active ride</p>
           )}
         </div>
 
         {/* Music dock */}
-        <div className="absolute bottom-8 right-8 w-96 bg-[#1a1a1a]/90 backdrop-blur-md rounded-xl shadow-2xl border border-gray-800 p-4 flex items-center gap-4">
-          <div className="w-12 h-12 bg-gray-700 rounded-lg flex items-center justify-center">
-            <Music size={20} className="text-gray-400" />
+        <div className="absolute bottom-8 right-8 w-96 bg-surface/90 backdrop-blur-md rounded-xl shadow-2xl border border-border p-4 flex items-center gap-4">
+          <div className="w-12 h-12 bg-surfaceLight rounded-lg flex items-center justify-center border border-border">
+            <Music size={20} className="text-text-secondary" />
           </div>
           <div className="flex-1 overflow-hidden">
-            <h4 className="font-medium text-white truncate">Usseewa</h4>
-            <p className="text-xs text-gray-400 truncate">Ado · Kyogen</p>
+            <h4 className="font-medium text-text-primary truncate">Usseewa</h4>
+            <p className="text-xs text-text-secondary truncate">Ado · Kyogen</p>
           </div>
           <div className="flex items-center gap-3">
-            <SkipBack size={20} className="text-gray-400" />
-            <Play size={24} fill="currentColor" className="text-white" />
-            <SkipForward size={20} className="text-gray-400" />
+            <SkipBack size={20} className="text-text-secondary" />
+            <Play size={24} fill="currentColor" className="text-text-primary" />
+            <SkipForward size={20} className="text-text-secondary" />
           </div>
         </div>
       </div>

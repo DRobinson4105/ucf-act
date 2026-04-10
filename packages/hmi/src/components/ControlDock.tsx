@@ -110,7 +110,7 @@ const MusicPanel: React.FC = () => {
       <div className="text-center">
         <h3 className="text-lg font-semibold mb-1">Now Playing</h3>
         <p className="text-sm text-text-secondary mb-1">Ambient Drive</p>
-        <p className="text-xs text-text-muted">Autonomous Focus</p>
+        <p className="text-xs text-text-secondary">Autonomous Focus</p>
       </div>
 
       <div className="flex items-center justify-center space-x-4">
@@ -130,7 +130,7 @@ const MusicPanel: React.FC = () => {
         <div className="flex-1 h-2 bg-surfaceLight rounded-full overflow-hidden">
           <div className="w-3/4 h-full bg-primary rounded-full" />
         </div>
-        <span className="text-xs text-text-muted">75%</span>
+        <span className="text-xs text-text-secondary">75%</span>
       </div>
     </div>
   )

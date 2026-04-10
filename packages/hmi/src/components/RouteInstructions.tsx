@@ -149,15 +149,15 @@ export const RouteInstructions: React.FC<RouteInstructionsProps> = ({
 
   return (
     <div className="absolute top-0 left-0 right-0 z-20 mx-4 mt-4">
-      <div className="bg-[#1a1a1a]/90 backdrop-blur-md border border-gray-700 rounded-2xl px-5 py-3 flex items-center gap-4 shadow-2xl">
-        <div className="text-blue-400 flex-shrink-0">
+      <div className="bg-surface/90 backdrop-blur-md border border-border rounded-2xl px-5 py-3 flex items-center gap-4 shadow-2xl">
+        <div className="text-primary flex-shrink-0">
           <InstructionIcon type={instruction.type} />
         </div>
         <div className="flex flex-col min-w-0">
-          <span className="text-white font-semibold text-lg leading-tight">
+          <span className="text-text-primary font-semibold text-lg leading-tight">
             {instructionLabel(instruction.type)}
           </span>
-          <span className="text-gray-400 text-sm">
+          <span className="text-text-secondary text-sm">
             in {formatDistance(instruction.distanceFt)}
           </span>
         </div>

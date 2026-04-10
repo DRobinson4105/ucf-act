@@ -79,7 +79,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({ status, currentTime }) => 
           <span className="text-lg font-semibold">
             {status.speed.toFixed(0)}
           </span>
-          <span className="text-sm text-text-muted">MPH</span>
+          <span className="text-sm text-text-secondary">MPH</span>
         </div>
       </div>
     </div>
