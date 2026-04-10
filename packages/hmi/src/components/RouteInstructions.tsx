@@ -58,16 +58,20 @@ function computeInstruction(waypoints: Waypoint[], currentLat: number, currentLn
     }
   }
 
-  // Walk forward from closest point, accumulating distance until next significant turn
-  let cumDist = 0
+  // If we're at/past the last waypoint, nothing left to navigate
+  if (closestIdx >= waypoints.length - 1) return null
+
+  // Walk forward from closest point, accumulating distance until next significant turn.
+  // cumDist tracks distance from cart to the current segment start (wp[i]).
+  // The turn at wp[i] is detected by comparing the incoming and outgoing bearings,
+  // so cumDist at detection = distance from cart to the turn point.
+  let cumDist = distanceFt(currentLat, currentLng, waypoints[closestIdx].latitude, waypoints[closestIdx].longitude)
   let prevBearing: number | null = null
 
   for (let i = closestIdx; i < waypoints.length - 1; i++) {
     const a = waypoints[i]
     const b = waypoints[i + 1]
     const segDist = distanceFt(a.latitude, a.longitude, b.latitude, b.longitude)
-    cumDist += segDist
-
     const segBearing = bearing(a.latitude, a.longitude, b.latitude, b.longitude)
 
     if (prevBearing !== null) {
@@ -88,16 +92,13 @@ function computeInstruction(waypoints: Waypoint[], currentLat: number, currentLn
       }
     }
 
+    cumDist += segDist
     prevBearing = segBearing
   }
 
-  // No turn found — continue straight
-  const remaining = waypoints.slice(closestIdx).reduce((acc, wp, i, arr) => {
-    if (i === 0) return acc
-    return acc + distanceFt(arr[i - 1].latitude, arr[i - 1].longitude, wp.latitude, wp.longitude)
-  }, 0)
-
-  return { type: 'straight', distanceFt: remaining }
+  // No turn found — continue straight with remaining distance to end
+  if (cumDist < 10) return null // already at destination
+  return { type: 'straight', distanceFt: cumDist }
 }
 
 function formatDistance(ft: number): string {

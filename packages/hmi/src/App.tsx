@@ -1,7 +1,8 @@
+import { useMemo } from 'react'
 import { Scene3D } from './components/Scene3D'
 import { MapView } from './components/MapView'
 import { RouteInstructions } from './components/RouteInstructions'
-import { useCartData } from './hooks/useVehicleStatus'
+import { useCartData, Waypoint } from './hooks/useVehicleStatus'
 import {
   Battery, Wifi, WifiOff, Music, SkipBack, SkipForward, Play,
   Navigation, Clock, Compass,
@@ -38,6 +39,41 @@ function phaseDotColor(rideStatus: RideStatus): string {
   }
 }
 
+// ─── Speed deceleration near route endpoints ─────────────────────────────────
+
+const DECEL_ZONE_FT = 150 // start decelerating within 150 ft of destination
+
+function haversineFt(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 20_902_231 // Earth radius in feet
+  const phi1 = (lat1 * Math.PI) / 180
+  const phi2 = (lat2 * Math.PI) / 180
+  const dPhi = ((lat2 - lat1) * Math.PI) / 180
+  const dLam = ((lon2 - lon1) * Math.PI) / 180
+  const a =
+    Math.sin(dPhi / 2) ** 2 +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLam / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function computeDisplaySpeed(
+  rawSpeed: number,
+  position: { lat: number; lng: number } | null,
+  waypoints: Waypoint[],
+): number {
+  if (!position || waypoints.length < 2) return rawSpeed
+
+  const lastWp = waypoints[waypoints.length - 1]
+  const distToEnd = haversineFt(position.lat, position.lng, lastWp.latitude, lastWp.longitude)
+
+  if (distToEnd < DECEL_ZONE_FT) {
+    // Smooth ease-out curve: speed * (dist / zone)^0.5
+    const factor = Math.pow(Math.max(0, distToEnd / DECEL_ZONE_FT), 0.5)
+    return rawSpeed * factor
+  }
+
+  return rawSpeed
+}
+
 const COMPASS_DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
 
 function compassDir(heading: number): string {
@@ -52,6 +88,12 @@ function App() {
   const rideStatus: RideStatus = (ride?.status as RideStatus) ?? null
   const originName      = ride?.origin?.name      ?? 'Pickup'
   const destinationName = ride?.destination?.name ?? 'Destination'
+
+  // Decelerate smoothly as cart approaches the route endpoint (pickup or dropoff)
+  const displaySpeed = useMemo(
+    () => computeDisplaySpeed(status.speed, position, waypoints),
+    [status.speed, position, waypoints],
+  )
 
   // Show the "arriving" banner instead of turn-by-turn when cart is waiting
   const showArrivalBanner = rideStatus === 'arriving'
@@ -85,7 +127,7 @@ function App() {
         <div className="absolute top-0 left-0 w-full p-4 z-10 flex justify-between items-start pt-20">
           <div className="flex flex-col">
             <span className="text-6xl font-medium tracking-tighter text-text-primary">
-              {Math.round(status.speed)}
+              {Math.round(displaySpeed)}
             </span>
             <span className="text-sm text-text-secondary font-medium uppercase tracking-widest pl-1">MPH</span>
           </div>
@@ -110,7 +152,7 @@ function App() {
 
         {/* 3D Scene */}
         <div className="w-full h-full">
-          <Scene3D speed={status.speed} />
+          <Scene3D speed={displaySpeed} />
         </div>
 
         {/* Battery / connectivity */}

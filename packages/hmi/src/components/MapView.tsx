@@ -34,7 +34,7 @@ export const MapView: React.FC<MapViewProps> = ({ position, path, heading = 0 })
         touchZoom: true
       })
 
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
         attribution: '',
         maxZoom: 19
       }).addTo(mapRef.current)
@@ -117,7 +117,7 @@ export const MapView: React.FC<MapViewProps> = ({ position, path, heading = 0 })
 
   return (
     <div className="w-full h-full bg-background">
-      <div ref={mapContainerRef} className="w-full h-full" style={{ background: '#111111' }} />
+      <div ref={mapContainerRef} className="w-full h-full" style={{ background: '#faf9f6' }} />
     </div>
   )
 }
