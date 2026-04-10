@@ -20,11 +20,16 @@ typedef struct {
     bool block;
     bool fill_response;
     bool fill_error;
+    bool emit_notification;
+    bool emit_unrelated_error;
     twai_message_t response_msg;
     twai_message_t error_msg;
+    twai_message_t notification_msg;
+    twai_message_t unrelated_error_msg;
     SemaphoreHandle_t enter_sem;
     SemaphoreHandle_t release_sem;
     int calls;
+    bool saw_observer;
     motor_cmd_t last_cmd;
     TickType_t last_timeout_ticks;
     TickType_t last_no_ack_grace_ticks;
@@ -37,6 +42,8 @@ typedef struct {
 } callback_ctx_t;
 
 static fake_dispatch_t s_fake_dispatch;
+static int s_rx_log_calls;
+static motor_rx_t s_last_logged_rx;
 
 static twai_message_t make_ext_frame(uint8_t producer_id,
                                      uint8_t cw_raw,
@@ -67,9 +74,8 @@ static motor_dispatch_result_t fake_dispatch_exec(const motor_cmd_t *cmd,
                                                   motor_rx_t *out_response,
                                                   motor_rx_t *out_related_error)
 {
-    (void)observer;
-
     s_fake_dispatch.calls++;
+    s_fake_dispatch.saw_observer = observer != NULL;
     s_fake_dispatch.last_cmd = *cmd;
     s_fake_dispatch.last_timeout_ticks = timeout_ticks;
     s_fake_dispatch.last_no_ack_grace_ticks = no_ack_grace_ticks;
@@ -82,6 +88,20 @@ static motor_dispatch_result_t fake_dispatch_exec(const motor_cmd_t *cmd,
         TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_fake_dispatch.release_sem, pdMS_TO_TICKS(1000)));
     }
 
+    if (s_fake_dispatch.emit_notification && observer != NULL && observer->on_notification != NULL) {
+        motor_rx_t notification_rx;
+
+        TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&s_fake_dispatch.notification_msg, &notification_rx));
+        observer->on_notification(&notification_rx, observer->ctx);
+    }
+
+    if (s_fake_dispatch.emit_unrelated_error && observer != NULL && observer->on_error != NULL) {
+        motor_rx_t error_rx;
+
+        TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&s_fake_dispatch.unrelated_error_msg, &error_rx));
+        observer->on_error(&error_rx, observer->ctx);
+    }
+
     if (s_fake_dispatch.fill_response && out_response != NULL) {
         TEST_ASSERT_EQUAL(ESP_OK, motor_rx_parse(&s_fake_dispatch.response_msg, out_response));
     }
@@ -91,6 +111,14 @@ static motor_dispatch_result_t fake_dispatch_exec(const motor_cmd_t *cmd,
     }
 
     return s_fake_dispatch.result;
+}
+
+static void capture_rx_log(const motor_rx_t *rx)
+{
+    TEST_ASSERT_NOT_NULL(rx);
+
+    s_rx_log_calls++;
+    s_last_logged_rx = *rx;
 }
 
 static void completion_cb(const motor_exec_result_t *result, void *ctx)
@@ -123,6 +151,8 @@ static void reset_fake_dispatch(void)
 {
     memset(&s_fake_dispatch, 0, sizeof(s_fake_dispatch));
     s_fake_dispatch.result = MOTOR_DISPATCH_RESULT_OK;
+    s_rx_log_calls = 0;
+    memset(&s_last_logged_rx, 0, sizeof(s_last_logged_rx));
 }
 
 static void motor_exec_test_begin(void)
@@ -130,6 +160,7 @@ static void motor_exec_test_begin(void)
     motor_exec_test_reset_state();
     reset_fake_dispatch();
     motor_exec_test_set_dispatch_fn(fake_dispatch_exec);
+    motor_exec_test_set_rx_log_fn(capture_rx_log);
 }
 
 static void motor_exec_test_end(void)
@@ -794,16 +825,124 @@ TEST_CASE("motor exec logging controls are configurable and split by domain", "[
     TEST_ASSERT_TRUE(cfg.enabled);
     TEST_ASSERT_TRUE(cfg.setup_enabled);
     TEST_ASSERT_TRUE(cfg.motion_enabled);
+    TEST_ASSERT_TRUE(cfg.log_notifications);
+    TEST_ASSERT_TRUE(cfg.log_unrelated_errors);
 
     cfg.enabled = true;
     cfg.setup_enabled = false;
     cfg.motion_enabled = true;
+    cfg.log_notifications = false;
+    cfg.log_unrelated_errors = true;
     TEST_ASSERT_EQUAL(ESP_OK, motor_exec_set_log_cfg(&cfg));
     memset(&cfg, 0, sizeof(cfg));
     TEST_ASSERT_EQUAL(ESP_OK, motor_exec_get_log_cfg(&cfg));
     TEST_ASSERT_TRUE(cfg.enabled);
     TEST_ASSERT_FALSE(cfg.setup_enabled);
     TEST_ASSERT_TRUE(cfg.motion_enabled);
+    TEST_ASSERT_FALSE(cfg.log_notifications);
+    TEST_ASSERT_TRUE(cfg.log_unrelated_errors);
+    motor_exec_test_end();
+}
+
+TEST_CASE("motor exec logs side-traffic notifications semantically through the dispatch observer", "[motor_exec]")
+{
+    callback_ctx_t ctx = {0};
+    motor_exec_submit_opts_t opts;
+    motor_exec_submit_result_t submit;
+
+    motor_exec_test_begin();
+    ctx.done_sem = xSemaphoreCreateBinary();
+    opts = make_opts(&ctx);
+    s_fake_dispatch.emit_notification = true;
+    s_fake_dispatch.notification_msg = make_ext_frame(0x33U, 0x5AU, 2U,
+                                                      (const uint8_t[]){0x44U, 0x02U});
+
+    submit = motor_exec_brake_bg_begin(6U, false, &opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_TRUE(s_fake_dispatch.saw_observer);
+    TEST_ASSERT_EQUAL(1, s_rx_log_calls);
+    TEST_ASSERT_TRUE(motor_rx_is_notification(&s_last_logged_rx));
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_STATUS_SUCCESS, ctx.last_result.status);
+    TEST_ASSERT_FALSE(ctx.last_result.ack_expected);
+
+    vSemaphoreDelete(ctx.done_sem);
+    motor_exec_test_end();
+}
+
+TEST_CASE("motor exec logs unrelated motor-side errors semantically through the dispatch observer", "[motor_exec]")
+{
+    callback_ctx_t ctx = {0};
+    motor_exec_submit_opts_t opts;
+    motor_exec_submit_result_t submit;
+    uint8_t error_data[] = {
+        MOTOR_ER_INDEX_HISTORY_2, 0x77U, 0x26U, MOTOR_PP_INDEX_NODE_ID, 0x00U, 0x00U
+    };
+
+    motor_exec_test_begin();
+    ctx.done_sem = xSemaphoreCreateBinary();
+    opts = make_opts(&ctx);
+    s_fake_dispatch.emit_unrelated_error = true;
+    s_fake_dispatch.unrelated_error_msg = make_ext_frame(0x05U, 0x0FU, 6U, error_data);
+
+    submit = motor_exec_brake_bg_begin(6U, false, &opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_TRUE(s_fake_dispatch.saw_observer);
+    TEST_ASSERT_EQUAL(1, s_rx_log_calls);
+    TEST_ASSERT_TRUE(motor_rx_is_error(&s_last_logged_rx));
+    TEST_ASSERT_EQUAL(MOTOR_EXEC_STATUS_SUCCESS, ctx.last_result.status);
+    TEST_ASSERT_FALSE(ctx.last_result.remote_error.valid);
+
+    vSemaphoreDelete(ctx.done_sem);
+    motor_exec_test_end();
+}
+
+TEST_CASE("motor exec side-traffic log flags can suppress notification and unrelated error logging", "[motor_exec]")
+{
+    callback_ctx_t notify_ctx = {0};
+    callback_ctx_t error_ctx = {0};
+    motor_exec_submit_opts_t notify_opts;
+    motor_exec_submit_opts_t error_opts;
+    motor_exec_submit_result_t submit;
+    motor_exec_log_cfg_t cfg;
+    uint8_t error_data[] = {
+        MOTOR_ER_INDEX_HISTORY_2, 0x77U, 0x26U, MOTOR_PP_INDEX_NODE_ID, 0x00U, 0x00U
+    };
+
+    motor_exec_test_begin();
+    notify_ctx.done_sem = xSemaphoreCreateBinary();
+    error_ctx.done_sem = xSemaphoreCreateBinary();
+    notify_opts = make_opts(&notify_ctx);
+    error_opts = make_opts(&error_ctx);
+
+    cfg = motor_exec_default_log_cfg();
+    cfg.log_notifications = false;
+    cfg.log_unrelated_errors = false;
+    TEST_ASSERT_EQUAL(ESP_OK, motor_exec_set_log_cfg(&cfg));
+
+    s_fake_dispatch.emit_notification = true;
+    s_fake_dispatch.notification_msg = make_ext_frame(0x33U, 0x5AU, 2U,
+                                                      (const uint8_t[]){0x44U, 0x02U});
+    submit = motor_exec_brake_bg_begin(6U, false, &notify_opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(notify_ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(0, s_rx_log_calls);
+
+    reset_fake_dispatch();
+    cfg = motor_exec_default_log_cfg();
+    cfg.log_notifications = true;
+    cfg.log_unrelated_errors = false;
+    TEST_ASSERT_EQUAL(ESP_OK, motor_exec_set_log_cfg(&cfg));
+    s_fake_dispatch.emit_unrelated_error = true;
+    s_fake_dispatch.unrelated_error_msg = make_ext_frame(0x05U, 0x0FU, 6U, error_data);
+    submit = motor_exec_brake_bg_begin(6U, false, &error_opts);
+    TEST_ASSERT_TRUE(submit.accepted);
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(error_ctx.done_sem, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL(0, s_rx_log_calls);
+
+    vSemaphoreDelete(notify_ctx.done_sem);
+    vSemaphoreDelete(error_ctx.done_sem);
     motor_exec_test_end();
 }
 

@@ -70,6 +70,8 @@ typedef struct {
     bool enabled;
     bool setup_enabled;
     bool motion_enabled;
+    bool log_notifications;
+    bool log_unrelated_errors;
 } motor_exec_log_cfg_t;
 
 typedef struct {

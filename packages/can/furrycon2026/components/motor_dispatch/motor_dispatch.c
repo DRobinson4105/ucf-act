@@ -172,7 +172,10 @@ static motor_dispatch_result_t wait_for_terminal_outcome(const motor_cmd_t *cmd,
              * asymmetric families and ER command responses carried on
              * ERROR-kind frames.
              */
-            notify_observer(observer, &rx);
+            if (motor_rx_is_notification(&rx)) {
+                notify_observer(observer, &rx);
+                continue;
+            }
 
             if (expects_ack && motor_rx_matches_cmd(&rx, cmd)) {
                 if (out_response != NULL) {
@@ -186,6 +189,10 @@ static motor_dispatch_result_t wait_for_terminal_outcome(const motor_cmd_t *cmd,
                     *out_related_error = rx;
                 }
                 return MOTOR_DISPATCH_RESULT_REMOTE_ERROR;
+            }
+
+            if (motor_rx_is_error(&rx)) {
+                notify_observer(observer, &rx);
             }
         }
 

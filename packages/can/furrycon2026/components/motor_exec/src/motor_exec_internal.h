@@ -12,8 +12,10 @@ typedef motor_dispatch_result_t (*motor_exec_dispatch_fn_t)(const motor_cmd_t *c
                                                             const motor_dispatch_observer_t *observer,
                                                             motor_rx_t *out_response,
                                                             motor_rx_t *out_related_error);
+typedef void (*motor_exec_rx_log_fn_t)(const motor_rx_t *rx);
 
 void motor_exec_test_set_dispatch_fn(motor_exec_dispatch_fn_t fn);
+void motor_exec_test_set_rx_log_fn(motor_exec_rx_log_fn_t fn);
 void motor_exec_test_reset_state(void);
 
 #ifdef __cplusplus

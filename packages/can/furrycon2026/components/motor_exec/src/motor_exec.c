@@ -38,6 +38,10 @@ typedef struct {
     motor_exec_submit_opts_t opts;
 } motor_exec_pending_t;
 
+typedef struct {
+    motor_exec_log_domain_t log_domain;
+} motor_exec_observer_ctx_t;
+
 static TaskHandle_t s_worker_task = NULL;
 static bool s_worker_creating = false;
 static bool s_pending_active = false;
@@ -47,9 +51,12 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static motor_exec_log_cfg_t s_log_cfg = {
     .enabled = true,
     .setup_enabled = true,
+    .log_notifications = true,
+    .log_unrelated_errors = true,
     .motion_enabled = true,
 };
 static motor_exec_dispatch_fn_t s_dispatch_fn = dispatch_default;
+static motor_exec_rx_log_fn_t s_rx_log_fn = motor_diag_log_rx;
 
 static void copy_string(char *dst, size_t cap, const char *src);
 static void format_into(char *dst, size_t cap, const char *fmt, ...);
@@ -263,6 +270,43 @@ static bool log_allowed_for_domain(motor_exec_log_domain_t domain)
     }
 
     return domain == MOTOR_EXEC_LOG_DOMAIN_SETUP ? cfg.setup_enabled : cfg.motion_enabled;
+}
+
+static bool side_traffic_log_allowed(motor_exec_log_domain_t domain, bool is_notification)
+{
+    motor_exec_log_cfg_t cfg;
+
+    portENTER_CRITICAL(&s_lock);
+    cfg = s_log_cfg;
+    portEXIT_CRITICAL(&s_lock);
+
+    if (!cfg.enabled) {
+        return false;
+    }
+
+    if (!(domain == MOTOR_EXEC_LOG_DOMAIN_SETUP ? cfg.setup_enabled : cfg.motion_enabled)) {
+        return false;
+    }
+
+    return is_notification ? cfg.log_notifications : cfg.log_unrelated_errors;
+}
+
+static void log_side_traffic(const motor_rx_t *rx, void *ctx)
+{
+    const motor_exec_observer_ctx_t *observer_ctx = (const motor_exec_observer_ctx_t *)ctx;
+    const bool is_notification = motor_rx_is_notification(rx);
+
+    if (rx == NULL || observer_ctx == NULL) {
+        return;
+    }
+
+    if (!side_traffic_log_allowed(observer_ctx->log_domain, is_notification)) {
+        return;
+    }
+
+    if (s_rx_log_fn != NULL) {
+        s_rx_log_fn(rx);
+    }
 }
 
 static esp_err_t validate_opts(const motor_exec_submit_opts_t *opts)
@@ -524,6 +568,8 @@ static void worker_task(void *arg)
 
     for (;;) {
         motor_exec_pending_t pending;
+        motor_exec_observer_ctx_t observer_ctx;
+        motor_dispatch_observer_t observer = {0};
         motor_dispatch_result_t dispatch_result;
         motor_rx_t response = {0};
         motor_rx_t related_error = {0};
@@ -537,10 +583,15 @@ static void worker_task(void *arg)
             continue;
         }
 
+        observer_ctx.log_domain = pending.log_domain;
+        observer.on_notification = log_side_traffic;
+        observer.on_error = log_side_traffic;
+        observer.ctx = &observer_ctx;
+
         dispatch_result = s_dispatch_fn(&pending.cmd,
                                         pending.opts.timing.timeout_ticks,
                                         pending.opts.timing.no_ack_grace_ticks,
-                                        NULL,
+                                        &observer,
                                         &response,
                                         &related_error);
 
@@ -704,6 +755,8 @@ motor_exec_log_cfg_t motor_exec_default_log_cfg(void)
     return (motor_exec_log_cfg_t) {
         .enabled = true,
         .setup_enabled = true,
+        .log_notifications = true,
+        .log_unrelated_errors = true,
         .motion_enabled = true,
     };
 }
@@ -1111,6 +1164,13 @@ void motor_exec_test_set_dispatch_fn(motor_exec_dispatch_fn_t fn)
     portEXIT_CRITICAL(&s_lock);
 }
 
+void motor_exec_test_set_rx_log_fn(motor_exec_rx_log_fn_t fn)
+{
+    portENTER_CRITICAL(&s_lock);
+    s_rx_log_fn = fn != NULL ? fn : motor_diag_log_rx;
+    portEXIT_CRITICAL(&s_lock);
+}
+
 void motor_exec_test_reset_state(void)
 {
     portENTER_CRITICAL(&s_lock);
@@ -1119,5 +1179,6 @@ void motor_exec_test_reset_state(void)
     s_next_request_id = 1U;
     s_log_cfg = motor_exec_default_log_cfg();
     s_dispatch_fn = dispatch_default;
+    s_rx_log_fn = motor_diag_log_rx;
     portEXIT_CRITICAL(&s_lock);
 }
