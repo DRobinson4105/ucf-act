@@ -7,7 +7,9 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "motor_exec.h"
 #include "motor_setup.h"
 #include "serial_input.h"
 #include "twai_port.h"
@@ -16,64 +18,22 @@ static const char *TAG = "brakingMotor";
 
 /* App Policy */
 #define SETUP_MOTOR_NODE_ID 0U
-#define SETUP_TWAI_BITRATE  500000U
 #define SETUP_RX_TIMEOUT_MS 1000U
 #define SETUP_TASK_STACK_SIZE 8192U
 #define SETUP_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
 #define PT_LOOP_PERIOD_MS     500U
 
-static const motor_setup_step_t s_pt_zero_step = {
-    .name = "PT[0] set 0",
-    .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
-    .exec_action = {
-        .role = MOTOR_EXEC_ROLE_BRAKE,
-        .node_id = SETUP_MOTOR_NODE_ID,
-        .operation = MOTOR_EXEC_OPERATION_SET,
-        .object = MOTOR_OBJECT_PT,
-        .ack_requested = false,
-        .has_index = true,
-        .index = 0U,
-        .has_value = true,
-        .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
-    },
-    .compare_kind = MOTOR_SETUP_COMPARE_NONE,
-};
-
-static const motor_setup_plan_t s_pt_zero_plan = {
-    .name = "pt zero loop",
-    .steps = &s_pt_zero_step,
-    .step_count = 1U,
-};
-
-static const motor_setup_step_t s_pt_800_step = {
-    .name = "PT[0] set 800",
-    .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
-    .exec_action = {
-        .role = MOTOR_EXEC_ROLE_BRAKE,
-        .node_id = SETUP_MOTOR_NODE_ID,
-        .operation = MOTOR_EXEC_OPERATION_SET,
-        .object = MOTOR_OBJECT_PT,
-        .ack_requested = false,
-        .has_index = true,
-        .index = 0U,
-        .has_value = true,
-        .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 800},
-    },
-    .compare_kind = MOTOR_SETUP_COMPARE_NONE,
-};
-
-static const motor_setup_plan_t s_pt_800_plan = {
-    .name = "pt 800 loop",
-    .steps = &s_pt_800_step,
-    .step_count = 1U,
-};
+typedef struct {
+    SemaphoreHandle_t done_sem;
+    motor_exec_result_t result;
+    bool completed;
+} brake_pt_wait_t;
 
 /* TWAI Lifecycle */
-static twai_port_cfg_t build_twai_cfg(uint32_t bitrate)
+static twai_port_cfg_t build_twai_cfg(void)
 {
     twai_port_cfg_t cfg = app_make_twai_port_cfg();
 
-    cfg.bitrate = bitrate;
     cfg.mode = TWAI_PORT_MODE_NORMAL;
     cfg.filter_mode = TWAI_PORT_FILTER_EXT_ONLY;
     cfg.default_timeout_ticks = pdMS_TO_TICKS(SETUP_RX_TIMEOUT_MS);
@@ -81,9 +41,9 @@ static twai_port_cfg_t build_twai_cfg(uint32_t bitrate)
     return cfg;
 }
 
-static esp_err_t start_twai_with_bitrate(uint32_t bitrate)
+static esp_err_t start_twai(void)
 {
-    twai_port_cfg_t cfg = build_twai_cfg(bitrate);
+    twai_port_cfg_t cfg = build_twai_cfg();
 
     ESP_LOGI(TAG,
              "Initializing TWAI tx_gpio=%d rx_gpio=%d bitrate=%" PRIu32 " timeout_ms=%u",
@@ -114,6 +74,54 @@ static void setup_twai_shutdown_if_initialized(void)
     if (twai_port_is_initialized()) {
         (void)twai_port_deinit();
     }
+}
+
+static void brake_pt_completion_cb(const motor_exec_result_t *result, void *ctx)
+{
+    brake_pt_wait_t *wait = (brake_pt_wait_t *)ctx;
+
+    if (wait == NULL || result == NULL) {
+        return;
+    }
+
+    wait->result = *result;
+    wait->completed = true;
+    if (wait->done_sem != NULL) {
+        xSemaphoreGive(wait->done_sem);
+    }
+}
+
+static esp_err_t run_brake_pt_command(int32_t queued_position)
+{
+    brake_pt_wait_t wait = {0};
+    motor_exec_submit_opts_t opts = {
+        .on_complete = brake_pt_completion_cb,
+        .ctx = &wait,
+        .timing = motor_exec_default_timing(),
+    };
+    motor_exec_submit_result_t submit;
+
+    wait.done_sem = xSemaphoreCreateBinary();
+    if (wait.done_sem == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    submit = motor_exec_brake_pt_set(SETUP_MOTOR_NODE_ID, true, 0U, queued_position, &opts);
+    if (!submit.accepted) {
+        vSemaphoreDelete(wait.done_sem);
+        return submit.err != ESP_OK ? submit.err : ESP_FAIL;
+    }
+
+    if (!(xSemaphoreTake(wait.done_sem,
+                         opts.timing.timeout_ticks + opts.timing.no_ack_grace_ticks + pdMS_TO_TICKS(25)) ==
+          pdTRUE &&
+          wait.completed)) {
+        vSemaphoreDelete(wait.done_sem);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    vSemaphoreDelete(wait.done_sem);
+    return wait.result.status == MOTOR_EXEC_STATUS_SUCCESS ? ESP_OK : ESP_FAIL;
 }
 
 /* Plan Execution */
@@ -229,7 +237,7 @@ static esp_err_t run_named_plan(const motor_setup_plan_t *plan)
              plan->name,
              (unsigned)plan->step_count,
              (unsigned)SETUP_MOTOR_NODE_ID,
-             (uint32_t)SETUP_TWAI_BITRATE,
+             app_make_twai_port_cfg().bitrate,
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
     err = motor_setup_run_plan(plan, &cfg, &result);
@@ -272,7 +280,7 @@ static esp_err_t run_named_plan(const motor_setup_plan_t *plan)
 /* Task Flow */
 static esp_err_t run_setup_flow(void)
 {
-    esp_err_t err = start_twai_with_bitrate(SETUP_TWAI_BITRATE);
+    esp_err_t err = start_twai();
 
     if (err == ESP_OK) {
         ESP_LOGI(TAG,
@@ -281,18 +289,44 @@ static esp_err_t run_setup_flow(void)
         vTaskDelay(pdMS_TO_TICKS(100));
         err = run_named_plan(motor_setup_brake_pt_pv_demo_plan());
         if (err == ESP_OK) {
-            TickType_t last_wake = xTaskGetTickCount();
+            TickType_t next_plan_tick = xTaskGetTickCount();
             const TickType_t period_ticks = pdMS_TO_TICKS(PT_LOOP_PERIOD_MS);
-            const motor_setup_plan_t *plan = &s_pt_zero_plan;
+            serial_input_frame_t frame;
 
-            while (1) {
-                err = run_named_plan(plan);
-                if (err != ESP_OK) {
-                    break;
+            err = serial_input_init();
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "serial_input_init failed: %s", esp_err_to_name(err));
+            } else {
+                while (1) {
+                    const TickType_t now = xTaskGetTickCount();
+                    const TickType_t timeout_ticks = (now < next_plan_tick) ? (next_plan_tick - now) : 0U;
+
+                    err = serial_input_read(&frame, timeout_ticks);
+                    if (err == ESP_OK) {
+                        ESP_LOGI(TAG,
+                                 "serial seq=%u throttle=%u steering=%u braking=%u",
+                                 (unsigned)frame.seq,
+                                 (unsigned)frame.throttle,
+                                 (unsigned)frame.steering,
+                                 (unsigned)frame.braking);
+                    } else if (err != ESP_ERR_TIMEOUT) {
+                        ESP_LOGE(TAG, "serial_input_read failed: %s", esp_err_to_name(err));
+                    }
+
+                    if (xTaskGetTickCount() < next_plan_tick) {
+                        continue;
+                    }
+
+                    err = run_brake_pt_command(((int32_t)frame.braking - 3) * 1000);
+                    if (err != ESP_OK) {
+                        break;
+                    }
+
+                    next_plan_tick += period_ticks;
+                    if (xTaskGetTickCount() > next_plan_tick) {
+                        next_plan_tick = xTaskGetTickCount() + period_ticks;
+                    }
                 }
-                xTaskDelayUntil(&last_wake, period_ticks);
-
-                plan = (plan == &s_pt_zero_plan) ? &s_pt_800_plan : &s_pt_zero_plan;
             }
         }
     }
@@ -329,43 +363,24 @@ static void setup_task(void *arg)
 
 void app_main(void)
 {
-    BaseType_t   rc;
-    esp_err_t    err;
-    serial_input_frame_t frame;
+    BaseType_t rc;
 
-    // ESP_LOGI(TAG,
-    //          "Creating setup task stack_size=%u priority=%u main_stack_hwm_words=%u",
-    //          (unsigned)SETUP_TASK_STACK_SIZE,
-    //          (unsigned)SETUP_TASK_PRIORITY,
-    //          (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    ESP_LOGI(TAG,
+             "Creating setup task stack_size=%u priority=%u main_stack_hwm_words=%u",
+             (unsigned)SETUP_TASK_STACK_SIZE,
+             (unsigned)SETUP_TASK_PRIORITY,
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
-    err = serial_input_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "serial_input_init failed: %s", esp_err_to_name(err));
+    rc = xTaskCreate(setup_task,
+                     "setup_task",
+                     SETUP_TASK_STACK_SIZE,
+                     NULL,
+                     SETUP_TASK_PRIORITY,
+                     NULL);
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create setup task");
+        return;
     }
 
-    // rc = xTaskCreate(setup_task,
-    //                  "setup_task",
-    //                  SETUP_TASK_STACK_SIZE,
-    //                  NULL,
-    //                  SETUP_TASK_PRIORITY,
-    //                  NULL);
-    // if (rc != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create setup task");
-    //     return;
-    // }
-
-    // ESP_LOGI(TAG, "Setup task created");
-
-    while (true) {
-        err = serial_input_read(&frame, pdMS_TO_TICKS(200));
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG,
-                     "serial seq=%u throttle=%u steering=%u braking=%u",
-                     (unsigned)frame.seq,
-                     (unsigned)frame.throttle,
-                     (unsigned)frame.steering,
-                     (unsigned)frame.braking);
-        }
-    }
+    ESP_LOGI(TAG, "Setup task created");
 }
