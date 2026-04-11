@@ -228,6 +228,7 @@ typedef struct {
     motor_rx_kind_t kind;
     uint32_t ext_id_raw;
     uint8_t producer_id;
+    uint8_t consumer_id;
     uint8_t cw_raw;
     uint8_t base_code;
     uint8_t dl;

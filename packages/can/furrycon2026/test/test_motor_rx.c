@@ -22,7 +22,7 @@ static twai_message_t make_ext_frame(uint8_t producer_id,
         .ss = 0,
         .self = 0,
         .dlc_non_comp = 0,
-        .identifier = motor_codec_build_ext_id(producer_id, cw_raw),
+        .identifier = motor_codec_build_ext_id_endpoints(producer_id, 0x01U, cw_raw),
         .data_length_code = dlc,
     };
 
@@ -74,6 +74,8 @@ TEST_CASE("motor rx parses PP ACK", "[motor_protocol]")
     TEST_ASSERT_TRUE(motor_rx_is_ack(&rx));
     TEST_ASSERT_EQUAL(MOTOR_SECTION_PROTOCOL, rx.section);
     TEST_ASSERT_EQUAL(MOTOR_OBJECT_PP, rx.object);
+    TEST_ASSERT_EQUAL_HEX8(0x05, rx.producer_id);
+    TEST_ASSERT_EQUAL_HEX8(0x01, rx.consumer_id);
     TEST_ASSERT_TRUE(motor_rx_ack_pp(&rx, &index, &value));
     TEST_ASSERT_EQUAL(MOTOR_PP_INDEX_NODE_ID, index);
     TEST_ASSERT_EQUAL_HEX8(0x2A, value);

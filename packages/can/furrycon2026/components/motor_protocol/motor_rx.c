@@ -528,7 +528,8 @@ esp_err_t motor_rx_parse(const twai_message_t *msg, motor_rx_t *out)
 
     memset(out, 0, sizeof(*out));
     out->ext_id_raw = msg->identifier;
-    out->producer_id = motor_codec_decode_id(msg->identifier);
+    out->producer_id = motor_codec_decode_producer_id(msg->identifier);
+    out->consumer_id = motor_codec_decode_consumer_id(msg->identifier);
     out->cw_raw = motor_codec_decode_cw(msg->identifier);
     out->base_code = motor_codec_base_code(out->cw_raw);
     out->dl = msg->data_length_code;

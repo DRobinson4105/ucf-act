@@ -23,10 +23,13 @@ bool motor_codec_ack_requested(uint8_t cw_raw);
 uint16_t motor_codec_encode_sid(uint8_t logical_id);
 uint32_t motor_codec_encode_eid(uint8_t logical_id, uint8_t cw_raw);
 uint32_t motor_codec_build_ext_id(uint8_t logical_id, uint8_t cw_raw);
+uint32_t motor_codec_build_ext_id_endpoints(uint8_t producer_id, uint8_t consumer_id, uint8_t cw_raw);
 
 uint16_t motor_codec_extract_sid(uint32_t ext_id);
 uint32_t motor_codec_extract_eid(uint32_t ext_id);
 uint8_t motor_codec_decode_id(uint32_t ext_id);
+uint8_t motor_codec_decode_producer_id(uint32_t ext_id);
+uint8_t motor_codec_decode_consumer_id(uint32_t ext_id);
 uint8_t motor_codec_decode_cw(uint32_t ext_id);
 
 void motor_codec_pack_u16_le(uint8_t *dst, uint16_t value);

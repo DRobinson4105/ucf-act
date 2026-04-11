@@ -94,7 +94,7 @@ static twai_message_t make_ext_frame(uint8_t producer_id,
         .ss = 0,
         .self = 0,
         .dlc_non_comp = 0,
-        .identifier = motor_codec_build_ext_id(producer_id, cw_raw),
+        .identifier = motor_codec_build_ext_id_endpoints(producer_id, 0x01U, cw_raw),
         .data_length_code = dlc,
     };
 

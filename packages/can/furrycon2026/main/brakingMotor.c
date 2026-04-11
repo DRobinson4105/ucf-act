@@ -17,7 +17,7 @@
 static const char *TAG = "brakingMotor";
 
 /* App Policy */
-#define SETUP_MOTOR_NODE_ID 0U
+#define SETUP_MOTOR_NODE_ID 6U
 #define SETUP_RX_TIMEOUT_MS 1000U
 #define SETUP_TASK_STACK_SIZE 8192U
 #define SETUP_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
@@ -30,11 +30,23 @@ typedef struct {
 } brake_pt_wait_t;
 
 /* TWAI Lifecycle */
+static const char *twai_mode_name(twai_port_mode_t mode)
+{
+    switch (mode) {
+        case TWAI_PORT_MODE_LISTEN_ONLY:
+            return "listen-only";
+        case TWAI_PORT_MODE_NO_ACK:
+            return "no-ack";
+        case TWAI_PORT_MODE_NORMAL:
+        default:
+            return "normal";
+    }
+}
+
 static twai_port_cfg_t build_twai_cfg(void)
 {
     twai_port_cfg_t cfg = app_make_twai_port_cfg();
 
-    cfg.mode = TWAI_PORT_MODE_NORMAL;
     cfg.filter_mode = TWAI_PORT_FILTER_EXT_ONLY;
     cfg.default_timeout_ticks = pdMS_TO_TICKS(SETUP_RX_TIMEOUT_MS);
 
@@ -46,10 +58,11 @@ static esp_err_t start_twai(void)
     twai_port_cfg_t cfg = build_twai_cfg();
 
     ESP_LOGI(TAG,
-             "Initializing TWAI tx_gpio=%d rx_gpio=%d bitrate=%" PRIu32 " timeout_ms=%u",
+             "Initializing TWAI tx_gpio=%d rx_gpio=%d bitrate=%" PRIu32 " mode=%s timeout_ms=%u",
              cfg.tx_gpio,
              cfg.rx_gpio,
              cfg.bitrate,
+             twai_mode_name(cfg.mode),
              (unsigned)SETUP_RX_TIMEOUT_MS);
 
     esp_err_t err = twai_port_init(&cfg);

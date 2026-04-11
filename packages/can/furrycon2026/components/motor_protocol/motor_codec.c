@@ -42,8 +42,17 @@ uint32_t motor_codec_encode_eid(uint8_t logical_id, uint8_t cw_raw)
 
 uint32_t motor_codec_build_ext_id(uint8_t logical_id, uint8_t cw_raw)
 {
-    uint32_t sid = motor_codec_encode_sid(logical_id);
-    uint32_t eid = motor_codec_encode_eid(logical_id, cw_raw);
+    return motor_codec_build_ext_id_endpoints(0x04U, logical_id, cw_raw);
+}
+
+uint32_t motor_codec_build_ext_id_endpoints(uint8_t producer_id, uint8_t consumer_id, uint8_t cw_raw)
+{
+    uint32_t sid = (uint32_t)((((uint16_t)(producer_id & 0x1FU)) << 6) |
+                              (((uint16_t)(consumer_id & 0x1FU)) << 1));
+    uint32_t eid = (uint32_t)(((uint32_t)((producer_id >> 5) & 0x03U) << 16) |
+                              ((uint32_t)((consumer_id >> 5) & 0x03U) << 14));
+
+    eid |= (uint32_t)cw_raw;
 
     return ((sid << 18) | eid) & MOTOR_CODEC_EXT_ID_MASK;
 }
@@ -60,14 +69,25 @@ uint32_t motor_codec_extract_eid(uint32_t ext_id)
 
 uint8_t motor_codec_decode_id(uint32_t ext_id)
 {
+    return motor_codec_decode_consumer_id(ext_id);
+}
+
+uint8_t motor_codec_decode_producer_id(uint32_t ext_id)
+{
     uint16_t sid = motor_codec_extract_sid(ext_id);
     uint32_t eid = motor_codec_extract_eid(ext_id);
-    uint16_t logical_id;
 
-    logical_id = (uint16_t)(((eid >> 9) & 0x0060U) |
-                            ((sid >> 1) & 0x001FU));
+    return (uint8_t)((((eid >> 16) & 0x03U) << 5) |
+                     ((sid >> 6) & 0x1FU));
+}
 
-    return (uint8_t)logical_id;
+uint8_t motor_codec_decode_consumer_id(uint32_t ext_id)
+{
+    uint16_t sid = motor_codec_extract_sid(ext_id);
+    uint32_t eid = motor_codec_extract_eid(ext_id);
+
+    return (uint8_t)((((eid >> 14) & 0x03U) << 5) |
+                     ((sid >> 1) & 0x1FU));
 }
 
 uint8_t motor_codec_decode_cw(uint32_t ext_id)

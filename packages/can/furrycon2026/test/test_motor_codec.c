@@ -38,13 +38,17 @@ TEST_CASE("motor codec round trips extended ID", "[motor_protocol]")
     LOG_SECTION("motor codec extended ID round trip");
     uint32_t ext_id = motor_codec_build_ext_id(0x05, 0x81);
     uint8_t decoded_id = motor_codec_decode_id(ext_id);
+    uint8_t decoded_producer_id = motor_codec_decode_producer_id(ext_id);
+    uint8_t decoded_consumer_id = motor_codec_decode_consumer_id(ext_id);
     uint8_t decoded_cw = motor_codec_decode_cw(ext_id);
 
     LOG_INPUT("logical_id=0x%02X cw_raw=0x%02X", 0x05, 0x81);
-    LOG_OUTPUT("ext_id=0x%08" PRIX32 " decoded_id=0x%02X decoded_cw=0x%02X",
-               ext_id, decoded_id, decoded_cw);
+    LOG_OUTPUT("ext_id=0x%08" PRIX32 " decoded_producer_id=0x%02X decoded_consumer_id=0x%02X decoded_cw=0x%02X",
+               ext_id, decoded_producer_id, decoded_consumer_id, decoded_cw);
 
     TEST_ASSERT_EQUAL_HEX8(0x05, decoded_id);
+    TEST_ASSERT_EQUAL_HEX8(0x04, decoded_producer_id);
+    TEST_ASSERT_EQUAL_HEX8(0x05, decoded_consumer_id);
     TEST_ASSERT_EQUAL_HEX8(0x81, decoded_cw);
 }
 
@@ -53,13 +57,17 @@ TEST_CASE("motor codec round trips upper logical ID bits", "[motor_protocol]")
     LOG_SECTION("motor codec upper logical ID bits");
     uint32_t ext_id = motor_codec_build_ext_id(0x65, 0x81);
     uint8_t decoded_id = motor_codec_decode_id(ext_id);
+    uint8_t decoded_producer_id = motor_codec_decode_producer_id(ext_id);
+    uint8_t decoded_consumer_id = motor_codec_decode_consumer_id(ext_id);
     uint8_t decoded_cw = motor_codec_decode_cw(ext_id);
 
     LOG_INPUT("logical_id=0x%02X cw_raw=0x%02X", 0x65, 0x81);
-    LOG_OUTPUT("ext_id=0x%08" PRIX32 " decoded_id=0x%02X decoded_cw=0x%02X",
-               ext_id, decoded_id, decoded_cw);
+    LOG_OUTPUT("ext_id=0x%08" PRIX32 " decoded_producer_id=0x%02X decoded_consumer_id=0x%02X decoded_cw=0x%02X",
+               ext_id, decoded_producer_id, decoded_consumer_id, decoded_cw);
 
     TEST_ASSERT_EQUAL_HEX8(0x65, decoded_id);
+    TEST_ASSERT_EQUAL_HEX8(0x04, decoded_producer_id);
+    TEST_ASSERT_EQUAL_HEX8(0x65, decoded_consumer_id);
     TEST_ASSERT_EQUAL_HEX8(0x81, decoded_cw);
 }
 
@@ -96,6 +104,20 @@ TEST_CASE("motor codec round trips logical ID boundaries", "[motor_protocol]")
     TEST_ASSERT_EQUAL_HEX8(0x7F, motor_codec_decode_id(ext_id_max));
     TEST_ASSERT_EQUAL_HEX8(0x7F, motor_codec_decode_cw(ext_id_max));
     TEST_ASSERT_EQUAL_HEX32(0x04F8C07F, ext_id_max);
+    TEST_ASSERT_EQUAL_HEX8(0x04, motor_codec_decode_producer_id(ext_id_min));
+    TEST_ASSERT_EQUAL_HEX8(0x04, motor_codec_decode_producer_id(ext_id_low_mid));
+    TEST_ASSERT_EQUAL_HEX8(0x04, motor_codec_decode_producer_id(ext_id_high_mid));
+    TEST_ASSERT_EQUAL_HEX8(0x04, motor_codec_decode_producer_id(ext_id_max));
+}
+
+TEST_CASE("motor codec builds and decodes explicit endpoint IDs", "[motor_protocol]")
+{
+    uint32_t ext_id = motor_codec_build_ext_id_endpoints(0x06, 0x01, 0x01);
+
+    TEST_ASSERT_EQUAL_HEX32(0x06080001, ext_id);
+    TEST_ASSERT_EQUAL_HEX8(0x06, motor_codec_decode_producer_id(ext_id));
+    TEST_ASSERT_EQUAL_HEX8(0x01, motor_codec_decode_consumer_id(ext_id));
+    TEST_ASSERT_EQUAL_HEX8(0x01, motor_codec_decode_cw(ext_id));
 }
 
 TEST_CASE("motor codec packs and unpacks little endian values", "[motor_protocol]")
