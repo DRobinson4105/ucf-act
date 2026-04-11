@@ -29,6 +29,15 @@ typedef struct {
     bool completed;
 } brake_pt_wait_t;
 
+static int32_t braking_to_pt_position(uint8_t braking)
+{
+    /* Current brake-to-PT feed:
+     * braking=3 -> 0
+     * each step away from 3 changes PT by 10000 pulses
+     */
+    return ((int32_t)braking - 3) * 10000;
+}
+
 /* TWAI Lifecycle */
 static const char *twai_mode_name(twai_port_mode_t mode)
 {
@@ -304,7 +313,9 @@ static esp_err_t run_setup_flow(void)
         if (err == ESP_OK) {
             TickType_t next_plan_tick = xTaskGetTickCount();
             const TickType_t period_ticks = pdMS_TO_TICKS(PT_LOOP_PERIOD_MS);
-            serial_input_frame_t frame;
+            serial_input_frame_t frame = {0};
+            bool frame_valid = false;
+            bool frame_updated_this_cycle = false;
 
             err = serial_input_init();
             if (err != ESP_OK) {
@@ -314,8 +325,11 @@ static esp_err_t run_setup_flow(void)
                     const TickType_t now = xTaskGetTickCount();
                     const TickType_t timeout_ticks = (now < next_plan_tick) ? (next_plan_tick - now) : 0U;
 
+                    frame_updated_this_cycle = false;
                     err = serial_input_read(&frame, timeout_ticks);
                     if (err == ESP_OK) {
+                        frame_valid = true;
+                        frame_updated_this_cycle = true;
                         ESP_LOGI(TAG,
                                  "serial seq=%u throttle=%u steering=%u braking=%u",
                                  (unsigned)frame.seq,
@@ -330,7 +344,23 @@ static esp_err_t run_setup_flow(void)
                         continue;
                     }
 
-                    err = run_brake_pt_command(((int32_t)frame.braking - 3) * 1000);
+                    if (frame_valid) {
+                        ESP_LOGI(TAG,
+                                 "pt uart/frame state=%s seq=%u throttle=%u steering=%u braking=%u pt=%ld",
+                                 frame_updated_this_cycle ? "updated" : "stale",
+                                 (unsigned)frame.seq,
+                                 (unsigned)frame.throttle,
+                                 (unsigned)frame.steering,
+                                 (unsigned)frame.braking,
+                                 (long)braking_to_pt_position(frame.braking));
+                    } else {
+                        ESP_LOGW(TAG,
+                                 "pt uart/frame state=missing using default braking=%u pt=%ld",
+                                 0U,
+                                 (long)braking_to_pt_position(0U));
+                    }
+
+                    err = run_brake_pt_command(braking_to_pt_position(frame.braking));
                     if (err != ESP_OK) {
                         break;
                     }
