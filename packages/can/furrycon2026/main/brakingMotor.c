@@ -22,6 +22,8 @@ static const char *TAG = "brakingMotor";
 #define SETUP_TASK_STACK_SIZE 8192U
 #define SETUP_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
 #define PT_LOOP_PERIOD_MS     500U
+#define BRAKING_PT_PULSES_PER_STEP 10000
+#define PT_POSITION_CLAMP_PULSES 1000
 
 typedef struct {
     SemaphoreHandle_t done_sem;
@@ -31,11 +33,22 @@ typedef struct {
 
 static int32_t braking_to_pt_position(uint8_t braking)
 {
-    /* Current brake-to-PT feed:
-     * braking=3 -> 0
-     * each step away from 3 changes PT by 10000 pulses
-     */
-    return ((int32_t)braking - 3) * 10000;
+    return ((int32_t)braking - 3) * BRAKING_PT_PULSES_PER_STEP;
+}
+
+static int32_t clamp_pt_step(int32_t last_sent_pt, int32_t desired_pt)
+{
+    const int32_t delta = desired_pt - last_sent_pt;
+
+    if (delta > PT_POSITION_CLAMP_PULSES) {
+        return last_sent_pt + PT_POSITION_CLAMP_PULSES;
+    }
+
+    if (delta < -PT_POSITION_CLAMP_PULSES) {
+        return last_sent_pt - PT_POSITION_CLAMP_PULSES;
+    }
+
+    return desired_pt;
 }
 
 /* TWAI Lifecycle */
@@ -314,6 +327,7 @@ static esp_err_t run_setup_flow(void)
             TickType_t next_plan_tick = xTaskGetTickCount();
             const TickType_t period_ticks = pdMS_TO_TICKS(PT_LOOP_PERIOD_MS);
             serial_input_frame_t frame = {0};
+            int32_t last_sent_pt = 0;
             bool frame_valid = false;
             bool frame_updated_this_cycle = false;
 
@@ -345,22 +359,41 @@ static esp_err_t run_setup_flow(void)
                     }
 
                     if (frame_valid) {
+                        const int32_t desired_pt = braking_to_pt_position(frame.braking);
+                        const int32_t next_sent_pt = clamp_pt_step(last_sent_pt, desired_pt);
+
                         ESP_LOGI(TAG,
-                                 "pt uart/frame state=%s seq=%u throttle=%u steering=%u braking=%u pt=%ld",
+                                 "pt uart/frame state=%s seq=%u throttle=%u steering=%u braking=%u desired_pt=%ld next_pt=%ld last_pt=%ld",
                                  frame_updated_this_cycle ? "updated" : "stale",
                                  (unsigned)frame.seq,
                                  (unsigned)frame.throttle,
                                  (unsigned)frame.steering,
                                  (unsigned)frame.braking,
-                                 (long)braking_to_pt_position(frame.braking));
+                                 (long)desired_pt,
+                                 (long)next_sent_pt,
+                                 (long)last_sent_pt);
+
+                        err = run_brake_pt_command(next_sent_pt);
+                        if (err == ESP_OK) {
+                            last_sent_pt = next_sent_pt;
+                        }
                     } else {
+                        const int32_t desired_pt = braking_to_pt_position(0U);
+                        const int32_t next_sent_pt = clamp_pt_step(last_sent_pt, desired_pt);
+
                         ESP_LOGW(TAG,
-                                 "pt uart/frame state=missing using default braking=%u pt=%ld",
+                                 "pt uart/frame state=missing using default braking=%u desired_pt=%ld next_pt=%ld last_pt=%ld",
                                  0U,
-                                 (long)braking_to_pt_position(0U));
+                                 (long)desired_pt,
+                                 (long)next_sent_pt,
+                                 (long)last_sent_pt);
+
+                        err = run_brake_pt_command(next_sent_pt);
+                        if (err == ESP_OK) {
+                            last_sent_pt = next_sent_pt;
+                        }
                     }
 
-                    err = run_brake_pt_command(braking_to_pt_position(frame.braking));
                     if (err != ESP_OK) {
                         break;
                     }
