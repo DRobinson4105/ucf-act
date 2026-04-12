@@ -17,13 +17,16 @@
 
 static const char *TAG = "motor_setup";
 
+#define BRAKE_PT_PV_DEMO_NODE_ID    6U
+#define STEERING_PT_PV_DEMO_NODE_ID 7U
+
 static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
     {
         .name = "PP get bitrate",
         .kind = MOTOR_SETUP_STEP_KIND_READ_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_GET,
             .object = MOTOR_OBJECT_PP,
             .ack_requested = true,
@@ -37,7 +40,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_READ_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_GET,
             .object = MOTOR_OBJECT_PP,
             .ack_requested = true,
@@ -51,7 +54,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_ACTION,
             .object = MOTOR_OBJECT_OG,
             .ack_requested = true,
@@ -64,7 +67,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_SD,
             .ack_requested = true,
@@ -79,7 +82,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_MP,
             .ack_requested = true,
@@ -95,7 +98,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_MP,
             .ack_requested = true,
@@ -111,7 +114,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_MP,
             .ack_requested = true,
@@ -127,7 +130,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_MP,
             .ack_requested = true,
@@ -143,7 +146,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_MP,
             .ack_requested = true,
@@ -159,7 +162,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_MP,
             .ack_requested = true,
@@ -175,7 +178,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -191,7 +194,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -207,7 +210,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -223,7 +226,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -239,7 +242,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -255,7 +258,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -271,7 +274,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -287,7 +290,7 @@ static const motor_setup_step_t s_brake_pt_pv_demo_steps[] = {
         .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
         .exec_action = {
             .role = MOTOR_EXEC_ROLE_BRAKE,
-            .node_id = 6U,
+            .node_id = BRAKE_PT_PV_DEMO_NODE_ID,
             .operation = MOTOR_EXEC_OPERATION_SET,
             .object = MOTOR_OBJECT_PT,
             .ack_requested = true,
@@ -365,6 +368,354 @@ static const motor_setup_plan_t s_brake_pt_pv_demo_plan = {
     .step_count = sizeof(s_brake_pt_pv_demo_steps) / sizeof(s_brake_pt_pv_demo_steps[0]),
 };
 
+static const motor_setup_step_t s_steering_pt_pv_demo_steps[] = {
+    {
+        .name = "PP get bitrate",
+        .kind = MOTOR_SETUP_STEP_KIND_READ_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_GET,
+            .object = MOTOR_OBJECT_PP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = MOTOR_PP_INDEX_BITRATE,
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PP get motor id",
+        .kind = MOTOR_SETUP_STEP_KIND_READ_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_GET,
+            .object = MOTOR_OBJECT_PP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = MOTOR_PP_INDEX_NODE_ID,
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "OG set origin",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_ACTION,
+            .object = MOTOR_OBJECT_OG,
+            .ack_requested = true,
+            .has_index = false,
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "SD set 3200",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_SD,
+            .ack_requested = true,
+            .has_index = false,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U32, .as.u32 = 3200U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MP[4] set 500",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 4U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 500U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MP[3] set 0",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 3U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 0U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MP[5] set 1",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 5U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 1U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MP[2] set 13",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 2U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 13U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MP[1] set 2",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 1U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 2U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MP[0] set 0",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MP,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 0U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 1600 1",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 1600},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 1600 2",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 1600},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 1",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 2",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 3",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 4",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 5",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 6",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PT[0] set 0 7",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PT,
+            .ack_requested = true,
+            .has_index = true,
+            .index = 0U,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_I32, .as.i32 = 0},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "MO set 1",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_MO,
+            .ack_requested = true,
+            .has_index = false,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_ENUM, .as.enum_value = 1},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "PV set 0",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_SET,
+            .object = MOTOR_OBJECT_PV,
+            .ack_requested = true,
+            .has_index = false,
+            .has_value = true,
+            .value = {.kind = MOTOR_SETUP_VALUE_KIND_U16, .as.u16 = 0U},
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+    {
+        .name = "BG begin motion",
+        .kind = MOTOR_SETUP_STEP_KIND_WRITE_ONLY,
+        .exec_action = {
+            .role = MOTOR_EXEC_ROLE_BRAKE,
+            .node_id = STEERING_PT_PV_DEMO_NODE_ID,
+            .operation = MOTOR_EXEC_OPERATION_ACTION,
+            .object = MOTOR_OBJECT_BG,
+            .ack_requested = true,
+            .has_index = false,
+        },
+        .compare_kind = MOTOR_SETUP_COMPARE_NONE,
+    },
+};
+
+static const motor_setup_plan_t s_steering_pt_pv_demo_plan = {
+    .name = "steering motion sequence demo",
+    .steps = s_steering_pt_pv_demo_steps,
+    .step_count = sizeof(s_steering_pt_pv_demo_steps) / sizeof(s_steering_pt_pv_demo_steps[0]),
+};
+
 static motor_setup_log_cfg_t s_log_cfg = {
     .enabled = true,
     .log_step_success = true,
@@ -386,6 +737,11 @@ static bool is_valid_value_kind(motor_setup_value_kind_t kind)
 const motor_setup_plan_t *motor_setup_brake_pt_pv_demo_plan(void)
 {
     return &s_brake_pt_pv_demo_plan;
+}
+
+const motor_setup_plan_t *motor_setup_steering_pt_pv_demo_plan(void)
+{
+    return &s_steering_pt_pv_demo_plan;
 }
 
 static bool action_requires_index(motor_object_t object)

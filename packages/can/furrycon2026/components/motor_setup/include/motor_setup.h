@@ -20,6 +20,7 @@ esp_err_t motor_setup_set_log_cfg(const motor_setup_log_cfg_t *cfg);
 esp_err_t motor_setup_get_log_cfg(motor_setup_log_cfg_t *out_cfg);
 
 const motor_setup_plan_t *motor_setup_brake_pt_pv_demo_plan(void);
+const motor_setup_plan_t *motor_setup_steering_pt_pv_demo_plan(void);
 
 esp_err_t motor_setup_validate_plan(const motor_setup_plan_t *plan);
 esp_err_t motor_setup_run_plan(const motor_setup_plan_t *plan,
