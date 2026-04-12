@@ -28,7 +28,7 @@ extern "C"
 //   - De-energized: NO opens (load disconnected)
 //
 // Usage:
-//   - Safety ESP32: power relay (24V autonomous rail to stepper motors)
+//   - Safety ESP32: power relay (24V autonomous rail to UIM2852 motors)
 //
 // Safety:
 //   - Default state is OFF (de-energized)

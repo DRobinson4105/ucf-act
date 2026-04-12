@@ -8,29 +8,45 @@ config PRODUCTION_BUILD
         This prevents accidental deployment of bench-test firmware
         onto the vehicle.
 
-config THROTTLE_TEST_MODE
-    bool "Throttle test mode (standalone serial throttle control)"
+config CONTROL_TEST_MODE
+    bool "Control test mode (standalone serial actuator control)"
     default n
     help
-        Replace the normal CAN-based control loop with a standalone
-        throttle test task. Type a DAC level 0-4095 and press
-        space or enter to commit. Skips CAN, steppers, and
-        Safety/Planner dependencies entirely.
+        Replace the normal Orin+CAN control loop with a standalone
+        bench test task for a single selected actuator. The selected
+        actuator is driven from USB serial input while periodic status
+        is logged on the console.
 
-        Useful for validating throttle hardware wiring on the cart
-        (MCP4728 DAC, LM358 op-amp, MY5NJ DPDT relay, F/R optocouplers,
-        pedal ADC) without the full system operational.
+        Useful for validating throttle, steering, or braking hardware
+        on the cart without the full Safety/Orin stack running.
 
-        Controls (via idf.py monitor or serial terminal):
-          0-4095 + space/enter  Set DAC level
-          r                     Toggle DPDT relay (MY5NJ)
-          q                     Quit (shutdown all actuators)
+if CONTROL_TEST_MODE
 
-        Safety behavior: requires F/R not in Reverse to arm.
-        Disables DPDT relay if F/R moves to Reverse or pedal
-        is pressed. Zeros DAC output if F/R is in Neutral.
-        Auto-recovers when pedal is rearmed and F/R is not in
-        Reverse.
+choice CONTROL_TEST_ACTUATOR
+    prompt "Control test actuator"
+    default CONTROL_TEST_ACTUATOR_THROTTLE
+    help
+        Select which actuator the standalone control test task owns.
+        Only one actuator is driven in a test build.
+
+    config CONTROL_TEST_ACTUATOR_THROTTLE
+        bool "Throttle"
+        help
+            Standalone DAC/relay/pedal/F/R throttle test.
+
+    config CONTROL_TEST_ACTUATOR_STEERING
+        bool "Steering"
+        help
+            Standalone steering motor PT target test over CAN.
+
+    config CONTROL_TEST_ACTUATOR_BRAKING
+        bool "Braking"
+        help
+            Standalone braking motor PT target test over CAN.
+
+endchoice
+
+endif
 
 menu "Motor Limits"
 
@@ -98,7 +114,7 @@ menu "Motor Limits"
             help
                 Emergency stop deceleration rate sent to the steering motor
                 via the SD register during initialization. Also used (×10,
-                overflow-guarded) when stepper_motor_uim2852_emergency_stop()
+                overflow-guarded) when motor_uim2852_shutdown()
                 is called at runtime.
                 Units: pulses/sec^2.
 
@@ -179,7 +195,7 @@ menu "Motor Limits"
             help
                 Emergency stop deceleration rate sent to the braking motor
                 via the SD register during initialization. Also used (×10,
-                overflow-guarded) when stepper_motor_uim2852_emergency_stop()
+                overflow-guarded) when motor_uim2852_shutdown()
                 is called at runtime.
                 Units: pulses/sec^2.
 
@@ -187,7 +203,7 @@ menu "Motor Limits"
 
     menu "PT FIFO"
 
-        config STEPPER_PT_FRAME_TIME_MS
+        config MOTOR_UIM2852_PT_FRAME_TIME_MS
             int "MP[4]: PT frame time (ms)"
             range 5 30000
             default 100
@@ -197,7 +213,7 @@ menu "Motor Limits"
                 the planner's command cadence (default 100 ms).
                 Units: milliseconds.
 
-        config STEPPER_PT_LOW_WATER_MARK
+        config MOTOR_UIM2852_PT_LOW_WATER_MARK
             int "MP[5]: PT FIFO low-water mark (rows)"
             range 1 255
             default 1
@@ -207,6 +223,17 @@ menu "Motor Limits"
                 to this value the motor sends a FIFO-low warning
                 notification, allowing the host to refill in time.
                 Units: rows.
+
+        config BRAKING_PT_STEP_LIMIT_PULSES_PER_500MS
+            int "Braking PT target delta limit per 500 ms (pulses)"
+            range 0 200000
+            default 8000
+            help
+                Clamp each queued braking PT target update to this many
+                pulses per 500 ms of commanded motion. The firmware scales
+                that limit to the configured PT frame interval so braking
+                stays bounded while following the configured planner/PT cadence.
+                Set to 0 to disable the PT delta clamp.
 
     endmenu
 
@@ -259,7 +286,7 @@ menu "Test Bypasses"
 
     endmenu
 
-    menu "Sensor Inputs"
+    menu "Inputs"
 
         config BYPASS_INPUT_PEDAL_ADC
             bool "Bypass pedal ADC input: force released"
@@ -286,39 +313,19 @@ menu "Test Bypasses"
                 Skip MCP4728 DAC and MY5NJ DPDT relay control.
 
 
-        config BYPASS_ACTUATOR_STEPPER_STEERING
-            bool "Bypass steering stepper actuator"
+        config BYPASS_ACTUATOR_MOTOR_UIM2852_STEERING
+            bool "Bypass steering motor actuator"
             default n
             help
-                Skip steering stepper motor (node 7) initialization,
+                Skip steering motor (node 7) initialization,
                 configuration, and CAN commands.
 
-        config BYPASS_ACTUATOR_STEPPER_BRAKING
-            bool "Bypass braking stepper actuator"
+        config BYPASS_ACTUATOR_MOTOR_UIM2852_BRAKING
+            bool "Bypass braking motor actuator"
             default n
             help
-                Skip braking stepper motor (node 6) initialization,
+                Skip braking motor (node 6) initialization,
                 configuration, and CAN commands.
-
-        config BYPASS_SOFTWARE_LIMITS_STEERING
-            bool "Disable steering software limits (IC[7]=0)"
-            default n
-            depends on !BYPASS_ACTUATOR_STEPPER_STEERING
-            help
-                Send IC[7]=0 instead of IC[7]=1 during steering software
-                limit initialization. LM[1] and LM[2] are still programmed.
-                Use when testing steering motion beyond the normal working
-                range. Do not enable on the vehicle.
-
-        config BYPASS_SOFTWARE_LIMITS_BRAKING
-            bool "Disable braking software limits (IC[7]=0)"
-            default n
-            depends on !BYPASS_ACTUATOR_STEPPER_BRAKING
-            help
-                Send IC[7]=0 instead of IC[7]=1 during braking software
-                limit initialization. LM[1] and LM[2] are still programmed.
-                Use when testing braking motion beyond the normal working
-                range. Do not enable on the vehicle.
 
     endmenu
 
@@ -326,129 +333,23 @@ endmenu
 
 menu "Debug Logging"
 
-    menu "CAN Traffic"
+    menu "Transport"
 
-        config LOG_CAN_FRAMES
-            bool "Log raw CAN frames (TX and RX)"
+        rsource "../../common/kconfig/transport.kconfig"
+
+        config LOG_TRANSPORT_ORIN_PLANNER_COMMAND_RX
+            bool "Log Orin Planner command RX: every frame"
             default n
             help
-                Log every CAN frame at the TWAI driver layer — the lowest
-                possible level. For each TX: identifier, DLC, all data bytes,
-                and the transmit result. For each RX: frame type (std/ext),
-                identifier, DLC, and all data bytes. Very verbose — expect
-                one line per frame sent or received. Use for low-level CAN
-                bus debugging.
-
-        config LOG_CAN_FRAMES_MOTORS_ONLY
-            bool "Log stepper motor frames only (suppress all standard frames)"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Only log extended CAN frames. In this system all extended
-                frames are stepper motor traffic (steering node 7, braking
-                node 6); all standard frames (heartbeats, planner commands)
-                are suppressed. Overrides the individual heartbeat suppress
-                options below.
-
-        config LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB
-            bool "Suppress Safety heartbeat frames (0x100) from frame log"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Exclude Safety ESP32 heartbeat frames (CAN ID 0x100) from
-                the raw frame log. Useful when Safety is healthy and its
-                10 Hz heartbeat is flooding the output.
-
-        config LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB
-            bool "Suppress Planner heartbeat frames (0x110) from frame log"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Exclude Planner heartbeat frames (CAN ID 0x110) from the
-                raw frame log.
-
-        config LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB
-            bool "Suppress Control heartbeat frames (0x120) from frame log"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Exclude Control ESP32 heartbeat frames (CAN ID 0x120) from
-                the raw frame log. Useful to mute self-generated heartbeats
-                when debugging inbound traffic.
+                Log every received Planner command from the Orin UART link
+                with sequence, throttle, steering, and braking values.
+                Very verbose (up to 10 Hz).
 
     endmenu
 
-    menu "Component Health & Recovery"
+    menu "Health & Recovery"
 
-        config LOG_COMPONENT_HEALTH_TRANSITIONS
-            bool "Log component LOST/REGAINED transitions"
-            default y
-            help
-                Log component health edge transitions when a component becomes
-                unavailable or recovers during runtime.
-
-        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
-            bool "Log heartbeat monitor lost/regained transitions"
-            default y
-            help
-                Log when a monitored heartbeat node is lost (timed out)
-                or regained (first heartbeat after timeout).
-
-        config LOG_CAN_RECOVERY
-            bool "Log CAN recovery flow"
-            default n
-            help
-                Log CAN recovery events: stop/start cycles, full driver reinstall,
-                bus-off recovery, and TX failure counters.
-
-        config LOG_RETRY_TWAI
-            bool "Log TWAI retry attempts"
-            default n
-            help
-                Log each failed TWAI retry while TWAI is unavailable.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_DAC
-            bool "Log DAC retry attempts"
-            default n
-            help
-                Log each failed MCP4728 DAC re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_DPDT_RELAY
-            bool "Log DPDT relay retry attempts"
-            default n
-            help
-                Log each failed MY5NJ DPDT relay re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_PEDAL_INPUT
-            bool "Log pedal input retry attempts"
-            default n
-            help
-                Log each failed pedal ADC input re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_FR_INPUT
-            bool "Log F/R input retry attempts"
-            default n
-            help
-                Log each failed F/R optocoupler input re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_STEPPER_STEERING
-            bool "Log steering stepper retry attempts"
-            default n
-            help
-                Log each failed steering-stepper health recovery attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_STEPPER_BRAKING
-            bool "Log braking stepper retry attempts"
-            default n
-            help
-                Log each failed braking-stepper health recovery attempt.
-                Rate-limited: first attempt + every 20th.
+        rsource "../../common/kconfig/health.kconfig"
 
     endmenu
 
@@ -482,9 +383,9 @@ menu "Debug Logging"
             default n
             help
                 Log enable sequence lifecycle: start, complete, abort (with
-                reason), and stepper enable failures.
+                reason), and motor enable failures.
 
-        config LOG_CONTROL_OVERRIDE
+        config LOG_CONTROL_OVERRIDE_CHANGES
             bool "Log control override events"
             default n
             help
@@ -499,43 +400,29 @@ menu "Debug Logging"
                 stop/fault flags as received by Control. These reflect what
                 Safety is broadcasting, not Control's own state.
 
-        config LOG_CONTROL_STATE_TICK
-            bool "Log control state evaluation: every cycle"
-            default n
-            help
-                Log the full state evaluation on every control loop tick
-                (20Hz). Extremely verbose — use only for detailed debugging.
-
         config LOG_CONTROL_THROTTLE_CHANGES
             bool "Log control throttle changes"
             default n
             help
                 Log each throttle level transition (edge-triggered).
 
-        config LOG_CONTROL_THROTTLE_TICK
-            bool "Log control throttle every cycle"
-            default n
-            help
-                Log current and target throttle on every control loop tick.
-                Very verbose — use only for detailed throttle debugging.
-
     endmenu
 
-    menu "Sensor Inputs"
+    menu "Inputs"
 
-        config LOG_INPUT_PEDAL_ADC
-            bool "Log pedal ADC every cycle"
+        config LOG_INPUT_PEDAL_ADC_ERRORS
+            bool "Log pedal ADC read errors"
             default n
             help
-                Log pedal ADC millivolt reading on every control loop tick,
-                including values below threshold. Very verbose.
+                Log pedal ADC read failures (I/O errors, out-of-range raw
+                values). Does not log successful readings.
 
-        config LOG_INPUT_PEDAL_EVENTS
+        config LOG_INPUT_PEDAL_CHANGES
             bool "Log pedal threshold/rearm events"
             default n
             help
-                Log edge-triggered pedal input events: threshold met and
-                pedal re-armed after release dwell.
+                Log edge-triggered pedal input events: threshold crossed
+                and pedal re-armed after release dwell.
 
         config LOG_INPUT_FR_DEBOUNCE
             bool "Log F/R debounce transitions"
@@ -543,7 +430,7 @@ menu "Debug Logging"
             help
                 Log raw F/R optocoupler pin state changes during debounce.
 
-        config LOG_INPUT_FR_STATE
+        config LOG_INPUT_FR_STATE_CHANGES
             bool "Log F/R state changes"
             default n
             help
@@ -553,21 +440,52 @@ menu "Debug Logging"
 
     menu "Actuators"
 
-        config LOG_ACTUATOR_DPDT_RELAY
+        config LOG_ACTUATOR_DAC_WRITE
+            bool "Log MCP4728 DAC register writes"
+            default n
+            help
+                Log every MCP4728 I2C register write with the commanded
+                DAC level. Useful for I2C bus debugging.
+
+        config LOG_ACTUATOR_DPDT_RELAY_CHANGES
             bool "Log DPDT relay state changes"
             default n
             help
                 Log MY5NJ DPDT relay energize/de-energize transitions.
 
-    endmenu
-
-    menu "Heartbeat LED"
-
-        config LOG_HEARTBEAT_LED_COLOR_UPDATES
-            bool "Log heartbeat LED color updates"
+        config LOG_ACTUATOR_MOTOR_UIM2852_INIT
+            bool "Log motor init/configure handshake"
             default n
             help
-                Log each LED color update. Very verbose.
+                Log PT FIFO setup (MP register writes), initial status
+                queries, and configure handshake results.
+
+        config LOG_ACTUATOR_MOTOR_UIM2852_ENABLE_CHANGES
+            bool "Log motor enable/disable (MO)"
+            default n
+            help
+                Log MO enable/disable transitions for both motors.
+
+        config LOG_ACTUATOR_MOTOR_UIM2852_COMMAND_TX
+            bool "Log motor position commands sent over CAN"
+            default n
+            help
+                Log PT FIFO feed commands for steering and braking motors.
+                Includes position values and feed results.
+
+        config LOG_ACTUATOR_MOTOR_UIM2852_MOTION_TX
+            bool "Log motor motion commands (PA/PR/ST)"
+            default n
+            help
+                Log motor motion commands (position absolute, position
+                relative, stop) sent during enable sequence and runtime.
+
+        config LOG_ACTUATOR_MOTOR_UIM2852_RX
+            bool "Log parsed motor CAN RX frames"
+            default n
+            help
+                Log parsed motor CAN responses: motion status,
+                parameter reads, and command ACKs.
 
     endmenu
 

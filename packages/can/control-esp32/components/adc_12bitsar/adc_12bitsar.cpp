@@ -113,7 +113,7 @@ esp_err_t adc_12bitsar_read_mv_checked(uint16_t *out_mv)
 	esp_err_t err = adc_oneshot_read(s_adc_handle, s_config.adc_channel, &raw);
 	if (err != ESP_OK)
 	{
-#ifdef CONFIG_LOG_INPUT_PEDAL_ADC
+#ifdef CONFIG_LOG_INPUT_PEDAL_ADC_ERRORS
 		ESP_LOGI(TAG, "ADC read failed: %s", esp_err_to_name(err));
 #endif
 		return err;

@@ -19,30 +19,11 @@ static inline esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_
 	return ESP_OK;
 }
 
-static inline esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t timeout)
+static inline esp_err_t can_twai_send(const twai_message_t *msg, TickType_t timeout)
 {
 	(void)timeout;
-	if (mock_twai_send_result != ESP_OK)
-		return mock_twai_send_result;
-	if (mock_sent_count < MOCK_MAX_FRAMES)
-	{
-		mock_sent_frames[mock_sent_count].id = identifier;
-		memcpy(mock_sent_frames[mock_sent_count].data, data, 8);
-		mock_sent_frames[mock_sent_count].len = 8;
-		mock_sent_count++;
-	}
-	else
-	{
-		fprintf(stderr, "MOCK ERROR: mock_sent_count >= MOCK_MAX_FRAMES, frame dropped!\n");
-		return ESP_FAIL;
-	}
-	return ESP_OK;
-}
-
-static inline esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8_t dlc,
-                                               TickType_t timeout)
-{
-	(void)timeout;
+	if (!msg)
+		return ESP_ERR_INVALID_ARG;
 	if (mock_twai_send_result != ESP_OK)
 		return mock_twai_send_result;
 	if (g_mock_send_ext_fail_after > 0)
@@ -53,9 +34,10 @@ static inline esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_
 	}
 	if (mock_sent_count < MOCK_MAX_FRAMES)
 	{
-		mock_sent_frames[mock_sent_count].id = identifier;
-		memcpy(mock_sent_frames[mock_sent_count].data, data, dlc > 8 ? 8 : dlc);
-		mock_sent_frames[mock_sent_count].len = dlc;
+		mock_sent_frames[mock_sent_count].id = msg->identifier;
+		memcpy(mock_sent_frames[mock_sent_count].data, msg->data,
+		       msg->data_length_code > 8 ? 8 : msg->data_length_code);
+		mock_sent_frames[mock_sent_count].len = msg->data_length_code;
 		mock_sent_count++;
 	}
 	else

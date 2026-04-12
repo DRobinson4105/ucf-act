@@ -36,8 +36,10 @@ static control_inputs_t default_inputs(void)
 		.throttle_slew_step = 1,
 		.throttle_min = 0,
 		.throttle_max = 4095,
-		.last_steering_sent = STEPPER_DEDUP_RESET_STEERING,
-		.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING,
+		.last_steering_sent = MOTOR_DEDUP_RESET_STEERING,
+		.last_braking_sent = MOTOR_DEDUP_RESET_BRAKING,
+		.current_braking_position = 0,
+		.braking_step_limit = 0,
 		.steering_min = -3000,
 		.steering_max = 3000,
 		.braking_min = -3000,
@@ -685,12 +687,12 @@ static void test_active_steering_changed_sends(void)
 
 static void test_active_braking_dedup_reset_always_sends(void)
 {
-	// After exiting override/fault, dedup tracker is STEPPER_DEDUP_RESET_BRAKING.
+	// After exiting override/fault, dedup tracker is MOTOR_DEDUP_RESET_BRAKING.
 	// Even a zero command should be sent since it doesn't match the sentinel.
 	control_inputs_t in = default_inputs();
 	in.target_state = NODE_STATE_ACTIVE;
 	in.braking_cmd = 0;
-	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
+	in.last_braking_sent = MOTOR_DEDUP_RESET_BRAKING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_braking == true);
 	assert(r.braking_position == 0);
@@ -705,7 +707,7 @@ static void test_active_envelope_unconfigured_forces_neutral(void)
 	in.steering_cmd = 2000;
 	in.steering_min = 0;
 	in.steering_max = 0;
-	in.last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
+	in.last_steering_sent = MOTOR_DEDUP_RESET_STEERING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_steering == true);
 	assert(r.steering_position == 0); // forced neutral
@@ -718,7 +720,7 @@ static void test_active_envelope_clamps_command(void)
 	in.steering_cmd = 5000; // exceeds max of 3000
 	in.steering_min = -3000;
 	in.steering_max = 3000;
-	in.last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
+	in.last_steering_sent = MOTOR_DEDUP_RESET_STEERING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_steering == true);
 	assert(r.steering_position == 3000); // clamped to max
@@ -943,8 +945,8 @@ static void test_override_applies_safe_outputs(void)
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.new_state == NODE_STATE_NOT_READY);
 	assert(r.throttle_level == 0);
-	assert(r.new_last_steering == STEPPER_DEDUP_RESET_STEERING);
-	assert(r.new_last_braking == STEPPER_DEDUP_RESET_BRAKING);
+	assert(r.new_last_steering == MOTOR_DEDUP_RESET_STEERING);
+	assert(r.new_last_braking == MOTOR_DEDUP_RESET_BRAKING);
 }
 
 // ============================================================================
@@ -1093,10 +1095,37 @@ static void test_active_braking_envelope_unconfigured_forces_neutral(void)
 	in.braking_cmd = 5000;
 	in.braking_min = 0;
 	in.braking_max = 0; // unconfigured
-	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
+	in.last_braking_sent = MOTOR_DEDUP_RESET_BRAKING;
 	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
 	assert(r.send_braking == true);
 	assert(r.braking_position == 0); // forced neutral
+}
+
+static void test_active_braking_pt_step_limit_clamps_delta(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.braking_cmd = 3000;
+	in.last_braking_sent = 1000;
+	in.braking_step_limit = 400;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.send_braking == true);
+	assert(r.braking_position == 1400);
+	assert(r.new_last_braking == 1400);
+}
+
+static void test_active_braking_pt_step_limit_anchors_from_current_position_on_reset(void)
+{
+	control_inputs_t in = default_inputs();
+	in.target_state = NODE_STATE_ACTIVE;
+	in.braking_cmd = 3000;
+	in.last_braking_sent = MOTOR_DEDUP_RESET_BRAKING;
+	in.current_braking_position = 1200;
+	in.braking_step_limit = 400;
+	control_step_result_t r = control_compute_step(NODE_STATE_ACTIVE, NODE_FAULT_NONE, &in);
+	assert(r.send_braking == true);
+	assert(r.braking_position == 1600);
+	assert(r.new_last_braking == 1600);
 }
 
 static void test_override_steering_stop_clears_when_error_resolves(void)
@@ -1279,6 +1308,8 @@ int main(void)
 	TEST(test_clamp_negative_range_values);
 	TEST(test_enable_to_active_skips_complete_when_already_done);
 	TEST(test_active_braking_envelope_unconfigured_forces_neutral);
+	TEST(test_active_braking_pt_step_limit_clamps_delta);
+	TEST(test_active_braking_pt_step_limit_anchors_from_current_position_on_reset);
 	TEST(test_override_steering_stop_clears_when_error_resolves);
 	TEST(test_override_braking_stop_clears_when_error_resolves);
 	TEST(test_override_steering_stop_stays_when_error_persists);

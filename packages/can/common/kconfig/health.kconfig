@@ -1,0 +1,36 @@
+# Shared health & recovery logging — component lifecycle, heartbeat monitor, retry.
+# rsource'd by both control-esp32 and safety-esp32 Kconfig.projbuild.
+
+    config LOG_HEALTH_COMPONENT_CHANGES
+        bool "Log component LOST/REGAINED transitions"
+        default y
+        help
+            Log component health edge transitions when a component becomes
+            unavailable or recovers during runtime.
+
+    config LOG_HEALTH_HEARTBEAT_MONITOR_CHANGES
+        bool "Log heartbeat monitor lost/regained transitions"
+        default y
+        help
+            Log when a monitored heartbeat node is lost (timed out)
+            or regained (first heartbeat after timeout).
+
+    config LOG_HEALTH_CAN_RECOVERY
+        bool "Log CAN recovery flow"
+        default n
+        help
+            Log CAN recovery events: stop/start cycles, full driver reinstall,
+            bus-off recovery, and TX failure counters.
+
+    config LOG_HEALTH_RETRY_TWAI
+        bool "Log TWAI retry attempts"
+        default n
+        help
+            Log each failed TWAI startup or runtime retry attempt.
+
+    config LOG_HEALTH_RETRY_COMPONENTS
+        bool "Log component retry attempts (all components)"
+        default n
+        help
+            Log retry attempts for all failed hardware components.
+            Retries are unbounded, paced at 500ms intervals.

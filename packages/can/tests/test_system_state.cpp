@@ -1,13 +1,13 @@
 /**
  * @file test_system_state.cpp
- * @brief Unit tests for Safety target-state logic (system_state.c).
+ * @brief Unit tests for Safety target-state logic (system_state_machine.cpp).
  */
 
 #include "test_harness.h"
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "system_state.h"
+#include "system_state_machine.h"
 #include "can_protocol.h"
 
 static system_state_inputs_t default_inputs(void)

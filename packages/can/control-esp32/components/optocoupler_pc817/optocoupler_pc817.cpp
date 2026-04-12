@@ -121,7 +121,7 @@ void optocoupler_pc817_update(uint32_t now_ms)
 		}
 		else if ((now_ms - s_change_time_ms) >= FR_PC817_DEBOUNCE_MS)
 		{
-#ifdef CONFIG_LOG_INPUT_FR_STATE
+#ifdef CONFIG_LOG_INPUT_FR_STATE_CHANGES
 			ESP_LOGI(TAG, "F/R state changed: %d -> %d", s_state_debounced, s_state_pending);
 #endif
 			s_state_debounced = s_state_pending;

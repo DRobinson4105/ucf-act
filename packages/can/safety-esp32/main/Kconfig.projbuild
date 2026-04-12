@@ -23,7 +23,8 @@ menu "Test Bypasses"
             bool "Bypass Planner liveness checks"
             default n
             help
-                Ignore Planner heartbeat timeout and Planner FAULT state.
+                Ignore Planner heartbeat timeout and Planner FAULT state
+                from the Orin UART link.
 
         config BYPASS_PLANNER_STATE_MIRROR
             bool "Bypass Planner state mirror"
@@ -54,12 +55,13 @@ menu "Test Bypasses"
             default n
             help
                 Disable TWAI usage in Safety firmware for bench bring-up.
-                Skips TWAI init/recovery and suppresses CAN heartbeat TX/RX.
+                Skips TWAI init/recovery and suppresses Safety/Control CAN
+                heartbeat TX/RX. Does not disable the Orin UART link.
                 Use when no transceiver/bus peers are connected.
 
     endmenu
 
-    menu "Sensor Inputs"
+    menu "Inputs"
 
         config BYPASS_INPUT_PUSH_BUTTON
             bool "Bypass push button input: force inactive"
@@ -92,120 +94,23 @@ endmenu
 
 menu "Debug Logging"
 
-    menu "CAN Traffic"
+    menu "Transport"
 
-        config LOG_CAN_FRAMES
-            bool "Log raw CAN frames (TX and RX)"
+        rsource "../../common/kconfig/transport.kconfig"
+
+        config LOG_TRANSPORT_ORIN_PLANNER_HEARTBEAT_RX
+            bool "Log Orin Planner heartbeat RX: every frame"
             default n
             help
-                Log every CAN frame at the TWAI driver layer. Very verbose —
-                one line per frame sent or received.
-
-        config LOG_CAN_FRAMES_MOTORS_ONLY
-            bool "Log stepper motor frames only (suppress all standard frames)"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Only log extended CAN frames (stepper motor traffic).
-                Suppresses standard frames (heartbeats). Overrides the
-                individual heartbeat suppress options below.
-
-        config LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB
-            bool "Suppress Safety heartbeat frames (0x100) from frame log"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Exclude Safety heartbeat frames from the raw frame log.
-
-        config LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB
-            bool "Suppress Planner heartbeat frames (0x110) from frame log"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Exclude Planner heartbeat frames from the raw frame log.
-
-        config LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB
-            bool "Suppress Control heartbeat frames (0x120) from frame log"
-            default n
-            depends on LOG_CAN_FRAMES
-            help
-                Exclude Control heartbeat frames from the raw frame log.
-
-        config LOG_CAN_HEARTBEAT_TX
-            bool "Log CAN heartbeat TX: every frame"
-            default n
-            help
-                Log every successful heartbeat TX frame and every per-tick
-                TX failure. Without this option, only the first failure and
-                first recovery are logged (edge-triggered).
-
-        config LOG_CAN_HEARTBEAT_RX
-            bool "Log CAN heartbeat RX: every frame"
-            default n
-            help
-                Log every received Planner and Control heartbeat with sequence,
-                state, fault flags, and status flags. Very verbose (up to
-                20 msgs/sec with both nodes).
+                Log every received Planner heartbeat from the Orin UART link
+                with sequence, state, fault flags, and status flags.
+                Very verbose (up to 10 Hz).
 
     endmenu
 
-    menu "Component Health & Recovery"
+    menu "Health & Recovery"
 
-        config LOG_COMPONENT_HEALTH_TRANSITIONS
-            bool "Log component LOST/REGAINED transitions"
-            default y
-            help
-                Log component health edge transitions when a component becomes
-                unavailable or recovers during runtime.
-
-        config LOG_HEARTBEAT_MONITOR_TRANSITIONS
-            bool "Log heartbeat monitor lost/regained transitions"
-            default y
-            help
-                Log when a monitored heartbeat node is lost (timed out)
-                or regained (first heartbeat after timeout).
-
-        config LOG_CAN_RECOVERY
-            bool "Log CAN recovery flow"
-            default n
-            help
-                Log CAN recovery events: stop/start cycles, full driver reinstall,
-                bus-off recovery, and TX failure counters.
-
-        config LOG_RETRY_TWAI
-            bool "Log TWAI retry attempts"
-            default n
-            help
-                Log each failed TWAI retry while TWAI is unavailable.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_PUSH_BUTTON
-            bool "Log push-button retry attempts"
-            default n
-            help
-                Log each failed push-button re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_RF_REMOTE
-            bool "Log RF-remote retry attempts"
-            default n
-            help
-                Log each failed RF-remote re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_ULTRASONIC
-            bool "Log ultrasonic retry attempts"
-            default n
-            help
-                Log each failed ultrasonic re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
-
-        config LOG_RETRY_POWER_RELAY
-            bool "Log power-relay retry attempts"
-            default n
-            help
-                Log each failed power-relay re-initialization attempt.
-                Rate-limited: first attempt + every 20th.
+        rsource "../../common/kconfig/health.kconfig"
 
     endmenu
 
@@ -227,40 +132,23 @@ menu "Debug Logging"
                 Log each fault flag transition (e.g. none -> ultrasonic,
                 ultrasonic -> none). Edge-triggered on fault flags change.
 
-        config LOG_SAFETY_ESTOP_INPUTS
-            bool "Log Safety stop/fault inputs: every cycle (verbose)"
-            default n
-            help
-                Log all stop/fault input readings on every safety loop tick
-                (20Hz). Includes push button, RF remote, ultrasonic, and
-                node states. Extremely verbose — use only for detailed
-                input debugging.
-
-        config LOG_SAFETY_STATE_TICK
-            bool "Log Safety state evaluation: every cycle (verbose)"
-            default n
-            help
-                Log the full state evaluation on every safety loop tick (20Hz).
-                Includes stop/fault status, node states, autonomy request,
-                and target state old/new. Extremely verbose.
-
     endmenu
 
-    menu "Sensor Inputs"
+    menu "Inputs"
 
-        config LOG_INPUT_PUSH_BUTTON
+        config LOG_INPUT_PUSH_BUTTON_CHANGES
             bool "Log push-button input state changes"
             default n
             help
                 Log push button pressed/released transitions (edge-triggered).
 
-        config LOG_INPUT_RF_REMOTE
+        config LOG_INPUT_RF_REMOTE_CHANGES
             bool "Log RF remote input state changes"
             default n
             help
                 Log RF remote engaged/disengaged transitions (edge-triggered).
 
-        config LOG_INPUT_ULTRASONIC_DISTANCE
+        config LOG_INPUT_ULTRASONIC_DISTANCE_TICK
             bool "Log ultrasonic parsed distance"
             default n
             help
@@ -278,7 +166,7 @@ menu "Debug Logging"
             help
                 Log ultrasonic frame parse failures (checksum, length, etc.).
 
-        config LOG_INPUT_BATTERY_VOLTAGE
+        config LOG_INPUT_BATTERY_TICK
             bool "Log battery voltage/current readings (verbose)"
             default n
             help
@@ -296,21 +184,11 @@ menu "Debug Logging"
 
     menu "Actuators"
 
-        config LOG_ACTUATOR_POWER_RELAY_STATE
+        config LOG_ACTUATOR_POWER_RELAY_CHANGES
             bool "Log power relay state changes"
             default n
             help
                 Log power relay enabled/disabled transitions (edge-triggered).
-
-    endmenu
-
-    menu "Heartbeat LED"
-
-        config LOG_HEARTBEAT_LED_COLOR_UPDATES
-            bool "Log heartbeat LED color updates"
-            default n
-            help
-                Log each LED color update. Very verbose.
 
     endmenu
 

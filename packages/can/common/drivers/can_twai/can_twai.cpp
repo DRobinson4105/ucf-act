@@ -23,35 +23,29 @@ constexpr int RECOVERY_REINSTALL_SETTLE_MS = 200; // settle after twai_driver_un
 // ============================================================================
 // Frame Log Helpers
 // ============================================================================
-#ifdef CONFIG_LOG_CAN_FRAMES
-
-#include "stepper_protocol_uim2852.h"
+#ifdef CONFIG_LOG_TRANSPORT_CAN_FRAMES
 
 // Returns true if a frame should be suppressed from the frame log.
 static inline bool can_log_suppressed(uint32_t id, bool extd)
 {
 	if (extd)
 		return false;
-#ifdef CONFIG_LOG_CAN_FRAMES_MOTORS_ONLY
+#ifdef CONFIG_LOG_TRANSPORT_CAN_FRAMES_MOTORS_ONLY
 	return true; // suppress all standard frames
 #else
-#ifdef CONFIG_LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB
+#ifdef CONFIG_LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_SAFETY_HB
 	if (id == CAN_ID_SAFETY_HEARTBEAT)
 		return true;
 #endif
-#ifdef CONFIG_LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB
-	if (id == CAN_ID_PLANNER_HEARTBEAT)
-		return true;
-#endif
-#ifdef CONFIG_LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB
+#ifdef CONFIG_LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_CONTROL_HB
 	if (id == CAN_ID_CONTROL_HEARTBEAT)
 		return true;
 #endif
 	return false;
-#endif // CONFIG_LOG_CAN_FRAMES_MOTORS_ONLY
+#endif // CONFIG_LOG_TRANSPORT_CAN_FRAMES_MOTORS_ONLY
 }
 
-#endif // CONFIG_LOG_CAN_FRAMES
+#endif // CONFIG_LOG_TRANSPORT_CAN_FRAMES
 
 } // namespace
 
@@ -87,49 +81,24 @@ esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio)
 // Transmit
 // ============================================================================
 
-esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t timeout)
+esp_err_t can_twai_send(const twai_message_t *msg, TickType_t timeout)
 {
-	if (!data)
+	if (!msg)
 		return ESP_ERR_INVALID_ARG;
 
-	twai_message_t msg = {};
-	msg.identifier = identifier;
-	msg.extd = 0;
-	msg.rtr = 0;
-	msg.ss = 0;
-	msg.self = 0;
-	msg.dlc_non_comp = 0;
-	msg.data_length_code = 8;
-	for (int i = 0; i < 8; ++i)
-		msg.data[i] = data[i];
-
-	esp_err_t err = twai_transmit(&msg, timeout);
-#ifdef CONFIG_LOG_CAN_FRAMES
-	if (!can_log_suppressed(identifier, false))
-		ESP_LOGI(TAG, "TX std  id=0x%03lX dlc=8 [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
-		         (unsigned long)identifier, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+	esp_err_t err = twai_transmit(msg, timeout);
+#ifdef CONFIG_LOG_TRANSPORT_CAN_FRAMES
+	if (!can_log_suppressed(msg->identifier, msg->extd))
+	{
+		const char *type = msg->extd ? "ext" : "std";
+		ESP_LOGI(TAG, "TX %s id=0x%08lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X] %s",
+		         type, (unsigned long)msg->identifier, (unsigned)msg->data_length_code,
+		         msg->data[0], msg->data[1], msg->data[2], msg->data[3],
+		         msg->data[4], msg->data[5], msg->data[6], msg->data[7],
 		         err == ESP_OK ? "ok" : esp_err_to_name(err));
+	}
 #endif
 	return err;
-}
-
-esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8_t dlc, TickType_t timeout)
-{
-	if (!data && dlc > 0)
-		return ESP_ERR_INVALID_ARG;
-
-	twai_message_t msg = {};
-	msg.identifier = identifier;
-	msg.extd = 1;
-	msg.rtr = 0;
-	msg.ss = 0;
-	msg.self = 0;
-	msg.dlc_non_comp = 0;
-	msg.data_length_code = (dlc > 8) ? 8 : dlc;
-	for (int i = 0; i < msg.data_length_code; ++i)
-		msg.data[i] = data[i];
-
-	return twai_transmit(&msg, timeout);
 }
 
 // ============================================================================
@@ -142,7 +111,7 @@ esp_err_t can_twai_receive(twai_message_t *msg, TickType_t timeout)
 		return ESP_ERR_INVALID_ARG;
 
 	esp_err_t err = twai_receive(msg, timeout);
-#ifdef CONFIG_LOG_CAN_FRAMES
+#ifdef CONFIG_LOG_TRANSPORT_CAN_FRAMES
 	if (err == ESP_OK && !msg->extd && !can_log_suppressed(msg->identifier, false))
 	{
 		ESP_LOGI(TAG, "RX std  id=0x%03lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
@@ -216,7 +185,7 @@ can_tx_track_result_t can_tx_track(const can_tx_track_inputs_t *inputs)
 
 esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *log_tag)
 {
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 	// NULL log_tag = suppress internal logs (caller handles its own logging).
 	const char *tag = log_tag;
 #else
@@ -224,7 +193,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 #endif
 
 	// --- Tier 1: CAN-spec bus-off recovery ---
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 	if (tag)
 		ESP_LOGI(tag, "CAN recovery: attempting bus-off recovery");
 #endif
@@ -240,7 +209,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 				err = twai_start();
 				if (err == ESP_OK)
 				{
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 					if (tag)
 						ESP_LOGI(tag, "CAN recovery: bus-off recovery succeeded");
 #endif
@@ -252,7 +221,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 	}
 
 	// --- Tier 2: soft driver reset (stop/start) ---
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 	if (tag)
 		ESP_LOGI(tag, "CAN recovery: bus-off failed, attempting stop/start");
 #endif
@@ -262,7 +231,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 	err = twai_start();
 	if (err == ESP_OK)
 	{
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 		if (tag)
 			ESP_LOGI(tag, "CAN recovery: stop/start succeeded");
 #endif
@@ -270,7 +239,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 	}
 
 	// --- Tier 3: full driver uninstall/reinstall ---
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 	if (tag)
 		ESP_LOGI(tag, "CAN recovery: stop/start failed (%s), reinstalling TWAI driver", esp_err_to_name(err));
 #endif
@@ -303,7 +272,7 @@ esp_err_t can_twai_recover(gpio_num_t tx_gpio, gpio_num_t rx_gpio, const char *l
 	vTaskDelay(pdMS_TO_TICKS(RECOVERY_REINSTALL_SETTLE_MS));
 	err = can_twai_init_default(tx_gpio, rx_gpio);
 
-#ifdef CONFIG_LOG_CAN_RECOVERY
+#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
 	if (err == ESP_OK)
 	{
 		if (tag)

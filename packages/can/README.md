@@ -1,16 +1,21 @@
-# CAN Bus
+# Vehicle Communications
 
-CAN bus communication system for the autonomous golf cart, consisting of a Jetson AGX Orin (Planner), two ESP32-C6 microcontrollers (Control/Safety), and two UIM2852CA stepper motors (Steering/Braking).
+Vehicle communications for the autonomous golf cart, consisting of a Jetson AGX Orin (Planner), two ESP32-C6-DevKitM-1 microcontrollers (Control/Safety), and two UIM2852CA motors (Steering/Braking).
 
-The Planner, Control, and Safety nodes share a unified heartbeat format, state enum, and cause channels over 1 Mbps CAN. Safety commands target states with NOT_READY/READY/ENABLE/ACTIVE. Non-fault stop inputs are carried in `stop_flags`; issues/timeouts are carried in `fault_flags`.
+The system uses two transports:
 
-| Node                           | Role                                                           | Heartbeat ID |
-| ------------------------------ | -------------------------------------------------------------- | ------------ |
-| **Safety** (ESP32-C6-WROOM-1)  | System state authority, stop/fault monitoring, power relay     | 0x100        |
-| **Planner** (Jetson AGX Orin)  | Path planning, sends throttle/steering/braking commands        | 0x110        |
-| **Control** (ESP32-C6-WROOM-1) | Executes actuator commands (throttle, steering/braking motors) | 0x120        |
+- **Orin ↔ ESP32 UART links** — one cable per ESP32, plugged from each board's "COM" USB-C port (routed through the DevKitM-1's CP2102N bridge to UART0) to the Orin. 1 Mbaud, framed by `usb_serial_link` + `orin_link_protocol`.
+- **1 Mbps CAN bus** shared between Safety, Control, and the two UIM2852 motors.
 
-Two UIM2852CA stepper motors (steering node 7, braking node 6) also share the bus using extended 29-bit CAN frames but do not participate in the heartbeat protocol.
+Safety and Control share a unified heartbeat format, state enum, and cause channels. Safety commands target states with NOT_READY/READY/ENABLE/ACTIVE. Non-fault stop inputs are carried in `stop_flags`; issues/timeouts are carried in `fault_flags`.
+
+| Node                                | Role                                                           | Heartbeat                                |
+| ----------------------------------- | -------------------------------------------------------------- | ---------------------------------------- |
+| **Safety** (ESP32-C6-DevKitM-1)     | System state authority, stop/fault monitoring, power relay     | CAN 0x100 + Orin UART (to Orin)          |
+| **Planner** (Jetson AGX Orin)       | Path planning, sends commands to Control and heartbeat to Safety over its two UART cables | Orin UART (to Safety) |
+| **Control** (ESP32-C6-DevKitM-1)    | Executes actuator commands (throttle, steering/braking motors) | CAN 0x120 + Orin UART (to Orin)          |
+
+Two UIM2852CA motors (steering node 7, braking node 6) share the CAN bus using extended 29-bit frames but do not participate in the heartbeat protocol.
 
 ## Documentation
 
@@ -23,7 +28,7 @@ Two UIM2852CA stepper motors (steering node 7, braking node 6) also share the bu
 
 ## CAN Bus Wiring
 
-Five nodes share a single CAN bus at 1 Mbps. The three compute nodes (Safety, Planner, Control) are physically co-located in the left dashboard compartment. The two stepper motors are mounted several feet away on the cart chassis. Both ESP32-C6 boards use Waveshare SN65HVD230 transceivers (TWAI 3V3, GND, TX=GPIO4, RX=GPIO5); Planner uses its own CAN interface; the stepper motors have built-in CAN transceivers (CAN-H, CAN-L).
+Four nodes share a single CAN bus at 1 Mbps: Safety, Control, and the two UIM2852 motors. The Orin does not participate in the CAN bus — it connects to each ESP32 directly over UART0 via the DevKitM-1 COM USB-C port. Both ESP32-C6 boards use Waveshare SN65HVD230 transceivers (TWAI 3V3, GND, TX=GPIO4, RX=GPIO5); the UIM2852 motors have built-in CAN transceivers (CAN-H, CAN-L).
 
 Each CAN node connects to the bus with two signal wires:
 
@@ -34,11 +39,11 @@ Each CAN node connects to the bus with two signal wires:
 
 ### Bus Termination
 
-120 ohm termination resistors between CAN-H and CAN-L on the Waveshare transceiver boards at **Safety** and **Planner**. **Control's** Waveshare transceiver board has termination disabled by desoldering and removing the resistor. The stepper motors do not provide termination. This setup provides the correct 60 ohms of resistance across the CAN bus.
+Use exactly two 120 ohm termination resistors between CAN-H and CAN-L, one at **Safety** and one at the opposite end of the bus. **Control's** Waveshare transceiver board has termination disabled by desoldering and removing the resistor. The UIM2852 motors do not provide termination.
 
 ### Wiring Notes
 
-- Twisted-pair wiring recommended for CAN-H (Yellow) / CAN-L (Green) runs to the stepper motors (several feet)
+- Twisted-pair wiring recommended for CAN-H (Yellow) / CAN-L (Green) runs to the UIM2852 motors (several feet)
 - No dedicated CAN GND wire. All buck converters (5V ESP32, 12V Orin, 24V motors) are non-isolated with inputs fed from the same 48V- bus bar, so all output GNDs are inherently common. A separate CAN GND wire would be redundant.
 - SN65HVD230 modules powered from their respective devices.
 
@@ -47,12 +52,21 @@ Each CAN node connects to the bus with two signal wires:
 | ID       | Name              | Sender           | Frame Type      |
 | -------- | ----------------- | ---------------- | --------------- |
 | 0x100    | SAFETY_HEARTBEAT  | Safety           | Standard 11-bit |
-| 0x110    | PLANNER_HEARTBEAT | Planner          | Standard 11-bit |
-| 0x111    | PLANNER_COMMAND   | Planner          | Standard 11-bit |
 | 0x120    | CONTROL_HEARTBEAT | Control          | Standard 11-bit |
-| Extended | STEPPER\_\*       | Control / Motors | Extended 29-bit |
+| Extended | MOTOR\_UIM2852\_\* | Control / Motors | Extended 29-bit |
 
-See [common/protocol/README.md](common/protocol/README.md) for frame layouts and byte-level detail.
+Planner commands and the planner heartbeat travel on the Orin UART links, not on CAN. See [common/protocol/README.md](common/protocol/README.md) for frame layouts and byte-level detail (including the `0xAA` sync byte, `orin_link_protocol` framing, and a concrete wire example).
+
+## Orin UART Wiring
+
+Each ESP32-C6-DevKitM-1 has **two USB-C connectors**:
+
+- **COM** — routed through the onboard CP2102N bridge chip to UART0 (the ESP32-C6 peripheral). This is what the Orin plugs into.
+- **USB** — routed directly to the ESP32-C6's native USB Serial JTAG peripheral. This is what your development laptop plugs into for `idf.py flash` / `idf.py monitor`.
+
+The two ports are electrically independent, so flashing/monitoring from your laptop over the USB port never collides with live Orin traffic on the COM port. There are two separate cables total: **Orin ↔ Control COM** and **Orin ↔ Safety COM**. See [common/protocol/README.md](common/protocol/README.md) for which messages travel on each cable.
+
+While the `usb_serial_link` component is installed it owns UART0 at 1 Mbaud, so the primary console (which defaults to UART0 @ 115200) is effectively silenced on the COM port. Log output still flows to the secondary USB Serial JTAG console on the native USB port, which is where `idf.py monitor` reads from anyway.
 
 ## Development Setup
 

@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "src/motor_cmd.cpp"
+        "src/motor_codec.cpp"
+        "src/motor_rx.cpp"
+        "src/motor_dispatch.cpp"
+        "src/motor_exec.cpp"
+        "src/motor_setup.cpp"
+        "src/motor_setup_binding.cpp"
+        "src/motor_diag_describe_cmd.cpp"
+        "src/motor_diag_describe_rx.cpp"
+        "src/motor_diag_render.cpp"
+        "src/motor_diag_tables.cpp"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src"
+    REQUIRES
+        driver
+        freertos
+        log
+)

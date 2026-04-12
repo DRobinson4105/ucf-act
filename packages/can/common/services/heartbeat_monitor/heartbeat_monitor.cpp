@@ -84,7 +84,7 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, node_seq_t 
 		return;
 	}
 
-#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
+#ifdef CONFIG_LOG_HEALTH_HEARTBEAT_MONITOR_CHANGES
 	bool was_alive = mon->nodes[node_id].alive;
 	bool had_seen_heartbeat = mon->nodes[node_id].seen_heartbeat;
 	char name[HEARTBEAT_MONITOR_NODE_NAME_MAX_LEN] = {};
@@ -99,7 +99,7 @@ void heartbeat_monitor_update(heartbeat_monitor_t *mon, int node_id, node_seq_t 
 	mon->nodes[node_id].alive = true;
 	taskEXIT_CRITICAL(&mon->lock);
 
-#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
+#ifdef CONFIG_LOG_HEALTH_HEARTBEAT_MONITOR_CHANGES
 	if (!was_alive && had_seen_heartbeat)
 		ESP_LOGI(mon->tag, "%s regained", name);
 #endif
@@ -147,7 +147,7 @@ void heartbeat_monitor_check_timeouts(heartbeat_monitor_t *mon)
 	taskEXIT_CRITICAL(&mon->lock);
 
 	// Log outside critical section
-#ifdef CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS
+#ifdef CONFIG_LOG_HEALTH_HEARTBEAT_MONITOR_CHANGES
 	for (int i = 0; i < timeout_count; i++)
 	{
 		ESP_LOGE(mon->tag, "%s lost (no response for %lu ms)", timeouts[i].name, timeouts[i].elapsed_ms);

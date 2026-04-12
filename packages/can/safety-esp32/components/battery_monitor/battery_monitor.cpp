@@ -558,7 +558,7 @@ void battery_monitor_update(uint32_t now_ms)
 
 	s_soc_pct = new_soc;
 
-#ifdef CONFIG_LOG_INPUT_BATTERY_VOLTAGE
+#ifdef CONFIG_LOG_INPUT_BATTERY_TICK
 	ESP_LOGI(TAG, "V=%umV I=%dmA SOC=%u%% idle=%d zero_cal=%ldmV", (unsigned)(s_voltage_filtered_mv + 0.5f),
 	         (int)(s_current_filtered_ma + 0.5f), s_soc_pct, s_is_idle, (long)s_current_zero_offset_mv);
 #endif

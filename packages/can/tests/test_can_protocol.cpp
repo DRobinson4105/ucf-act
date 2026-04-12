@@ -593,21 +593,15 @@ static void test_can_id_ranges(void)
 	// Safety IDs in 0x100-0x10F range
 	assert(CAN_ID_SAFETY_HEARTBEAT >= 0x100 && CAN_ID_SAFETY_HEARTBEAT <= 0x10F);
 
-	// Planner IDs in 0x110-0x11F range
-	assert(CAN_ID_PLANNER_HEARTBEAT >= 0x110 && CAN_ID_PLANNER_HEARTBEAT <= 0x11F);
-	assert(CAN_ID_PLANNER_COMMAND >= 0x110 && CAN_ID_PLANNER_COMMAND <= 0x11F);
-
 	// Control IDs in 0x120-0x12F range
 	assert(CAN_ID_CONTROL_HEARTBEAT >= 0x120 && CAN_ID_CONTROL_HEARTBEAT <= 0x12F);
 }
 
 static void test_no_id_collisions(void)
 {
-	// All 4 message IDs should be unique
+	// The active CAN heartbeat IDs should be unique.
 	uint16_t ids[] = {
 		CAN_ID_SAFETY_HEARTBEAT,
-		CAN_ID_PLANNER_HEARTBEAT,
-		CAN_ID_PLANNER_COMMAND,
 		CAN_ID_CONTROL_HEARTBEAT,
 	};
 	int n = sizeof(ids) / sizeof(ids[0]);

@@ -1,6 +1,6 @@
 /**
  * @file can_protocol.h
- * @brief Shared CAN bus protocol definitions for Safety, Control, and Planner nodes.
+ * @brief Shared heartbeat and command payload definitions for Safety, Control, and Planner.
  *
  * All nodes share a unified state enum and heartbeat wire format. Safety ESP32 acts
  * as the system state authority and commands target state using
@@ -10,8 +10,9 @@
  *   - stop_flags: non-fault stop inputs (button/remote/obstacle/app/operator)
  *   - fault_flags: node-specific fault bitmasks (Safety/Planner/Control each have their own range)
  *
- * Every node sends an identical heartbeat format (node_heartbeat_t) at 100ms.
- * Safety's "state" field carries the system target state.
+ * Safety and Control send an identical heartbeat format (node_heartbeat_t) at 100ms on CAN.
+ * Planner/heartbeat-mirror payloads reuse the same byte layouts on the Orin UART link
+ * via orin_link_protocol. Safety's "state" field carries the system target state.
  */
 
 #pragma once
@@ -45,10 +46,6 @@ typedef uint8_t node_seq_t;          // Rolling 0-255 heartbeat sequence counter
 
 // Safety ESP32 (0x100-0x10F)
 #define CAN_ID_SAFETY_HEARTBEAT 0x100 // Safety heartbeat (target_state, fault_flags, stop_flags, soc)
-
-// Planner (0x110-0x11F)
-#define CAN_ID_PLANNER_HEARTBEAT 0x110 // Planner heartbeat (seq, state, fault_flags, status_flags)
-#define CAN_ID_PLANNER_COMMAND   0x111 // Throttle/steering/braking commands
 
 // Control ESP32 (0x120-0x12F)
 #define CAN_ID_CONTROL_HEARTBEAT 0x120 // Control heartbeat (seq, state, fault_flags, status_flags)
@@ -119,7 +116,7 @@ typedef uint8_t node_seq_t;          // Rolling 0-255 heartbeat sequence counter
 #define NODE_FAULT_CONTROL_PREFIX         0x80
 #define NODE_FAULT_CONTROL_THROTTLE_INIT  (NODE_FAULT_CONTROL_PREFIX | 0x01) // bit 0: throttle init failed
 #define NODE_FAULT_CONTROL_CAN_TX         (NODE_FAULT_CONTROL_PREFIX | 0x02) // bit 1: CAN transmit failures
-#define NODE_FAULT_CONTROL_MOTOR_COMM     (NODE_FAULT_CONTROL_PREFIX | 0x04) // bit 2: stepper communication lost
+#define NODE_FAULT_CONTROL_MOTOR_COMM     (NODE_FAULT_CONTROL_PREFIX | 0x04) // bit 2: motor communication lost
 #define NODE_FAULT_CONTROL_SENSOR_INVALID (NODE_FAULT_CONTROL_PREFIX | 0x08) // bit 3: F/R sensor invalid reading
 #define NODE_FAULT_CONTROL_RELAY_INIT     (NODE_FAULT_CONTROL_PREFIX | 0x10) // bit 4: relay initialization failed
 
@@ -152,9 +149,13 @@ typedef uint8_t node_seq_t;          // Rolling 0-255 heartbeat sequence counter
 // 0x04 reserved
 
 // ============================================================================
-// Node Heartbeat (0x100, 0x110, 0x120)
+// Node Heartbeat (CAN 0x100 Safety, CAN 0x120 Control, Orin UART for Planner + mirrors)
 // ============================================================================
 // Sent by ALL nodes periodically (100ms) and immediately on state change.
+// Safety and Control publish on CAN; the Planner publishes on the Orin UART
+// link via orin_link_protocol (message type 0x02). Safety and Control also
+// mirror their heartbeats to the Orin on the same UART link (message types
+// 0x04 and 0x03 respectively). All three variants share the byte layout below.
 // byte 0: sequence counter (0-255, wraps)
 // byte 1: state (NODE_STATE_* — for Safety: system target state)
 // byte 2: fault_flags (NODE_FAULT_* — node-specific fault bitmask, 0 when clear)
@@ -177,28 +178,38 @@ typedef struct
 } node_heartbeat_t;
 
 // ============================================================================
-// Planner Command (0x111)
+// Planner Command (Orin UART message type 0x01, 6-byte payload)
 // ============================================================================
-// Sent by Planner when in ACTIVE state.
+// Sent by the Planner on the Orin ↔ Control UART link via orin_link_protocol.
 // byte 0: sequence counter (0-255, wraps)
 // byte 1: throttle high byte (MSB) for throttle level (0-4095)
 // byte 2: throttle low byte (LSB) for throttle level (0-4095)
 // byte 3: steering high byte (MSB) for steering command (0-720)
 // byte 4: steering low byte (LSB) for steering command (0-720)
-// byte 5: braking value
-// byte 6-7: reserved
-// NOTE: This struct is for logical representation only — not packed to CAN frame layout.
+// byte 5: braking level (0-3, PLANNER_BRAKING_MAX_LEVEL; 0=released, 3=engaged)
+// NOTE: This struct is for logical representation only — not packed to wire.
 // Encoding/decoding uses explicit byte-level access via can_encode/decode_planner_command().
 //
 // Throttle deadband: levels below ~800 are within the Curtis controller's deadband
 // and produce no movement. First wheel movement begins at approximately level 800.
+
+// Planner braking is a 4-level discrete command:
+//   0 = fully released  (motor at BRAKE_RELEASE_POSITION)
+//   1 = one-third engaged
+//   2 = two-thirds engaged
+//   3 = fully engaged    (motor at position 0)
+// Control's RX path translates these four levels into a raw pulse target for
+// the UIM2852 braking motor. Values above PLANNER_BRAKING_MAX_LEVEL are
+// clamped to PLANNER_BRAKING_MAX_LEVEL (fully engaged — the fail-safe
+// direction) before translation.
+#define PLANNER_BRAKING_MAX_LEVEL 3
 
 typedef struct
 {
 	node_seq_t sequence;
 	uint16_t throttle;          // DAC level (0-4095, deadband below ~800)
 	uint16_t steering_position; // Planner command value (expected 0-720)
-	uint8_t braking_position;
+	uint8_t braking_position;   // 4-level command (0-3, see PLANNER_BRAKING_MAX_LEVEL)
 } planner_command_t;
 
 // ============================================================================
@@ -265,11 +276,13 @@ static inline int16_t can_unpack_le16s(const uint8_t *buf)
 // ============================================================================
 
 /**
- * @brief Encode a heartbeat struct into an 8-byte CAN data frame.
+ * @brief Encode a heartbeat struct into an 8-byte payload buffer.
  *
  * Writes sequence, state, fault_flags, status_flags into bytes 0-3,
  * stop_flags into byte 4, soc_pct into byte 5, and zeroes reserved
- * bytes 6-7. Silently returns if either pointer is NULL.
+ * bytes 6-7. Silently returns if either pointer is NULL. The same
+ * 8-byte layout is used for both CAN (0x100/0x120) and the Orin UART
+ * heartbeat messages (orin_link_protocol types 0x02/0x03/0x04).
  *
  * @param data  Destination buffer (must have room for 8 bytes)
  * @param hb    Heartbeat struct to encode
@@ -289,14 +302,15 @@ static inline void can_encode_heartbeat(uint8_t *data, const node_heartbeat_t *h
 }
 
 /**
- * @brief Decode an 8-byte CAN data frame into a heartbeat struct.
+ * @brief Decode an 8-byte heartbeat payload into a heartbeat struct.
  *
  * Reads sequence, state, fault_flags, status_flags, stop_flags from bytes 0-4,
- * and soc_pct from byte 5. Returns false if any pointer is NULL or the DLC
- * is less than 6.
+ * and soc_pct from byte 5. Returns false if any pointer is NULL or the
+ * payload length is less than 6. Used for both CAN frames and Orin UART
+ * heartbeat payloads.
  *
- * @param data  Source CAN data buffer (at least 6 bytes)
- * @param dlc   Data length code (must be >= 6)
+ * @param data  Source payload buffer (at least 6 bytes)
+ * @param dlc   Payload length (must be >= 6; CAN DLC or UART payload_len)
  * @param hb    Destination heartbeat struct
  * @return true on success, false on invalid arguments
  */
@@ -318,10 +332,12 @@ static inline bool can_decode_heartbeat(const uint8_t *data, uint8_t dlc, node_h
 // ============================================================================
 
 /**
- * @brief Encode a planner command struct into an 8-byte CAN data frame.
+ * @brief Encode a planner command struct into an 8-byte payload buffer.
  *
  * Writes sequence (byte 0), throttle (bytes 1-2), steering (bytes 3-4),
- * braking (byte 5), and zeroes bytes 6-7.
+ * braking (byte 5), and zeroes bytes 6-7. The destination buffer must be
+ * at least 8 bytes even though `orin_link_encode_planner_command_message`
+ * only transmits the first 6 over the UART link (`payload_len = 6`).
  * Silently returns if either pointer is NULL.
  *
  * @param data  Destination buffer (must have room for 8 bytes)
@@ -342,14 +358,14 @@ static inline void can_encode_planner_command(uint8_t *data, const planner_comma
 }
 
 /**
- * @brief Decode CAN data into a planner command struct.
+ * @brief Decode a planner command payload into a planner command struct.
  *
  * Reads sequence (byte 0), throttle (bytes 1-2),
  * steering (bytes 3-4), and braking (byte 5).
- * Returns false if any pointer is NULL or the DLC is less than 6.
+ * Returns false if any pointer is NULL or the payload length is less than 6.
  *
- * @param data  Source CAN data buffer (at least 6 bytes)
- * @param dlc   Data length code (must be >= 6)
+ * @param data  Source payload buffer (at least 6 bytes)
+ * @param dlc   Payload length (must be >= 6; this is the UART payload_len)
  * @param cmd   Destination planner command struct
  * @return true on success, false on invalid arguments
  */

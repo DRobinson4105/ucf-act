@@ -96,7 +96,7 @@ esp_err_t relay_dpdt_my5nj_energize(void)
 	if (err != ESP_OK)
 		return err;
 
-#ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY
+#ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY_CHANGES
 	ESP_LOGI(TAG, "ENERGIZED (throttle source: DAC, pedal bypass: active)");
 #endif
 	return ESP_OK;
@@ -111,7 +111,7 @@ esp_err_t relay_dpdt_my5nj_deenergize(void)
 	if (err != ESP_OK)
 		return err;
 
-#ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY
+#ifdef CONFIG_LOG_ACTUATOR_DPDT_RELAY_CHANGES
 	ESP_LOGI(TAG, "DE-ENERGIZED (throttle source: pedal, pedal bypass: normal)");
 #endif
 	return ESP_OK;

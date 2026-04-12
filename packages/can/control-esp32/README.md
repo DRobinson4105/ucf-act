@@ -1,6 +1,8 @@
 # control-esp32
 
-ESP-IDF firmware for the Control ESP32-C6. Receives commands from the Planner (Jetson AGX Orin) over CAN and controls/monitors throttle, steering, and braking actuators. Follows the system target state broadcast by Safety ESP32.
+ESP-IDF firmware for the Control ESP32-C6-DevKitM-1. Receives planner commands from the Jetson AGX Orin over UART0 (the board's COM USB-C port, wired through the onboard CP2102N bridge) at 1 Mbaud, and controls/monitors throttle, steering, and braking actuators. Follows the system target state broadcast by Safety ESP32 over CAN.
+
+The `main/` sources are organized into subdirectories by concern: `config/` (compile-time constants), `state/` (global state declarations), `health/` (component health and recovery), `actuators/` (enable/disable/override action helpers), `tasks/` (FreeRTOS task entry points — CAN RX, 50Hz control loop, heartbeat), `init/` (peripheral bring-up and task creation), `transport/` (CAN RX decode, heartbeat TX, Orin UART link), `inputs/` (pedal ADC + F/R sensor polling), and `bench/` (standalone actuator bench-test mode). `main.cpp` contains only the production build guard and `app_main` entry point.
 
 ## State Machine
 
@@ -67,14 +69,26 @@ This is a commanded retreat from Safety, not a human override event.
 
 Recovery target is recomputed from current preconditions (`NOT_READY` or `READY`).
 
-## CAN Messages
+## External Interfaces
+
+### Orin UART Link (COM USB-C port → UART0)
+
+The Orin plugs into the DevKitM-1's **COM** USB-C connector, which routes through the CP2102N bridge to UART0. `usb_serial_link_init()` owns UART0 at 1 Mbaud; `control_orin_link_rx_task` pulls framed messages off the link and `control_heartbeat_tx` pushes heartbeats the other way. Frames carry an `ORIN_LINK_SYNC_BYTE` (0xAA) + 1-byte type + 1-byte length header — see [common/protocol/README.md](../common/protocol/README.md) for the wire format.
+
+| Direction | Message            | Description                                                            |
+| --------- | ------------------ | ---------------------------------------------------------------------- |
+| RX        | PLANNER_COMMAND    | Planner command from Orin (sequence, throttle, steering_pos, braking_pos) |
+| TX        | CONTROL_HEARTBEAT  | Local Control heartbeat mirrored to Orin for liveness/status reporting |
+
+Planner command and heartbeat payloads reuse the shared `can_protocol` byte layouts and are framed on the UART by `orin_link_protocol`. The separate **USB** USB-C connector (native USB Serial JTAG) stays free for `idf.py flash` / `idf.py monitor` from the development laptop.
+
+### CAN Messages
 
 ### Receives (Standard 11-bit Frames)
 
 | ID    | Name             | Description                                                                                  |
 | ----- | ---------------- | -------------------------------------------------------------------------------------------- |
 | 0x100 | SAFETY_HEARTBEAT | System target state + Safety `fault_flags` and `stop_flags` (same `node_heartbeat_t` format) |
-| 0x111 | PLANNER_COMMAND  | Commands (sequence, throttle 0-255, steering_pos, braking_pos)                               |
 
 ### Sends (Standard 11-bit Frames)
 
@@ -93,7 +107,7 @@ Control tracks the Planner command sequence number. If the same sequence is seen
 | Steering | 7       | Linear actuator for steering column |
 | Braking  | 6       | Linear actuator for brake pedal     |
 
-See `stepper_protocol_uim2852.h` for CAN ID encoding.
+See `motor_protocol.h` in `motor_uim2852` for CAN ID encoding.
 
 ## Pin Configuration
 
@@ -115,18 +129,19 @@ See `stepper_protocol_uim2852.h` for CAN ID encoding.
 | ------------ | ----------------------------------------------------- |
 | Solid green  | Local Control state READY                             |
 | Solid blue   | Local Control state ACTIVE                            |
-| Solid red    | Local Control state NOT_READY or fault overlay active |
+| Solid red    | Local Control state NOT_READY                         |
 | Solid yellow | Local Control state INIT/ENABLE                       |
 
 ## Wiring
 
-Each subsection covers production (on-cart) and bench wiring for Control ESP32 interfaces where applicable. F/R hardware wiring in this revision is cart-only; on bench, use the F/R input bypass flag if cart switch wiring is not present. For CAN bus topology and stepper motor wiring shared across all nodes, see [CAN Bus Wiring](../README.md#can-bus-wiring).
+Each subsection covers production (on-cart) and bench wiring for Control ESP32 interfaces where applicable. F/R hardware wiring in this revision is cart-only; on bench, use the F/R input bypass flag if cart switch wiring is not present. For CAN bus topology and motor wiring shared across all nodes, see [CAN Bus Wiring](../README.md#can-bus-wiring).
 
 ### Wiring Summary
 
 | Interface                                 | Bench vs Production                                            |
 | ----------------------------------------- | -------------------------------------------------------------- |
 | CAN bus (SN65HVD230)                      | Same — see [root README](../README.md#can-bus-wiring)          |
+| COM USB-C → Orin (UART0, 1 Mbaud)         | Same                                                           |
 | Throttle system (MCP4728 + LM358 + MY5NJ) | Same hardware — bench: measure VOUTA directly (no op-amp needed) |
 | Pedal ADC                                 | Same — bench divider floating reads ~0mV (safe default)        |
 | F/R optocouplers (PC817)                  | Cart wiring only — production-style 48V switch wiring via 4.7k |
@@ -134,7 +149,7 @@ Each subsection covers production (on-cart) and bench wiring for Control ESP32 i
 
 ### CAN Bus (SN65HVD230)
 
-GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module via a 4-pin JST-PH connector. Control ESP32's Waveshare board has the onboard termination resistor **removed** (termination is on Safety ESP32 and Planner/Orin). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module via a 4-pin JST-PH connector. Control ESP32's Waveshare board has the onboard termination resistor **removed**. See the [root README](../README.md#can-bus-wiring) for the current CAN topology shared with Safety and the UIM2852 motors.
 
 **ESP32-to-transceiver connector (4-pin JST-PH):**
 
@@ -430,18 +445,36 @@ GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status L
 
 ## Components
 
-| Component                  | Description                                                      |
-| -------------------------- | ---------------------------------------------------------------- |
-| `dac_mcp4728`              | MCP4728 I2C DAC for throttle level (12-bit, 4096 levels)        |
-| `stepper_motor_uim2852`    | UIM2852CA closed-loop stepper motor control API                  |
-| `relay_dpdt_my5nj`         | MY5NJ DPDT relay driver (24V coil via 2N5551 NPN transistor)     |
-| `adc_12bitsar`             | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper        |
-| `optocoupler_pc817`        | Dedicated F/R PC817 decode + debounce helper                     |
-| `can_twai`                 | CAN bus driver wrapper (shared)                                  |
-| `can_protocol`             | Message definitions and encode/decode (shared)                   |
-| `led_ws2812`               | WS2812 status LED driver (shared)                                |
-| `stepper_protocol_uim2852` | UIM2852 SimpleCAN protocol library (shared)                      |
-| `control_logic`            | Extracted state machine decision logic (shared, tested)          |
+Local (`control-esp32/components/`):
+
+| Component           | Description                                                                      |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `dac_mcp4728`       | MCP4728 I2C DAC for throttle level (12-bit, 4096 levels)                          |
+| `motor_uim2852`     | UIM2852CA motor protocol, dispatch, exec, setup, and diagnostics (unified)        |
+| `relay_dpdt_my5nj`  | MY5NJ DPDT relay driver (24V coil via 2N5551 NPN transistor)                      |
+| `adc_12bitsar`      | Dedicated ESP32-C6 12-bit SAR ADC read/calibration helper                         |
+| `optocoupler_pc817` | Dedicated F/R PC817 decode + debounce helper                                      |
+
+Local (`control-esp32/main/logic/`):
+
+| Component       | Description                                      |
+| --------------- | ------------------------------------------------ |
+| `control_logic` | Extracted state machine decision logic (tested)  |
+| `control_types` | Shared type definitions for control logic        |
+
+Shared (`common/`):
+
+| Component                  | Location             | Description                                                              |
+| -------------------------- | -------------------- | ------------------------------------------------------------------------ |
+| `can_twai`                 | `common/drivers`     | CAN bus (TWAI) driver wrapper                                            |
+| `led_ws2812`               | `common/drivers`     | Raw WS2812 RGB transport driver                                          |
+| `can_protocol`             | `common/protocol`    | Shared CAN message struct + encode/decode                                |
+| `orin_link_protocol`       | `common/protocol`    | Typed message helpers for the Orin UART links                            |
+| `usb_serial_link`          | `common/services`    | Framed UART0 transport used by both Control and Safety for the Orin link |
+| `status_led`               | `common/services`    | Node-state → RGB color policy adapter                                    |
+| `node_support`             | `common/services`    | Task watchdog + boot logging helpers                                     |
+| `can_runtime`              | `common/services`    | CAN TX/RX task plumbing and component-health tracking                    |
+| `heartbeat_monitor`        | `common/services`    | Node liveness tracking (per-source timeout masks)                        |
 
 ### Hardware Detection Limitations
 
@@ -453,7 +486,7 @@ Not all components can detect physical absence at init or runtime. Components th
 | `relay_dpdt_my5nj`      | No               | Output-only GPIO. Same readback pattern as before — verifies the MCU register, not whether the relay/transistor is physically present.                                                                                                                                                                                                                                                        |
 | `adc_12bitsar`          | No               | ADC init configures an internal ESP32 peripheral. A floating/disconnected pin reads ~0 mV, which is indistinguishable from "pedal not pressed." Safe direction (override never triggers), but pedal override detection is silently disabled.                                                                                                                                                  |
 | `optocoupler_pc817`     | No (pre-bypass)  | Pull-ups + active-low signaling: disconnected = both HIGH = NEUTRAL. Pre-bypass, NEUTRAL is expected (FORWARD reads as NEUTRAL when anti-arc switch can't conduct). Hardware absence is indistinguishable from "cart in FORWARD/NEUTRAL." Post-bypass (ACTIVE), the full truth table is readable and a disconnected optocoupler would read NEUTRAL, which zeroes throttle but does not fault. |
-| `stepper_motor_uim2852` | Yes              | Init performs a CAN handshake (query status). No response = timeout = init failure, triggering FAULT.                                                                                                                                                                                                                                                                                         |
+| `motor_uim2852`          | Yes             | Init performs a CAN handshake (MO=0 disable). No response = timeout = init failure, triggering FAULT.                                                                                                                                                                                                                                                                                         |
 
 ## Throttle Control
 
@@ -471,8 +504,12 @@ Enable sequence (READY -> ACTIVE):
 1. Set DAC output to level 0
 2. Wait 200ms enable dwell
 3. Enable steering and braking motors
-4. Energize DPDT relay (GPIO 10) — both poles switch: throttle source to DAC/op-amp, pedal bypass active
-5. Enable DAC autonomous mode
+4. Configure and arm PT FIFO mode for both motors
+5. Braking PT targets are bounded per update so large planner jumps are applied gradually
+6. Energize DPDT relay (GPIO 10) — both poles switch: throttle source to DAC/op-amp, pedal bypass active
+7. Enable DAC autonomous mode
+
+In ACTIVE, both steering and braking are fed as PT streams. Steering repeats the latest clamped target to keep the FIFO primed. Braking also repeats its latest target, but each commanded target step is additionally bounded before it is queued so abrupt planner changes do not turn into a single large brake move.
 
 ## Test Bypasses
 
@@ -483,81 +520,112 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 | `CONFIG_BYPASS_SAFETY_TARGET_MIRROR`         | Force target_state to ACTIVE (ignore Safety target mirror)                               |
 | `CONFIG_BYPASS_SAFETY_ESTOP_MIRROR`          | Force Safety mirror channels clear (`safety_fault_flags=NONE`, `safety_stop_flags=NONE`) |
 | `CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS`       | Ignore Safety heartbeat timeout (test without Safety on bus)                             |
-| `CONFIG_BYPASS_PLANNER_COMMAND_INPUTS`       | Force Planner command inputs to zero throttle/steering/braking                           |
-| `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Planner command timeout/stale checks                                             |
+| `CONFIG_BYPASS_PLANNER_COMMAND_INPUTS`       | Force Orin Planner command inputs to zero throttle/steering/braking                      |
+| `CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS` | Disable Orin Planner command timeout/stale checks                                        |
 | `CONFIG_BYPASS_INPUT_PEDAL_ADC`              | Skip pedal ADC readings (always not pressed, always re-armed)                            |
 | `CONFIG_BYPASS_INPUT_FR_SENSOR`              | Force F/R state to FORWARD (skip optocoupler channel reading)                            |
 | `CONFIG_BYPASS_ACTUATOR_THROTTLE`            | Skip DAC and DPDT relay control                                                          |
-| `CONFIG_BYPASS_ACTUATOR_STEPPER_STEERING`    | Skip steering stepper motor (node 7) init/configure/commands                             |
-| `CONFIG_BYPASS_ACTUATOR_STEPPER_BRAKING`     | Skip braking stepper motor (node 6) init/configure/commands                              |
+| `CONFIG_BYPASS_ACTUATOR_MOTOR_UIM2852_STEERING`    | Skip steering motor (node 7) init/configure/commands                             |
+| `CONFIG_BYPASS_ACTUATOR_MOTOR_UIM2852_BRAKING`     | Skip braking motor (node 6) init/configure/commands                              |
+| `CONFIG_BYPASS_MOTOR_UIM2852_LIMITS_STEERING`     | Skip programming steering LM[0-7] software limits during motor configure            |
+| `CONFIG_BYPASS_MOTOR_UIM2852_LIMITS_BRAKING`      | Skip programming braking LM[0-7] software limits during motor configure             |
+
+## Motor Configuration
+
+Compile-time Kconfig defaults for the UIM2852CA motors, programmed during `motor_uim2852 init sequence`. Menu: `idf.py menuconfig` → **Motor Limits**.
+
+| Menu         | Flag                               | Description                                                                   |
+| ------------ | ---------------------------------- | ----------------------------------------------------------------------------- |
+| **Steering** | `CONFIG_STEERING_LM0_MAX_SPEED`    | Max working speed (pulses/sec)                                                |
+|              | `CONFIG_STEERING_LM1_LOWER_LIMIT`  | Lower working position limit (pulses, signed)                                 |
+|              | `CONFIG_STEERING_LM2_UPPER_LIMIT`  | Upper working position limit (pulses, signed)                                 |
+|              | `CONFIG_STEERING_LM7_MAX_ACCEL`    | Max acceleration (pulses/sec²)                                                |
+|              | `CONFIG_STEERING_AC_DEFAULT_ACCEL` | Default AC acceleration                                                       |
+|              | `CONFIG_STEERING_DC_DEFAULT_DECEL` | Default DC deceleration                                                       |
+|              | `CONFIG_STEERING_SD_STOP_DECEL`    | Emergency SD stop deceleration                                                |
+| **Braking**  | `CONFIG_BRAKING_LM0_MAX_SPEED`     | Max working speed (pulses/sec)                                                |
+|              | `CONFIG_BRAKING_LM1_LOWER_LIMIT`   | Lower working position limit (pulses, signed)                                 |
+|              | `CONFIG_BRAKING_LM2_UPPER_LIMIT`   | Upper working position limit (pulses, signed)                                 |
+|              | `CONFIG_BRAKING_LM7_MAX_ACCEL`     | Max acceleration (pulses/sec²)                                                |
+|              | `CONFIG_BRAKE_RELEASE_POSITION`    | Target position used when the braking motor should be fully released          |
+|              | `CONFIG_BRAKING_AC_DEFAULT_ACCEL`  | Default AC acceleration                                                       |
+|              | `CONFIG_BRAKING_DC_DEFAULT_DECEL`  | Default DC deceleration                                                       |
+|              | `CONFIG_BRAKING_SD_STOP_DECEL`     | Emergency SD stop deceleration                                                |
+| **PT FIFO**  | `CONFIG_MOTOR_UIM2852_PT_FRAME_TIME_MS`  | PT-mode frame interval in ms (MP[4])                                          |
+|              | `CONFIG_MOTOR_UIM2852_PT_LOW_WATER_MARK` | FIFO low-water threshold for `PVT_FIFO_EMPTY` notifications (MP[5])           |
+|              | `CONFIG_BRAKING_PT_STEP_LIMIT_PULSES_PER_500MS` | Max braking PT target change per 500 ms of commanded motion |
+
+## Control Test Mode
+
+`CONFIG_CONTROL_TEST_MODE` replaces the normal Orin+CAN control loop with a standalone bench-test task for one selected actuator. Choose the actuator with `CONFIG_CONTROL_TEST_ACTUATOR_*`.
+
+- `CONFIG_CONTROL_TEST_ACTUATOR_THROTTLE`: validates throttle hardware (DAC/op-amp/relay/F/R/pedal). Commands: `0-4095 + space/enter` to set DAC, `r` to toggle the DPDT relay, `q` to quit. Requires F/R not in Reverse to arm; disables DAC if F/R moves to Reverse or the pedal is pressed.
+- `CONFIG_CONTROL_TEST_ACTUATOR_STEERING`: validates the steering motor over CAN/PT mode. Commands: `0-720 + space/enter`, `q` to quit.
+- `CONFIG_CONTROL_TEST_ACTUATOR_BRAKING`: validates the braking motor over CAN/PT mode. Commands: `0-3 + space/enter`, `q` to quit.
+
+Only one actuator is driven in a test build. `CONFIG_CONTROL_TEST_MODE` cannot be enabled alongside `CONFIG_PRODUCTION_BUILD`.
 
 ## Debug Logging
 
-Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level):
+Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level). Shared options (Transport, Health) live in `common/kconfig/` and are `rsource`'d by both firmware Kconfigs.
 
-### CAN Traffic & Planner I/O
+### Transport
 
-| Flag                                | Default | Effect                                                |
-| ----------------------------------- | ------- | ----------------------------------------------------- |
-| `CONFIG_LOG_CAN_HEARTBEAT_TX`       | off     | Log every periodic heartbeat TX (very verbose)        |
-| `CONFIG_LOG_CAN_HEARTBEAT_RX`       | off     | Log every received Safety heartbeat, not just changes |
-| `CONFIG_LOG_CAN_PLANNER_COMMAND_RX` | off     | Log every Planner command RX + timeout/stale warnings |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES` | off | Log raw CAN frames (TX and RX) at TWAI driver layer |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES_MOTORS_ONLY` | off | Log motor frames only (suppress standard) |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_SAFETY_HB` | off | Suppress Safety heartbeat from raw frame log |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_CONTROL_HB` | off | Suppress Control heartbeat from raw frame log |
+| `CONFIG_LOG_TRANSPORT_CAN_HEARTBEAT_TX` | off | Log every CAN heartbeat TX |
+| `CONFIG_LOG_TRANSPORT_CAN_HEARTBEAT_RX` | off | Log every CAN heartbeat RX |
+| `CONFIG_LOG_TRANSPORT_ORIN_LINK_FRAMING` | off | Log Orin UART sync/resync/malformed frame events |
+| `CONFIG_LOG_TRANSPORT_ORIN_PLANNER_COMMAND_RX` | off | Log every Orin Planner command RX |
 
-### Component Health & Recovery
+### Health & Recovery
 
-| Flag                                       | Default | Effect                                                        |
-| ------------------------------------------ | ------- | ------------------------------------------------------------- |
-| `CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS`  | on      | Log component LOST/REGAINED edge transitions                  |
-| `CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS` | on      | Log Safety heartbeat monitor lost/regained transitions        |
-| `CONFIG_LOG_CAN_RECOVERY`                  | off     | Log CAN bus recovery events (stop/start, reinstall, bus-off)  |
-| `CONFIG_LOG_RETRY_TWAI`                    | off     | Log repeated TWAI retry attempts (startup and runtime faults) |
-| `CONFIG_LOG_RETRY_DAC`                     | off     | Log DAC retry attempts while faulted                          |
-| `CONFIG_LOG_RETRY_DPDT_RELAY`              | off     | Log DPDT relay retry attempts while faulted                   |
-| `CONFIG_LOG_RETRY_PEDAL_INPUT`             | off     | Log pedal ADC retry attempts while faulted                    |
-| `CONFIG_LOG_RETRY_FR_INPUT`                | off     | Log F/R input retry attempts while faulted                    |
-| `CONFIG_LOG_RETRY_STEPPER_STEERING`        | off     | Log steering stepper retry attempts                           |
-| `CONFIG_LOG_RETRY_STEPPER_BRAKING`         | off     | Log braking stepper retry attempts                            |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_HEALTH_COMPONENT_CHANGES` | on | Log component LOST/REGAINED edge transitions |
+| `CONFIG_LOG_HEALTH_HEARTBEAT_MONITOR_CHANGES` | on | Log Safety heartbeat monitor lost/regained |
+| `CONFIG_LOG_HEALTH_CAN_RECOVERY` | off | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
+| `CONFIG_LOG_HEALTH_RETRY_TWAI` | off | Log TWAI retry attempts |
+| `CONFIG_LOG_HEALTH_RETRY_COMPONENTS` | off | Log all component retry attempts (DAC, relay, pedal, F/R, motors) |
 
-Retries are unbounded for failed required components, paced at 500ms intervals (no maximum attempt limit). HEARTBEAT_LED is non-critical for FAULT gating and is initialized once at startup.
+Retries are unbounded for failed required components, paced at 500ms intervals.
 
 ### Control Logic
 
-| Flag                                       | Default | Effect                                                                    |
-| ------------------------------------------ | ------- | ------------------------------------------------------------------------- |
-| `CONFIG_LOG_CONTROL_STATE_CHANGES`         | on      | Log control state transitions and transition reasons                      |
-| `CONFIG_LOG_CONTROL_FAULT_CHANGES`         | off     | Log control fault code changes                                            |
-| `CONFIG_LOG_CONTROL_STATE_TICK`            | off     | Log state-machine evaluation every 20ms cycle (very verbose)              |
-| `CONFIG_LOG_CONTROL_ENABLE_SEQUENCE`       | off     | Log enable/disable sequence steps (start, complete, abort)                |
-| `CONFIG_LOG_CONTROL_OVERRIDE`              | off     | Log driver override trigger events (reverse, throttle, steering, braking) |
-| `CONFIG_LOG_CONTROL_THROTTLE_CHANGES`      | off     | Log throttle level changes                                                |
-| `CONFIG_LOG_CONTROL_THROTTLE_TICK`         | off     | Log throttle current/target every 20ms cycle (very verbose)               |
-| `CONFIG_LOG_CONTROL_PRECONDITION_BLOCKED`  | on      | Log when enable preconditions block readiness/ENABLE transitions          |
-| `CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES` | on      | Log received Safety target/fault changes seen by Control                  |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_CONTROL_STATE_CHANGES` | on | Log control state transitions and transition reasons |
+| `CONFIG_LOG_CONTROL_FAULT_CHANGES` | off | Log control fault code changes |
+| `CONFIG_LOG_CONTROL_ENABLE_SEQUENCE` | off | Log enable/disable sequence steps (start, complete, abort) |
+| `CONFIG_LOG_CONTROL_OVERRIDE_CHANGES` | off | Log driver override trigger events |
+| `CONFIG_LOG_CONTROL_THROTTLE_CHANGES` | off | Log throttle level changes (edge-triggered) |
+| `CONFIG_LOG_CONTROL_PRECONDITION_BLOCKED` | on | Log when enable preconditions block readiness/ENABLE |
+| `CONFIG_LOG_CONTROL_SAFETY_TARGET_CHANGES` | on | Log received Safety target/fault changes |
 
 ### Inputs
 
-| Flag                            | Default | Effect                                                                                          |
-| ------------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
-| `CONFIG_LOG_INPUT_PEDAL_ADC`    | off     | Log all pedal ADC millivolt readings every cycle (including below threshold; extremely verbose) |
-| `CONFIG_LOG_INPUT_PEDAL_EVENTS` | off     | Log edge-triggered pedal threshold/rearm events                                                 |
-| `CONFIG_LOG_INPUT_FR_DEBOUNCE`  | off     | Log F/R switch debounce transitions                                                             |
-| `CONFIG_LOG_INPUT_FR_STATE`     | off     | Log F/R selector state changes                                                                  |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_INPUT_PEDAL_ADC_ERRORS` | off | Log pedal ADC read errors (I/O failures, out-of-range) |
+| `CONFIG_LOG_INPUT_PEDAL_CHANGES` | off | Log pedal threshold crossed / re-armed transitions |
+| `CONFIG_LOG_INPUT_FR_DEBOUNCE` | off | Log F/R switch debounce transitions |
+| `CONFIG_LOG_INPUT_FR_STATE_CHANGES` | off | Log debounced F/R state changes |
 
 ### Actuators
 
-| Flag                                     | Default | Effect                                              |
-| ---------------------------------------- | ------- | --------------------------------------------------- |
-| `CONFIG_LOG_ACTUATOR_DAC_LEVEL`          | off     | Log DAC throttle level changes                      |
-| `CONFIG_LOG_ACTUATOR_DPDT_RELAY`         | off     | Log DPDT relay energize/de-energize                 |
-| `CONFIG_LOG_ACTUATOR_STEPPER_COMMAND_TX` | off     | Log stepper position commands sent over CAN         |
-| `CONFIG_LOG_ACTUATOR_STEPPER_MOTION_TX`  | off     | Log stepper motion commands (PA/PR/ST)              |
-| `CONFIG_LOG_ACTUATOR_STEPPER_RX`         | off     | Log parsed stepper CAN RX frames (MS, params, ACKs) |
-
-### HEARTBEAT_LED
-
-| Flag                                     | Default | Effect                                                                |
-| ---------------------------------------- | ------- | --------------------------------------------------------------------- |
-| `CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES` | off     | Log every HEARTBEAT_LED color update with color/reason (very verbose) |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_ACTUATOR_DAC_WRITE` | off | Log every MCP4728 I2C register write with DAC level |
+| `CONFIG_LOG_ACTUATOR_DPDT_RELAY_CHANGES` | off | Log DPDT relay energize/de-energize |
+| `CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_INIT` | off | Log motor init/configure handshake |
+| `CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_ENABLE_CHANGES` | off | Log motor MO enable/disable transitions |
+| `CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_COMMAND_TX` | off | Log motor PT feed commands sent over CAN |
+| `CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_MOTION_TX` | off | Log motor motion commands (PA/PR/ST) |
+| `CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_RX` | off | Log parsed motor CAN RX frames |
 
 ## Build
 

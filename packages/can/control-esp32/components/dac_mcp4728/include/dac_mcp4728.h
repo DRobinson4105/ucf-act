@@ -3,8 +3,8 @@
  * @brief MCP4728 4-channel 12-bit I2C DAC driver for throttle control.
  *
  * Uses one channel (A) of the MCP4728 with VDD as the voltage reference
- * to produce 0-VDD (~3.3V) output.  An external op-amp (LM358) in
- * non-inverting configuration (gain ~2.47) scales this to 0-8.5V for
+ * and 1x gain to produce 0-VDD (~3.3V) output. An external op-amp (LM358)
+ * in non-inverting configuration (gain ~2.47) scales this to 0-8.5V for
  * the Curtis 1204 throttle input.
  *
  * Hardware:
@@ -13,7 +13,7 @@
  *   - Channel A output -> LM358 non-inverting amplifier (gain ~2.47)
  *   - LM358 powered from 24V rail, output 0-8.5V -> Curtis Pin 3
  *   - LDAC pin tied to GND for immediate output update
- *   - Power-on reset outputs 0V (safe default)
+ *   - Driver initialization writes channel A to 0 (safe default)
  *
  * The driver accepts throttle levels 0-4095 (12-bit) and verifies
  * each write by reading back the channel register.
@@ -63,8 +63,8 @@ typedef struct
  * @brief Initialize the MCP4728 DAC over I2C.
  *
  * Configures the I2C bus, adds the MCP4728 as a device, and writes
- * channel A to 0 (safe state).  Uses internal 2.048V reference with
- * 2x gain for 0-4.096V output range.
+ * channel A to 0 (safe state). Uses VDD as the reference with 1x gain,
+ * so the raw DAC output range is 0-VDD (~3.3V).
  *
  * @param config  I2C pin assignments and device address
  * @return ESP_OK on success, or an error code on failure
@@ -79,10 +79,10 @@ esp_err_t dac_mcp4728_init(const dac_mcp4728_config_t *config);
  * @brief Set the throttle output level.
  *
  * Writes a 12-bit value to channel A and verifies by reading back.
- * Output voltage = (level / 4096) * 4.096V, scaled by the external
- * op-amp to 0-8.5V.
+ * Raw DAC output voltage = (level / 4096) * VDD, scaled by the external
+ * op-amp to the Curtis throttle range.
  *
- * @param level  Output level 0-4095 (0 = 0V, 4095 = ~4.096V)
+ * @param level  Output level 0-4095 (0 = 0V, 4095 = ~VDD)
  * @return ESP_OK on success, ESP_ERR_INVALID_RESPONSE on verify mismatch
  */
 esp_err_t dac_mcp4728_set_level(uint16_t level);

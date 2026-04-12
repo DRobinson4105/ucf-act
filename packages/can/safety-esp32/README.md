@@ -1,6 +1,8 @@
 # safety-esp32
 
-ESP-IDF firmware for the Safety ESP32-C6. Acts as the **system state authority** — it is the only node that can advance the system forward (NOT_READY -> READY -> ENABLE -> ACTIVE). Monitors all safety inputs, controls the 24V power relay, and broadcasts the system target state via a unified heartbeat.
+ESP-IDF firmware for the Safety ESP32-C6-DevKitM-1. Acts as the **system state authority** — it is the only node that can advance the system forward (NOT_READY -> READY -> ENABLE -> ACTIVE). Monitors all safety inputs, controls the 24V power relay, broadcasts the system target state via a unified heartbeat on CAN, and mirrors that heartbeat to the Orin over a dedicated UART0 link.
+
+The `main/` sources are organized into subdirectories by concern: `config/` (compile-time constants), `state/` (global state declarations), `health/` (component health and recovery), `tasks/` (FreeRTOS task entry points — CAN RX, 20Hz safety loop, heartbeat), `init/` (peripheral bring-up and task creation), `transport/` (CAN RX decode, heartbeat TX, Orin UART link), and `inputs/` (push-button, RF remote, ultrasonic, and battery aggregation). `main.cpp` contains only the production build guard and `app_main` entry point.
 
 ## State Machine
 
@@ -38,7 +40,7 @@ The Safety ESP32 continuously monitors:
 
 1. **Hardware stop inputs**: Push button (HB2-ES544), RF remote (EV1527)
 2. **Obstacle detection**: Ultrasonic sensor A02YYUW (threshold: 2000mm ~6.6ft)
-3. **Node liveness**: Planner and Control heartbeats (timeout: 500ms)
+3. **Node liveness**: Planner heartbeat over the Orin UART link and Control heartbeat over CAN (timeout: 500ms)
 4. **Node causes**: Planner and Control heartbeat cause channels
     - `fault_flags`: unexpected issues (hardware/software faults)
     - `stop_flags`: operator/manual stop inputs (throttle/reverse/steering/braking, app request)
@@ -52,7 +54,7 @@ The Safety ESP32 continuously monitors:
 
 - Push-button and RF remote engage is immediate (safety-critical, no debounce)
 - Push-button and RF remote disengage requires 3 consecutive clear reads (~150ms at 50ms loop) to filter contact bounce
-- Ultrasonic obstacle engage requires 4 consecutive close reads (~200ms) to filter noise/multipath
+- Ultrasonic obstacle engage requires sustained presence for 1000ms to filter noise/multipath
 - Ultrasonic obstacle disengage requires 6 consecutive clear reads (~300ms) to filter ghost echoes
 - Ultrasonic health transitions require 3 consecutive agreeing samples (~150ms) to prevent flap around the 500ms timeout boundary
 
@@ -61,13 +63,25 @@ The Safety ESP32 continuously monitors:
 1. `stop_flags` bitmask for non-fault stop inputs (push button, RF remote, ultrasonic obstacle, planner app stop, control operator stop)
 2. `fault_flags` bitmask for issues/timeouts (ultrasonic unhealthy, planner issue/timeout, control issue/timeout, relay unavailable)
 
-## CAN Messages
+## External Interfaces
+
+### Orin UART Link (COM USB-C port → UART0)
+
+The Orin plugs into the DevKitM-1's **COM** USB-C connector, which routes through the CP2102N bridge to UART0. `usb_serial_link_init()` owns UART0 at 1 Mbaud; `safety_orin_link_rx_task` pulls framed planner heartbeats off the link and `safety_heartbeat_tx` pushes the Safety heartbeat the other way. Frames carry an `ORIN_LINK_SYNC_BYTE` (0xAA) + 1-byte type + 1-byte length header — see [common/protocol/README.md](../common/protocol/README.md) for the wire format.
+
+| Direction | Message           | Description                                                           |
+| --------- | ----------------- | --------------------------------------------------------------------- |
+| RX        | PLANNER_HEARTBEAT | Planner alive/status from Orin                                        |
+| TX        | SAFETY_HEARTBEAT  | Safety heartbeat mirrored to Orin for system-state/status visibility  |
+
+Planner heartbeat payloads reuse the shared `can_protocol` heartbeat layout and are framed on the UART by `orin_link_protocol`. The separate **USB** USB-C connector (native USB Serial JTAG) stays free for `idf.py flash` / `idf.py monitor` from the development laptop.
+
+### CAN Messages
 
 ### Receives
 
 | ID    | Name              | Description                                                       |
 | ----- | ----------------- | ----------------------------------------------------------------- |
-| 0x110 | PLANNER_HEARTBEAT | Planner alive (seq, state, fault_flags, stop_flags, status_flags) |
 | 0x120 | CONTROL_HEARTBEAT | Control alive (seq, state, fault_flags, stop_flags, status_flags) |
 
 ### Sends
@@ -121,7 +135,7 @@ The `fault_flags` byte in Safety heartbeat is a bitmask. Multiple fault bits may
 | Solid green  | Target state READY (no stop/fault active)     |
 | Solid orange | Target state ENABLE                           |
 | Solid blue   | Target state ACTIVE                           |
-| Solid red    | Target state NOT_READY or local fault overlay |
+| Solid red    | Target state NOT_READY                         |
 
 ## Wiring
 
@@ -132,6 +146,7 @@ Each subsection covers production (on-cart) and bench wiring for Safety ESP32 in
 | Interface                    | Bench vs Production                                         |
 | ---------------------------- | ----------------------------------------------------------- |
 | CAN bus (SN65HVD230)         | Same — see [root README](../README.md#can-bus-wiring)       |
+| COM USB-C → Orin (UART0, 1 Mbaud) | Same                                                   |
 | Push button (HB2-ES544)      | Same                                                        |
 | RF remote (EV1527)           | **Different** — receiver needs separate 12V supply on bench |
 | Ultrasonic (A02YYUW)         | Same                                                        |
@@ -157,7 +172,7 @@ Use a small harness splice/star point for each branch (or a small terminal block
 
 ### CAN Bus (SN65HVD230)
 
-GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module via a 4-pin JST-PH connector. Safety ESP32's Waveshare board has onboard termination **enabled** (120 ohm). See the [root README](../README.md#can-bus-wiring) for the full 5-node bus topology including stepper motors.
+GPIO 4 (TX) and GPIO 5 (RX) connect to a WAVESHARE SN65HVD230 CAN transceiver module via a 4-pin JST-PH connector. Safety ESP32's Waveshare board has onboard termination **enabled** (120 ohm). See the [root README](../README.md#can-bus-wiring) for the current CAN topology shared with Control and the UIM2852 motors.
 
 **ESP32-to-transceiver connector (4-pin JST-PH):**
 
@@ -226,7 +241,7 @@ Note the TX/RX crossover: ESP32 TX -> Sensor RX, ESP32 RX -> Sensor TX.
 
 ### Power Relay (SRD-05VDC-SL-C)
 
-GPIO 2 drives an AEDIKO 1-channel 5V relay module (SRD-05VDC-SL-C, optocoupler-isolated trigger). The relay's NO (normally open) terminal switches the 24V autonomous power rail that feeds the stepper motor drivers. The output latch is preloaded LOW before GPIO configuration to keep the relay de-energized on boot/reset.
+GPIO 2 drives an AEDIKO 1-channel 5V relay module (SRD-05VDC-SL-C, optocoupler-isolated trigger). The relay's NO (normally open) terminal switches the 24V autonomous power rail that feeds the UIM2852 motor drivers. The output latch is preloaded LOW before GPIO configuration to keep the relay de-energized on boot/reset.
 
 **Wiring (3-pin):**
 
@@ -236,7 +251,7 @@ GPIO 2 drives an AEDIKO 1-channel 5V relay module (SRD-05VDC-SL-C, optocoupler-i
 | Red        | ESP32 5V pin 2 (splice)         | Relay module VCC          |
 | Black      | GND (noisy/relay branch, pin C) | Relay module GND          |
 
-**Production:** Relay NO terminal connects the 24V power rail to the stepper motor drivers. Energized = 24V flows to motors (vehicle can move). De-energized = 24V cut (fail-safe stop).
+**Production:** Relay NO terminal connects the 24V power rail to the UIM2852 motor drivers. Energized = 24V flows to motors (vehicle can move). De-energized = 24V cut (fail-safe stop).
 
 **Bench:** Same hardware. Relay clicks audibly when toggled — useful for verifying GPIO 2 output. Without a 24V load, the relay opens/closes its contacts with no effect.
 
@@ -246,7 +261,7 @@ GPIO 8 is configured as an RMT TX output driving the onboard WS2812 RGB status L
 
 ### Battery Monitor (LEM HTFS-200-P)
 
-GPIO 0 and GPIO 1 read pack voltage and current via ADC1. Non-safety-critical — failure does not trigger stop; it only affects SOC reporting on CAN (`0x101 SAFETY_BATTERY_STATUS`). The battery monitor retries initialization in the background if the ADC fails at startup.
+GPIO 0 and GPIO 1 read pack voltage and current via ADC1. Non-safety-critical — failure does not trigger stop; it only affects the `soc_pct` field in the Safety heartbeat (byte 5 of `node_heartbeat_t`). The battery monitor retries initialization in the background if the ADC fails at startup.
 
 **Voltage sensing (3-wire, divider split across run):**
 
@@ -276,17 +291,34 @@ The HTFS-200-P is a hall-effect sensor — the pack power cable passes through t
 
 ## Components
 
+Local (`safety-esp32/components/`):
+
 | Component            | Description                                                          |
 | -------------------- | -------------------------------------------------------------------- |
-| `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor                            |
+| `ultrasonic_a02yyuw` | A02YYUW waterproof UART ultrasonic sensor (includes obstacle filter) |
 | `relay_srd05vdc`     | AEDIKO SRD-05VDC-SL-C 5V relay module for 24V autonomous power rail  |
-| `can_twai`           | CAN bus driver wrapper (shared)                                      |
-| `can_protocol`       | Message definitions (shared)                                         |
-| `led_ws2812`         | WS2812 status LED driver (shared)                                    |
-| `heartbeat_monitor`  | CAN node liveness tracking (shared)                                  |
 | `battery_monitor`    | Pack voltage/current ADC sensing and SOC estimation (LEM HTFS-200-P) |
-| `safety_logic`       | Extracted stop/fault evaluation logic (shared, tested)               |
-| `system_state`       | System state machine — target state advancement (shared, tested)     |
+
+Local (`safety-esp32/main/logic/`):
+
+| Component      | Description                                              |
+| -------------- | -------------------------------------------------------- |
+| `safety_logic` | Extracted stop/fault evaluation logic (tested)           |
+| `system_state_machine` | System state machine — target state advancement (tested) |
+
+Shared (`common/`):
+
+| Component                  | Location             | Description                                                              |
+| -------------------------- | -------------------- | ------------------------------------------------------------------------ |
+| `can_twai`                 | `common/drivers`     | CAN bus (TWAI) driver wrapper                                            |
+| `led_ws2812`               | `common/drivers`     | Raw WS2812 RGB transport driver                                          |
+| `can_protocol`             | `common/protocol`    | Shared CAN message struct + encode/decode                                |
+| `orin_link_protocol`       | `common/protocol`    | Typed message helpers for the Orin UART links                            |
+| `usb_serial_link`          | `common/services`    | Framed UART0 transport used by both Control and Safety for the Orin link |
+| `status_led`               | `common/services`    | Node-state → RGB color policy adapter                                    |
+| `node_support`             | `common/services`    | Task watchdog + boot logging helpers                                     |
+| `can_runtime`              | `common/services`    | CAN TX/RX task plumbing and component-health tracking                    |
+| `heartbeat_monitor`        | `common/services`    | Node liveness tracking (per-source timeout masks)                        |
 
 ## Ultrasonic Sensor
 
@@ -306,12 +338,12 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 | Flag                                    | Effect                                                                                                |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `CONFIG_BYPASS_PLANNER_AUTONOMY_GATE`   | Force autonomy request true (bench mode without Orin)                                                 |
-| `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner fault checks                                               |
+| `CONFIG_BYPASS_PLANNER_AUTONOMY_GATE`   | Force autonomy request true (bench mode without the Orin UART link)                                   |
+| `CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS` | Ignore Planner heartbeat timeout + Planner fault checks from the Orin UART link                       |
 | `CONFIG_BYPASS_PLANNER_STATE_MIRROR`    | Simulate Planner state: force READY in NOT_READY/READY, force ENABLE+enable_complete in ENABLE/ACTIVE |
 | `CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS` | Ignore Control heartbeat timeout + Control fault checks                                               |
 | `CONFIG_BYPASS_CONTROL_STATE_MIRROR`    | Simulate Control state: force READY in NOT_READY/READY, force ENABLE+enable_complete in ENABLE/ACTIVE |
-| `CONFIG_BYPASS_CAN_TWAI`                | Disable CAN/TWAI entirely (skip TWAI init/recovery and heartbeat TX/RX)                               |
+| `CONFIG_BYPASS_CAN_TWAI`                | Disable CAN/TWAI entirely (skip Safety/Control CAN heartbeat TX/RX; the Orin UART link stays active)  |
 | `CONFIG_BYPASS_INPUT_PUSH_BUTTON`       | Force push-button stop to inactive (not pressed)                                                      |
 | `CONFIG_BYPASS_INPUT_RF_REMOTE`         | Force RF remote stop to inactive (not engaged)                                                        |
 | `CONFIG_BYPASS_INPUT_ULTRASONIC`        | Force ultrasonic clear and healthy (skip sensor)                                                      |
@@ -319,68 +351,57 @@ Compile-time Kconfig flags for bench testing without the full system connected. 
 
 ## Debug Logging
 
-Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level):
+Compile-time Kconfig flags for verbose logging. Enable via `idf.py menuconfig` under **Debug Logging** (top-level). Shared options (Transport, Health) live in `common/kconfig/` and are `rsource`'d by both firmware Kconfigs.
 
-### CAN Traffic
+### Transport
 
-| Flag                                        | Default | Effect                                               |
-| ------------------------------------------- | ------- | ---------------------------------------------------- |
-| `CONFIG_LOG_CAN_FRAMES`                     | off     | Log raw CAN frames (TX and RX) at TWAI driver layer  |
-| `CONFIG_LOG_CAN_FRAMES_MOTORS_ONLY`         | off     | Log stepper motor frames only (suppress standard)    |
-| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_SAFETY_HB`  | off     | Suppress Safety heartbeat from raw frame log         |
-| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_PLANNER_HB` | off     | Suppress Planner heartbeat from raw frame log        |
-| `CONFIG_LOG_CAN_FRAMES_SUPPRESS_CONTROL_HB` | off     | Suppress Control heartbeat from raw frame log        |
-| `CONFIG_LOG_CAN_HEARTBEAT_TX`               | off     | Log every periodic heartbeat TX (very verbose)       |
-| `CONFIG_LOG_CAN_HEARTBEAT_RX`               | off     | Log every received heartbeat, not just state changes |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES` | off | Log raw CAN frames (TX and RX) at TWAI driver layer |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES_MOTORS_ONLY` | off | Log motor frames only (suppress standard) |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_SAFETY_HB` | off | Suppress Safety heartbeat from raw frame log |
+| `CONFIG_LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_CONTROL_HB` | off | Suppress Control heartbeat from raw frame log |
+| `CONFIG_LOG_TRANSPORT_CAN_HEARTBEAT_TX` | off | Log every CAN heartbeat TX |
+| `CONFIG_LOG_TRANSPORT_CAN_HEARTBEAT_RX` | off | Log every CAN heartbeat RX |
+| `CONFIG_LOG_TRANSPORT_ORIN_LINK_FRAMING` | off | Log Orin UART sync/resync/malformed frame events |
+| `CONFIG_LOG_TRANSPORT_ORIN_PLANNER_HEARTBEAT_RX` | off | Log every Orin Planner heartbeat RX |
 
-### Component Health & Recovery
+### Health & Recovery
 
-| Flag                                       | Default | Effect                                                       |
-| ------------------------------------------ | ------- | ------------------------------------------------------------ |
-| `CONFIG_LOG_COMPONENT_HEALTH_TRANSITIONS`  | on      | Log component LOST/REGAINED edge transitions                 |
-| `CONFIG_LOG_HEARTBEAT_MONITOR_TRANSITIONS` | on      | Log Planner/Control heartbeat monitor lost/regained events   |
-| `CONFIG_LOG_CAN_RECOVERY`                  | off     | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
-| `CONFIG_LOG_RETRY_TWAI`                    | off     | Log TWAI retry attempts                                      |
-| `CONFIG_LOG_RETRY_PUSH_BUTTON`             | off     | Log push-button retry attempts                               |
-| `CONFIG_LOG_RETRY_RF_REMOTE`               | off     | Log RF-remote retry attempts                                 |
-| `CONFIG_LOG_RETRY_ULTRASONIC`              | off     | Log ultrasonic retry attempts                                |
-| `CONFIG_LOG_RETRY_POWER_RELAY`             | off     | Log power-relay retry attempts                               |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_HEALTH_COMPONENT_CHANGES` | on | Log component LOST/REGAINED edge transitions |
+| `CONFIG_LOG_HEALTH_HEARTBEAT_MONITOR_CHANGES` | on | Log Planner/Control heartbeat monitor lost/regained |
+| `CONFIG_LOG_HEALTH_CAN_RECOVERY` | off | Log CAN bus recovery events (stop/start, reinstall, bus-off) |
+| `CONFIG_LOG_HEALTH_RETRY_TWAI` | off | Log TWAI retry attempts |
+| `CONFIG_LOG_HEALTH_RETRY_COMPONENTS` | off | Log all component retry attempts (push button, RF remote, ultrasonic, relay) |
 
-Safety retries failed GPIO-attached safety components indefinitely at 500ms intervals until they are healthy again (no maximum attempt limit).
-HEARTBEAT_LED is non-critical and initialized once at startup.
+Safety retries failed components indefinitely at 500ms intervals.
 
 ### Safety Logic
 
-| Flag                              | Default | Effect                                                         |
-| --------------------------------- | ------- | -------------------------------------------------------------- |
-| `CONFIG_LOG_SAFETY_ESTOP_INPUTS`  | off     | Log safety input snapshot every 50ms cycle (extremely verbose) |
-| `CONFIG_LOG_SAFETY_STATE_CHANGES` | on      | Log target-state transitions and autonomy-request gate events  |
-| `CONFIG_LOG_SAFETY_FAULT_CHANGES` | on      | Log Safety fault/stop channel transitions                      |
-| `CONFIG_LOG_SAFETY_STATE_TICK`    | off     | Log state-machine evaluation every 50ms cycle (very verbose)   |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_SAFETY_STATE_CHANGES` | on | Log target-state transitions and autonomy-request gate events |
+| `CONFIG_LOG_SAFETY_FAULT_CHANGES` | on | Log Safety fault/stop channel transitions |
 
 ### Inputs
 
-| Flag                                       | Default | Effect                                                                   |
-| ------------------------------------------ | ------- | ------------------------------------------------------------------------ |
-| `CONFIG_LOG_INPUT_PUSH_BUTTON`             | off     | Log push-button state changes (pressed/released)                         |
-| `CONFIG_LOG_INPUT_RF_REMOTE`               | off     | Log RF remote state changes (engaged/disengaged)                         |
-| `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE`     | off     | Log every valid ultrasonic distance reading (~5-10/sec)                  |
-| `CONFIG_LOG_INPUT_ULTRASONIC_RX`           | off     | Log raw ultrasonic UART RX bytes (extremely verbose)                     |
-| `CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS` | off     | Log ultrasonic UART parse failures                                       |
-| `CONFIG_LOG_INPUT_BATTERY_VOLTAGE`         | off     | Log battery voltage, current, and SOC every update (very verbose, 20 Hz) |
-| `CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES`     | on      | Log SOC percentage changes (>=1%) and voltage-based recalibration events |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_INPUT_PUSH_BUTTON_CHANGES` | off | Log push-button pressed/released transitions |
+| `CONFIG_LOG_INPUT_RF_REMOTE_CHANGES` | off | Log RF remote engaged/disengaged transitions |
+| `CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE_TICK` | off | Log every valid ultrasonic distance reading |
+| `CONFIG_LOG_INPUT_ULTRASONIC_RX` | off | Log raw ultrasonic UART RX bytes (very verbose) |
+| `CONFIG_LOG_INPUT_ULTRASONIC_PARSE_ERRORS` | off | Log ultrasonic frame parse failures |
+| `CONFIG_LOG_INPUT_BATTERY_TICK` | off | Log battery voltage/current/SOC every update (20 Hz) |
+| `CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES` | on | Log SOC percentage changes (>=1%) and recalibration |
 
 ### Actuators
 
-| Flag                                    | Default | Effect                                     |
-| --------------------------------------- | ------- | ------------------------------------------ |
-| `CONFIG_LOG_ACTUATOR_POWER_RELAY_STATE` | off     | Log power relay enable/disable transitions |
-
-### Heartbeat LED
-
-| Flag                                     | Default | Effect                                                                |
-| ---------------------------------------- | ------- | --------------------------------------------------------------------- |
-| `CONFIG_LOG_HEARTBEAT_LED_COLOR_UPDATES` | off     | Log every heartbeat LED color update with color/reason (very verbose) |
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `CONFIG_LOG_ACTUATOR_POWER_RELAY_CHANGES` | off | Log power relay enable/disable transitions |
 
 ## Build
 

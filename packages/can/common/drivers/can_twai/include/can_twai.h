@@ -49,31 +49,16 @@ esp_err_t can_twai_init_default(gpio_num_t tx_gpio, gpio_num_t rx_gpio);
 // ============================================================================
 
 /**
- * @brief Transmit a standard 11-bit CAN frame with 8-byte payload.
+ * @brief Transmit a CAN frame (standard or extended).
  *
- * Queues a standard CAN frame for transmission. Blocks up to @p timeout
- * ticks if the TX queue is full.
+ * Sends a fully constructed twai_message_t. The frame type is determined
+ * by the msg->extd field (0 = standard 11-bit, 1 = extended 29-bit).
  *
- * @param identifier  11-bit CAN identifier
- * @param data        Pointer to 8-byte payload
- * @param timeout     Maximum ticks to wait for space in the TX queue
- * @return ESP_OK on success, ESP_ERR_TIMEOUT if TX queue full
- */
-esp_err_t can_twai_send(uint32_t identifier, const uint8_t data[8], TickType_t timeout);
-
-/**
- * @brief Transmit an extended 29-bit CAN frame with variable payload length.
- *
- * Queues an extended CAN frame for transmission. Used for protocols that
- * require 29-bit identifiers, such as the UIM2852CA motor protocol (SimpleCAN).
- *
- * @param identifier  29-bit extended CAN identifier
- * @param data        Pointer to payload data
- * @param dlc         Data length code (0–8)
- * @param timeout     Maximum ticks to wait for space in the TX queue
+ * @param msg      Fully constructed CAN frame to send
+ * @param timeout  Maximum ticks to wait for space in the TX queue
  * @return ESP_OK on success, or an error code on failure
  */
-esp_err_t can_twai_send_extended(uint32_t identifier, const uint8_t *data, uint8_t dlc, TickType_t timeout);
+esp_err_t can_twai_send(const twai_message_t *msg, TickType_t timeout);
 
 // ============================================================================
 // Receive Functions

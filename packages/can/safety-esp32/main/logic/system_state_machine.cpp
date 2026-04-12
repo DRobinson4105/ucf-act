@@ -1,0 +1,167 @@
+/**
+ * @file system_state_machine.cpp
+ * @brief Pure decision logic for Safety ESP32 system state machine.
+ */
+
+#include "system_state_machine.h"
+#include "can_protocol.h"
+
+system_state_result_t system_state_step(const system_state_inputs_t *inputs)
+{
+	system_state_result_t r = {
+		.new_target = NODE_STATE_NOT_READY,
+		.target_changed = false,
+	};
+
+	if (!inputs)
+		return r;
+
+	node_state_t current = inputs->current_target;
+	bool nodes_ready = (inputs->planner_state == NODE_STATE_READY && inputs->control_state == NODE_STATE_READY);
+
+	// INIT dwell handling: hold INIT for a minimum stabilization period.
+	// This is evaluated before retreat checks so Safety can complete startup
+	// sequencing deterministically.
+	if (current == NODE_STATE_INIT)
+	{
+		uint32_t elapsed = inputs->now_ms - inputs->boot_start_ms;
+		if (elapsed >= inputs->init_dwell_ms)
+		{
+			bool can_enter_ready =
+				(!inputs->stop_active && inputs->planner_alive && inputs->control_alive && nodes_ready);
+			r.new_target = can_enter_ready ? NODE_STATE_READY : NODE_STATE_NOT_READY;
+			r.target_changed = true;
+		}
+		else
+		{
+			r.new_target = NODE_STATE_INIT;
+			r.target_changed = false;
+		}
+		return r;
+	}
+
+	bool autonomy_halt = ((current == NODE_STATE_ENABLE || current == NODE_STATE_ACTIVE) && !inputs->autonomy_hold);
+
+	// ----------------------------------------------------------------
+	// Problem retreat: any hard negative condition forces NOT_READY.
+	// ----------------------------------------------------------------
+	if (inputs->stop_active || !inputs->planner_alive || !inputs->control_alive)
+	{
+		r.new_target = NODE_STATE_NOT_READY;
+		r.target_changed = (current != NODE_STATE_NOT_READY);
+		return r;
+	}
+
+	// Planner autonomy hold dropped: retreat out of ENABLE/ACTIVE.
+	if (autonomy_halt)
+	{
+		r.new_target = nodes_ready ? NODE_STATE_READY : NODE_STATE_NOT_READY;
+		r.target_changed = (current != r.new_target);
+		return r;
+	}
+
+	// ----------------------------------------------------------------
+	// Forward transitions (only when no negative conditions)
+	// ----------------------------------------------------------------
+	switch (current)
+	{
+	case NODE_STATE_NOT_READY:
+		if (nodes_ready)
+		{
+			r.new_target = NODE_STATE_READY;
+			r.target_changed = true;
+		}
+		else
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = false;
+		}
+		break;
+
+	case NODE_STATE_READY:
+		// READY means both nodes are locally READY. If either node drops
+		// out of READY without fault/override, retreat to NOT_READY.
+		if (!nodes_ready)
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = true;
+		}
+		// Advance to ENABLE on Planner/Orin request.
+		else if (inputs->autonomy_request)
+		{
+			r.new_target = NODE_STATE_ENABLE;
+			r.target_changed = true;
+		}
+		else
+		{
+			r.new_target = NODE_STATE_READY;
+			r.target_changed = false;
+		}
+		break;
+
+	case NODE_STATE_ENABLE:
+		// ENABLE timeout: nodes must complete within the allowed window.
+		// If they don't, retreat to NOT_READY as a safety measure.
+		if (inputs->enable_timeout_ms > 0 && inputs->enable_elapsed_ms >= inputs->enable_timeout_ms)
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = true;
+			break;
+		}
+		// Advance to ACTIVE when both nodes are ENABLE and
+		// both have signaled enable_complete
+		if (inputs->planner_state == NODE_STATE_ENABLE && inputs->control_state == NODE_STATE_ENABLE &&
+		    inputs->planner_enable_complete && inputs->control_enable_complete)
+		{
+			r.new_target = NODE_STATE_ACTIVE;
+			r.target_changed = true;
+		}
+		else if (inputs->planner_state == NODE_STATE_NOT_READY || inputs->control_state == NODE_STATE_NOT_READY ||
+		         inputs->planner_state == NODE_STATE_INIT || inputs->control_state == NODE_STATE_INIT)
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = true;
+		}
+		else
+		{
+			// Stay in ENABLE — nodes are still working.
+			r.new_target = NODE_STATE_ENABLE;
+			r.target_changed = false;
+		}
+		break;
+
+	case NODE_STATE_ACTIVE:
+	{
+		bool planner_active = (inputs->planner_state == NODE_STATE_ACTIVE);
+		bool control_active = (inputs->control_state == NODE_STATE_ACTIVE);
+
+		// Right after ENABLE -> ACTIVE, nodes may still report ENABLE for a
+		// short handoff window while they consume the new target.
+		if (inputs->active_entry_grace)
+		{
+			planner_active = (inputs->planner_state == NODE_STATE_ACTIVE || inputs->planner_state == NODE_STATE_ENABLE);
+			control_active = (inputs->control_state == NODE_STATE_ACTIVE || inputs->control_state == NODE_STATE_ENABLE);
+		}
+
+		if (!planner_active || !control_active)
+		{
+			r.new_target = NODE_STATE_NOT_READY;
+			r.target_changed = true;
+		}
+		else
+		{
+			r.new_target = NODE_STATE_ACTIVE;
+			r.target_changed = false;
+		}
+		break;
+	}
+
+	default:
+		// Unknown state — retreat to NOT_READY
+		r.new_target = NODE_STATE_NOT_READY;
+		r.target_changed = (current != NODE_STATE_NOT_READY);
+		break;
+	}
+
+	return r;
+}

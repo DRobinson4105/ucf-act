@@ -13,9 +13,11 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "system_state.h"
+#include "system_state_machine.h"
 #include "control_logic.h"
 #include "can_protocol.h"
+
+static constexpr int16_t TEST_THROTTLE_SLEW_STEP = 12;
 
 // ============================================================================
 // Default input builders
@@ -68,11 +70,11 @@ static control_inputs_t default_ctrl_inputs(void)
 	in.throttle_current = 0;
 	in.last_throttle_change_ms = 0;
 	in.throttle_slew_interval_ms = 100;
-	in.throttle_slew_step = 12;
+	in.throttle_slew_step = TEST_THROTTLE_SLEW_STEP;
 	in.throttle_min = 0;
 	in.throttle_max = 4095;
-	in.last_steering_sent = STEPPER_DEDUP_RESET_STEERING;
-	in.last_braking_sent = STEPPER_DEDUP_RESET_BRAKING;
+	in.last_steering_sent = MOTOR_DEDUP_RESET_STEERING;
+	in.last_braking_sent = MOTOR_DEDUP_RESET_BRAKING;
 	in.steering_min = -3000;
 	in.steering_max = 3000;
 	in.braking_min = -3000;

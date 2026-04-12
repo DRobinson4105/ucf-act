@@ -87,11 +87,13 @@ void ultrasonic_a02yyuw_deinit(void);
  * @brief Get the latest distance measurement in millimeters.
  *
  * Returns the most recent valid distance reading buffered from the
- * sensor's UART output. The output pointer is only written when a
- * fresh sample is available.
+ * sensor's UART output, as long as that reading is still considered
+ * fresh by the driver's sample-age window. This may return the same
+ * cached reading on multiple calls until it ages out or a newer valid
+ * sample replaces it.
  *
  * @param out_distance_mm  Pointer to store distance (only written on success)
- * @return true if a fresh sample is available, false if no new data
+ * @return true if a recent valid reading is available, false if absent or stale
  */
 bool ultrasonic_a02yyuw_get_distance_mm(uint16_t *out_distance_mm);
 

@@ -47,6 +47,7 @@ TickType_t s_last_frame_tick = 0;
 bool s_has_frame = false;
 TaskHandle_t s_rx_task = nullptr;
 bool s_uart_installed = false;
+// Only accessed from ultrasonic_a02yyuw_uart_rx_task — no lock needed.
 uint32_t s_range_drop_count = 0;
 volatile bool s_stop_requested = false;
 uint8_t s_parser_frame[4] = {};
@@ -235,7 +236,7 @@ void ultrasonic_a02yyuw_uart_rx_task(void *arg)
 			if (ultrasonic_a02yyuw_parse_stream(buffer, read_len, &distance_mm))
 			{
 				ultrasonic_a02yyuw_update_distance(distance_mm);
-#ifdef CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE
+#ifdef CONFIG_LOG_INPUT_ULTRASONIC_DISTANCE_TICK
 				ESP_LOGI(TAG, "Distance: %u mm", distance_mm);
 #endif
 			}

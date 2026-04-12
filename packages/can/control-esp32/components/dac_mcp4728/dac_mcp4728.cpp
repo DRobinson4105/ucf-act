@@ -147,8 +147,10 @@ esp_err_t write_channel_a(uint16_t level)
  */
 esp_err_t read_channel_a(uint16_t *out_level)
 {
-	if (!s_dev_handle || !out_level)
+	if (!s_dev_handle)
 		return ESP_ERR_INVALID_STATE;
+	if (!out_level)
+		return ESP_ERR_INVALID_ARG;
 
 	// MCP4728 read: returns 3 bytes per channel × 4 channels × 2 (input + EEPROM) = 24 bytes.
 	// Channel A DAC input register is in bytes 0-2:
@@ -248,6 +250,10 @@ esp_err_t dac_mcp4728_set_level(uint16_t level)
 	esp_err_t err = write_channel_a(level);
 	if (err != ESP_OK)
 		return err;
+
+#ifdef CONFIG_LOG_ACTUATOR_DAC_WRITE
+	ESP_LOGI(TAG, "DAC write: level=%u", level);
+#endif
 
 	// Read back and verify
 	uint16_t readback = 0xFFFF;

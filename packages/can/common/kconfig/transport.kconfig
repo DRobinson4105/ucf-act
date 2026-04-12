@@ -1,0 +1,55 @@
+# Shared transport logging — CAN and Orin UART wire-level visibility.
+# rsource'd by both control-esp32 and safety-esp32 Kconfig.projbuild.
+
+    config LOG_TRANSPORT_CAN_FRAMES
+        bool "Log raw CAN frames (TX and RX)"
+        default n
+        help
+            Log every CAN frame at the TWAI driver layer. Very verbose —
+            one line per frame sent or received.
+
+    config LOG_TRANSPORT_CAN_FRAMES_MOTORS_ONLY
+        bool "Log motor frames only (suppress all standard frames)"
+        default n
+        depends on LOG_TRANSPORT_CAN_FRAMES
+        help
+            Only log extended CAN frames (motor traffic).
+            Suppresses standard frames (heartbeats). Overrides the
+            individual heartbeat suppress options below.
+
+    config LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_SAFETY_HB
+        bool "Suppress Safety heartbeat frames (0x100) from frame log"
+        default n
+        depends on LOG_TRANSPORT_CAN_FRAMES
+        help
+            Exclude Safety heartbeat frames from the raw frame log.
+
+    config LOG_TRANSPORT_CAN_FRAMES_SUPPRESS_CONTROL_HB
+        bool "Suppress Control heartbeat frames (0x120) from frame log"
+        default n
+        depends on LOG_TRANSPORT_CAN_FRAMES
+        help
+            Exclude Control heartbeat frames from the raw frame log.
+
+    config LOG_TRANSPORT_CAN_HEARTBEAT_TX
+        bool "Log CAN heartbeat TX: every frame"
+        default n
+        help
+            Log every successful heartbeat TX frame and every per-tick
+            TX failure. Without this option, only the first failure and
+            first recovery are logged (edge-triggered).
+
+    config LOG_TRANSPORT_CAN_HEARTBEAT_RX
+        bool "Log CAN heartbeat RX: every frame"
+        default n
+        help
+            Log every received heartbeat update with sequence, state,
+            fault flags, and status flags. Very verbose.
+
+    config LOG_TRANSPORT_ORIN_LINK_FRAMING
+        bool "Log Orin UART link framing events"
+        default n
+        help
+            Log sync byte hunt, resync, and malformed frame events
+            in the usb_serial_link transport layer. Useful for
+            debugging corrupted or misaligned Orin UART traffic.
