@@ -44,7 +44,7 @@ static int32_t braking_to_pt_position(uint8_t braking)
 
 static int32_t steering_to_pt_position(uint16_t steering)
 {
-    return ((int32_t)steering - 360) * 50;
+    return ((int32_t)steering - 360) * 444;
 }
 
 static int32_t clamp_pt_step(int32_t last_sent_pt, int32_t desired_pt, int32_t clamp_pulses)
@@ -168,6 +168,46 @@ static esp_err_t run_pt_command(uint8_t node_id, int32_t queued_position)
 
     vSemaphoreDelete(wait.done_sem);
     return wait.result.status == MOTOR_EXEC_STATUS_SUCCESS ? ESP_OK : ESP_FAIL;
+}
+
+static esp_err_t run_pa_get_command(uint8_t node_id)
+{
+    brake_pt_wait_t wait = {0};
+    motor_exec_submit_opts_t opts = {
+        .on_complete = brake_pt_completion_cb,
+        .ctx = &wait,
+        .timing = motor_exec_default_timing(),
+    };
+    motor_exec_submit_result_t submit;
+
+    wait.done_sem = xSemaphoreCreateBinary();
+    if (wait.done_sem == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    submit = motor_exec_brake_pa_get(node_id, true, &opts);
+    if (!submit.accepted) {
+        vSemaphoreDelete(wait.done_sem);
+        return submit.err != ESP_OK ? submit.err : ESP_FAIL;
+    }
+
+    if (!(xSemaphoreTake(wait.done_sem,
+                         opts.timing.timeout_ticks + opts.timing.no_ack_grace_ticks + pdMS_TO_TICKS(25)) ==
+          pdTRUE &&
+          wait.completed)) {
+        vSemaphoreDelete(wait.done_sem);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    vSemaphoreDelete(wait.done_sem);
+    return wait.result.status == MOTOR_EXEC_STATUS_SUCCESS ? ESP_OK : ESP_FAIL;
+}
+
+static void maybe_log_pa_get_failure(uint8_t node_id, esp_err_t err)
+{
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "PA_GET failed node=%u rc=%s", (unsigned)node_id, esp_err_to_name(err));
+    }
 }
 
 /* Plan Execution */
@@ -400,9 +440,13 @@ static esp_err_t run_setup_flow(void)
                         err = run_pt_command(SETUP_BRAKE_MOTOR_NODE_ID, next_brake_pt);
                         if (err == ESP_OK) {
                             last_sent_brake_pt = next_brake_pt;
+                            maybe_log_pa_get_failure(SETUP_BRAKE_MOTOR_NODE_ID,
+                                                     run_pa_get_command(SETUP_BRAKE_MOTOR_NODE_ID));
                             err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
                             if (err == ESP_OK) {
                                 last_sent_steering_pt = next_steering_pt;
+                                maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
+                                                         run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
                             }
                         }
                     } else {
@@ -410,7 +454,7 @@ static esp_err_t run_setup_flow(void)
                         const int32_t next_brake_pt = clamp_pt_step(last_sent_brake_pt,
                                                                     desired_brake_pt,
                                                                     BRAKING_PT_POSITION_CLAMP_PULSES);
-                        const int32_t desired_steering_pt = steering_to_pt_position(0U);
+                        const int32_t desired_steering_pt = steering_to_pt_position(360U);
                         const int32_t next_steering_pt = clamp_pt_step(last_sent_steering_pt,
                                                                        desired_steering_pt,
                                                                        STEERING_PT_POSITION_CLAMP_PULSES);
@@ -418,7 +462,7 @@ static esp_err_t run_setup_flow(void)
                         ESP_LOGW(TAG,
                                  "pt uart/frame state=missing using default braking=%u steering=%u brake_desired_pt=%ld brake_next_pt=%ld brake_last_pt=%ld steering_desired_pt=%ld steering_next_pt=%ld steering_last_pt=%ld",
                                  0U,
-                                 0U,
+                                 360U,
                                  (long)desired_brake_pt,
                                  (long)next_brake_pt,
                                  (long)last_sent_brake_pt,
@@ -429,9 +473,13 @@ static esp_err_t run_setup_flow(void)
                         err = run_pt_command(SETUP_BRAKE_MOTOR_NODE_ID, next_brake_pt);
                         if (err == ESP_OK) {
                             last_sent_brake_pt = next_brake_pt;
+                            maybe_log_pa_get_failure(SETUP_BRAKE_MOTOR_NODE_ID,
+                                                     run_pa_get_command(SETUP_BRAKE_MOTOR_NODE_ID));
                             err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
                             if (err == ESP_OK) {
                                 last_sent_steering_pt = next_steering_pt;
+                                maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
+                                                         run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
                             }
                         }
                     }
