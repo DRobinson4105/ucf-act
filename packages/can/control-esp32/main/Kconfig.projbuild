@@ -266,6 +266,13 @@ menu "Test Bypasses"
                 Ignore Safety heartbeat timeout. Use when testing Control
                 without a Safety ESP32 on the bus.
 
+        config BYPASS_PLANNER_LIVENESS_CHECKS
+            bool "Bypass Planner liveness check: ignore heartbeat timeout"
+            default n
+            help
+                Ignore Planner heartbeat timeout. Use when testing Control
+                without an Orin connected over UART.
+
     endmenu
 
     menu "Planner Inputs"

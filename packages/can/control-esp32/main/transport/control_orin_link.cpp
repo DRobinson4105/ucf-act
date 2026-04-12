@@ -1,11 +1,17 @@
 /**
  * @file control_orin_link.cpp
  * @brief Control-side Orin UART link helpers.
+ *
+ * Receives two message types from the Orin:
+ *   - Type 0x01 (PLANNER_COMMAND): throttle/steering/braking commands
+ *   - Type 0x02 (PLANNER_HEARTBEAT): planner liveness + autonomy request
  */
 
 #include "control_orin_link.h"
 
+#include "can_protocol.h"
 #include "esp_log.h"
+#include "heartbeat_monitor.h"
 #include "node_support.h"
 #include "orin_link_protocol.h"
 #include "usb_serial_link.h"
@@ -37,17 +43,38 @@ void control_orin_link_rx_task(void *param)
 			continue;
 		}
 
-		if (msg.type != ORIN_LINK_MSG_PLANNER_COMMAND)
+		if (msg.type == ORIN_LINK_MSG_PLANNER_COMMAND)
+		{
+			if (!control_can_rx_process_planner_command_payload(msg.payload, msg.payload_len, ctx->cmd_lock, ctx->snapshot,
+			                                                    ctx->tag, "Orin planner cmd"))
+			{
+				ESP_LOGW(ctx->tag, "Orin planner command decode failed (len=%u)", msg.payload_len);
+			}
+		}
+		else if (msg.type == ORIN_LINK_MSG_PLANNER_HEARTBEAT)
+		{
+			// Feed planner heartbeat to the heartbeat monitor for liveness tracking.
+			if (ctx->monitor)
+			{
+				node_heartbeat_t hb;
+				if (can_decode_heartbeat(msg.payload, msg.payload_len, &hb))
+				{
+					heartbeat_monitor_update(ctx->monitor, ctx->planner_node_handle, hb.sequence, hb.state);
+				}
+			}
+#ifdef CONFIG_LOG_TRANSPORT_ORIN_PLANNER_HEARTBEAT_RX
+			{
+				node_heartbeat_t hb;
+				if (can_decode_heartbeat(msg.payload, msg.payload_len, &hb))
+					ESP_LOGI(ctx->tag, "Orin planner HB: seq=%u state=%s fault=%s",
+					         hb.sequence, node_state_to_string(hb.state), node_fault_to_string(hb.fault_flags));
+			}
+#endif
+		}
+		else
 		{
 			ESP_LOGW(ctx->tag, "Ignoring Orin message type=%s len=%u", orin_link_message_type_to_string(msg.type),
 			         msg.payload_len);
-			continue;
-		}
-
-		if (!control_can_rx_process_planner_command_payload(msg.payload, msg.payload_len, ctx->cmd_lock, ctx->snapshot,
-		                                                    ctx->tag, "Orin planner cmd"))
-		{
-			ESP_LOGW(ctx->tag, "Orin planner command decode failed (len=%u)", msg.payload_len);
 		}
 	}
 }

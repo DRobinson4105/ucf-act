@@ -96,6 +96,7 @@ uint32_t g_last_retry_ms = 0;
 // Heartbeat monitor
 heartbeat_monitor_t g_hb_monitor;
 int g_node_safety = -1;
+int g_node_planner = -1;
 
 // Motor state (per-motor, updated from CAN RX)
 motor_uim2852_state_t g_steering_state = {};

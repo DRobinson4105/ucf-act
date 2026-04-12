@@ -243,35 +243,32 @@ void control_task(void *param)
 		cmd_local.braking_cmd = BRAKING_PLANNER_ZERO_POSITION;
 #endif
 
-		// Check Safety heartbeat timeout — retreat to READY if Safety is gone.
+		// Check Safety and Planner heartbeat timeouts — retreat if either is gone.
 		heartbeat_monitor_check_timeouts(&g_hb_monitor);
 		bool safety_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_safety);
+		bool planner_alive = heartbeat_monitor_is_alive(&g_hb_monitor, g_node_planner);
 #ifdef CONFIG_BYPASS_SAFETY_LIVENESS_CHECKS
 		safety_alive = true;
 #endif
-		if (!safety_alive)
+#ifdef CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS
+		planner_alive = true;
+#endif
+		if (!safety_alive || !planner_alive)
 		{
 			cmd_local.target_state = NODE_STATE_NOT_READY; // retreat to safe state
 		}
 
-		// Check Planner command freshness - zero throttle if stale
+		// Check Planner command freshness - zero throttle if stale.
+		// Only sequence-based: if the same sequence number has been seen
+		// PLANNER_CMD_STALE_COUNT times, the Orin has stopped sending.
+		// Identical commands with incrementing sequence are legitimate
+		// (e.g., steady straight driving).
 #ifndef CONFIG_BYPASS_PLANNER_COMMAND_STALE_CHECKS
-		TickType_t planner_age = xTaskGetTickCount() - cmd_local.last_planner_cmd_tick;
 		bool planner_cmd_stale = false;
 
 		if (g_control_state == NODE_STATE_ACTIVE && cmd_local.last_planner_cmd_tick > 0)
 		{
-			// Timeout: no command received for PLANNER_CMD_TIMEOUT
-			if (planner_age > PLANNER_CMD_TIMEOUT)
-			{
-				planner_cmd_stale = true;
-			}
-			// Stale sequence: same sequence seen PLANNER_CMD_STALE_COUNT times
-			// AND command is also past half the timeout window. This prevents
-			// false stale detection when Planner legitimately retransmits the
-			// same command rapidly within the timeout.
-			else if (cmd_local.planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT &&
-			         planner_age > (PLANNER_CMD_TIMEOUT / 2))
+			if (cmd_local.planner_cmd_stale_count >= PLANNER_CMD_STALE_COUNT)
 			{
 				planner_cmd_stale = true;
 			}

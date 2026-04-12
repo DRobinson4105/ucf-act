@@ -104,10 +104,11 @@ void main_task(void *param)
 		status_led_set_state(NODE_STATE_INIT);
 	}
 
-	// Initialize heartbeat monitor to detect Safety heartbeat timeout.
+	// Initialize heartbeat monitor to detect Safety and Planner heartbeat timeouts.
 	heartbeat_monitor_config_t hb_cfg = {.name = "CONTROL"};
 	heartbeat_monitor_init(&g_hb_monitor, &hb_cfg);
 	g_node_safety = heartbeat_monitor_register(&g_hb_monitor, "Safety", HEARTBEAT_TIMEOUT_MS);
+	g_node_planner = heartbeat_monitor_register(&g_hb_monitor, "Planner", HEARTBEAT_TIMEOUT_MS);
 
 	err = usb_serial_link_init();
 	g_orin_link_ready = (err == ESP_OK);
@@ -118,6 +119,8 @@ void main_task(void *param)
 		.tag = TAG_RX,
 		.cmd_lock = &g_cmd_lock,
 		.snapshot = &g_cmd,
+		.monitor = &g_hb_monitor,
+		.planner_node_handle = g_node_planner,
 	};
 	if (g_orin_link_ready &&
 	    xTaskCreate(control_orin_link_rx_task, "orin_rx", CAN_RX_TASK_STACK, &g_orin_rx_ctx, CAN_RX_TASK_PRIO,

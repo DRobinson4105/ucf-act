@@ -6,6 +6,7 @@
 
 #include "control_can_rx.h"
 #include "freertos/FreeRTOS.h"
+#include "heartbeat_monitor.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -17,6 +18,8 @@ typedef struct
 	const char *tag;
 	portMUX_TYPE *cmd_lock;
 	volatile command_snapshot_t *snapshot;
+	heartbeat_monitor_t *monitor;
+	int planner_node_handle;
 } control_orin_link_rx_context_t;
 
 void control_orin_link_rx_task(void *param);

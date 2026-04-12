@@ -25,6 +25,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import String
+from msgs.msg import ESP32Heartbeat
 
 from convex_client import push_telemetry, push_route, poll_assignment, arrived_at_pickup, complete_ride, get_ride_status
 from pathfinding import find_path
@@ -63,6 +64,7 @@ class CartBridgeNode(Node):
         self._lon: Optional[float] = None
         self._heading: Optional[float] = None
         self._speed_mps: float = 0.0
+        self._battery_soc: Optional[float] = None
 
         # Current ride
         self._active_ride: Optional[dict] = None
@@ -78,6 +80,7 @@ class CartBridgeNode(Node):
 	    qos_profile_sensor_data,
 	)
         self.create_subscription(Odometry, "/odometry/global", self._odom_callback, 10)
+        self.create_subscription(ESP32Heartbeat, "/esp32/safety_heartbeat", self._safety_hb_callback, 10)
 
         # Publisher — sends route to global_path_manager
         self._route_pub = self.create_publisher(
@@ -110,6 +113,9 @@ class CartBridgeNode(Node):
         self._heading = quaternion_to_yaw_deg(q.x, q.y, q.z, q.w)
         self._speed_mps = msg.twist.twist.linear.x
 
+    def _safety_hb_callback(self, msg: ESP32Heartbeat) -> None:
+        self._battery_soc = float(msg.soc_pct)
+
     # ---- Timers ---------------------------------------------------------- #
 
     def _telemetry_timer(self) -> None:
@@ -120,6 +126,7 @@ class CartBridgeNode(Node):
                 lat=self._lat,
                 lon=self._lon,
                 heading=self._heading,
+                battery_level=self._battery_soc,
                 speed=self._speed_mps * 2.237,
                 status="busy" if self._active_ride else "idle",
             )

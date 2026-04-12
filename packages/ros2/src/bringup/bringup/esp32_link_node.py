@@ -134,9 +134,10 @@ class ESP32LinkNode(Node):
         self._hb_seq = 0
         self._cmd_seq = 0
 
-        # Latest drive command (protected by lock)
+        # Latest drive command and Safety target state (protected by lock)
         self._lock = threading.Lock()
         self._latest_cmd: DriveCommand | None = None
+        self._safety_target_state: int = STATE_INIT
 
         # Open serial ports
         self._safety_port = None
@@ -195,35 +196,48 @@ class ESP32LinkNode(Node):
     def _tx_tick(self):
         now = time.monotonic()
 
-        # Determine if we have active drive commands
+        # Determine if we have active drive commands and Safety's current state
         with self._lock:
             cmd = self._latest_cmd
             cmd_age = now - self._last_cmd_time
+            safety_state = self._safety_target_state
 
         cmd_active = cmd is not None and cmd_age < self._cmd_timeout
 
-        # Build planner heartbeat — autonomy always requested
+        # Mirror Safety's target state in planner heartbeat.
+        # Safety advances the system: when it says ENABLE, we say ENABLE.
+        # When it says ACTIVE, we say ACTIVE. This lets Safety see us
+        # as cooperative and complete the ENABLE → ACTIVE transition.
+        planner_state = safety_state if safety_state >= STATE_READY else STATE_READY
+
         status_flags = STATUS_FLAG_AUTONOMY_REQUEST
+        if planner_state == STATE_ENABLE:
+            status_flags |= STATUS_FLAG_ENABLE_COMPLETE
 
         hb_payload = encode_heartbeat(
             seq=self._hb_seq,
-            state=STATE_READY,
+            state=planner_state,
             fault=0,
             status=status_flags,
             stop=0,
         )
         self._hb_seq = (self._hb_seq + 1) & 0xFF
 
-        # TX to Safety: planner heartbeat
+        # TX planner heartbeat to both ESP32s
+        hb_frame = encode_frame(MSG_PLANNER_HEARTBEAT, hb_payload)
         if self._safety_port and self._safety_port.is_open:
             try:
-                self._safety_port.write(
-                    encode_frame(MSG_PLANNER_HEARTBEAT, hb_payload))
+                self._safety_port.write(hb_frame)
             except serial.SerialException as e:
-                self.get_logger().error(f"Safety TX error: {e}")
+                self.get_logger().error(f"Safety heartbeat TX error: {e}")
+        if self._control_port and self._control_port.is_open:
+            try:
+                self._control_port.write(hb_frame)
+            except serial.SerialException as e:
+                self.get_logger().error(f"Control heartbeat TX error: {e}")
 
-        # TX to Control: planner command (if active)
-        if self._control_port and self._control_port.is_open and cmd_active:
+        # TX to Control: planner command (only when Safety says ACTIVE)
+        if self._control_port and self._control_port.is_open and cmd_active and safety_state == STATE_ACTIVE:
             throttle = max(0, min(THROTTLE_MAX, int(cmd.throttle)))
             steering = max(STEERING_MIN, min(STEERING_MAX, int(cmd.steering_position)))
             braking = max(BRAKING_MIN, min(BRAKING_MAX, int(cmd.braking_level)))
@@ -240,7 +254,7 @@ class ESP32LinkNode(Node):
                 self._control_port.write(
                     encode_frame(MSG_PLANNER_COMMAND, cmd_payload))
             except serial.SerialException as e:
-                self.get_logger().error(f"Control TX error: {e}")
+                self.get_logger().error(f"Control command TX error: {e}")
 
     def _rx_loop(self, port: serial.Serial, label: str):
         """Background thread that reads heartbeat frames from an ESP32."""
@@ -263,6 +277,9 @@ class ESP32LinkNode(Node):
             # Publish to appropriate topic
             if label == "safety" and msg_type == MSG_SAFETY_HEARTBEAT:
                 self._publish_heartbeat(self._safety_hb_pub, msg_type, hb)
+                # Track Safety's target state so we can mirror it in our heartbeat
+                with self._lock:
+                    self._safety_target_state = hb["state"]
             elif label == "control" and msg_type == MSG_CONTROL_HEARTBEAT:
                 self._publish_heartbeat(self._control_hb_pub, msg_type, hb)
 

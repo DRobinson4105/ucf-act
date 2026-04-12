@@ -94,6 +94,7 @@ extern uint32_t g_last_retry_ms;
 // Heartbeat monitor
 extern heartbeat_monitor_t g_hb_monitor;
 extern int g_node_safety;
+extern int g_node_planner;
 
 // Motor state (per-motor, updated from CAN RX)
 struct motor_uim2852_state_t

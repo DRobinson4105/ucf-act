@@ -29,8 +29,7 @@ constexpr uint32_t INIT_DWELL_MS = 500;
 constexpr uint32_t ENABLE_SEQUENCE_MS = 200;
 constexpr uint32_t THROTTLE_SLEW_INTERVAL_MS = 100;
 constexpr int16_t THROTTLE_SLEW_STEP = 200;
-constexpr TickType_t PLANNER_CMD_TIMEOUT = pdMS_TO_TICKS(500);
-constexpr uint8_t PLANNER_CMD_STALE_COUNT = 10;
+constexpr uint8_t PLANNER_CMD_STALE_COUNT = 10;                // same sequence seen this many cycles = stale
 constexpr uint16_t PEDAL_ADC_THRESHOLD_MV = 500;
 constexpr uint32_t PEDAL_REARM_MS = 500;
 constexpr uint8_t PEDAL_ADC_OVERSAMPLE_COUNT = 8;
