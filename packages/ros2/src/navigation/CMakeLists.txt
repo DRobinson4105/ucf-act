@@ -15,7 +15,7 @@ find_package(nav2_msgs REQUIRED)
 find_package(GeographicLib QUIET)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(can_msgs REQUIRED)
+find_package(msgs REQUIRED)
 
 if(NOT GeographicLib_FOUND)
   list(APPEND CMAKE_MODULE_PATH /usr/share/cmake/geographiclib)
@@ -57,7 +57,7 @@ ament_target_dependencies(cmd_vel_adapter
   geometry_msgs
   nav_msgs
   nav2_msgs
-  can_msgs
+  msgs
 )
 
 add_executable(clicked_point_to_path src/clicked_point_to_path.cpp)
@@ -92,7 +92,7 @@ install(TARGETS
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/DriveCommand.msg"
+  "msg/VelocityCommand.msg"
   DEPENDENCIES
     std_msgs
     geometry_msgs

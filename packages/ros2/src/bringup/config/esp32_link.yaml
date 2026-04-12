@@ -1,0 +1,10 @@
+esp32_link:
+  ros__parameters:
+    # Use /dev/serial/by-id/ paths for stable device identification.
+    # Run `ls /dev/serial/by-id/` with each ESP32 plugged in to find the path.
+    safety_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_SAFETY_SERIAL-if00-port0"
+    control_port: "/dev/serial/by-id/usb-Silicon_Labs_CP2102N_CONTROL_SERIAL-if00-port0"
+    baud_rate: 1000000
+    heartbeat_hz: 10.0
+    command_timeout_s: 0.5
+    drive_cmd_topic: "/act/drive_cmd"

@@ -8,7 +8,7 @@
 #include <nav2_msgs/msg/speed_limit.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <can_msgs/msg/frame.hpp>
+#include <msgs/msg/actuator_command.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 class CmdVelAdapter : public rclcpp::Node {
@@ -47,7 +47,7 @@ public:
       speed_limit_topic_, rclcpp::QoS(1).reliable().transient_local(),
       std::bind(&CmdVelAdapter::onSpeedLimit, this, std::placeholders::_1));
 
-    can_pub_ = create_publisher<can_msgs::msg::Frame>(can_topic_, 10);
+    cmd_pub_ = create_publisher<msgs::msg::DriveCommand>(can_topic_, 10);
 
     last_time_ = now();
     last_speed_limit_time_ = now();
@@ -75,26 +75,25 @@ private:
   double v_acc_min_ = 0.0, v_acc_max_ = 1.0;
   double v_decc_min_ = 0.0, v_decc_max_ = 1.5;
   double w_vel_min_ = -1.28, w_vel_max_ = 1.28;
-  uint8_t throttle_min_ = 0, throttle_max_ = 7;
+  uint16_t throttle_min_ = 800, throttle_max_ = 4095;
   uint16_t steering_min_ = 0, steering_max_ = 720;
   uint8_t braking_min_ = 0, braking_max_ = 3;
 
-  std::array<uint8_t, 4> mapValues(double speed_error, double w_vel) {
-    uint8_t throttle_val = 0;
-    uint16_t steering_raw = normalize(w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_);
+  struct DriveValues {
+    uint16_t throttle;
+    uint16_t steering;
+    uint8_t braking;
+  };
 
-    RCLCPP_INFO(get_logger(), "%.3f %.3f %.3f %u %u %u", v_acc, v_acc_min_, v_acc_max_, throttle_min_, throttle_max_, throttle_val);
-    //RCLCPP_INFO(get_logger(), "%.3f %.3f %.3f %u %u %u", w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_, steering_raw);
-
-    uint8_t steering_hi = static_cast<uint8_t>((steering_raw >> 8) & 0xFF);
-    uint8_t steering_lo = static_cast<uint8_t>(steering_raw & 0xFF);
+  DriveValues mapValues(double speed_error, double w_vel) {
+    uint16_t throttle_val = 0;
+    uint16_t steering_val = normalize(w_vel, w_vel_min_, w_vel_max_, steering_min_, steering_max_);
     uint8_t braking_val = 0;
 
     if (speed_error > speed_error_deadband_mps_) {
       const double throttle_span = std::max(1e-3, throttle_full_error_mps_ - speed_error_deadband_mps_);
       const double throttle_request = speed_error - speed_error_deadband_mps_;
-      throttle_val = static_cast<uint8_t>(
-        normalize(throttle_request, 0.0, throttle_span, throttle_min_, throttle_max_));
+      throttle_val = normalize(throttle_request, 0.0, throttle_span, throttle_min_, throttle_max_);
     } else if (speed_error < -speed_error_deadband_mps_) {
       const double brake_span = std::max(1e-3, brake_full_error_mps_ - speed_error_deadband_mps_);
       const double brake_request = (-speed_error) - speed_error_deadband_mps_;
@@ -102,7 +101,7 @@ private:
         normalize(brake_request, 0.0, brake_span, braking_min_, braking_max_));
     }
 
-    return {throttle_val, steering_hi, steering_lo, braking_val};
+    return {throttle_val, steering_val, braking_val};
   }
 
   void onCmd(const geometry_msgs::msg::Twist::SharedPtr msg) {
@@ -196,23 +195,18 @@ private:
 
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 500,
-      "cmd=%.2f cap=%.2f filt=%.2f odom=%.2f err=%.2f w=%.2f throttle=%u brake=%u",
-      v_cmd, active_speed_cap, v_filt_, v_curr, speed_error, w_out, mapped[0], mapped[3]);
+      "cmd=%.2f cap=%.2f filt=%.2f odom=%.2f err=%.2f w=%.2f throttle=%u steer=%u brake=%u",
+      v_cmd, active_speed_cap, v_filt_, v_curr, speed_error, w_out,
+      mapped.throttle, mapped.steering, mapped.braking);
 
-    can_msgs::msg::Frame can_frame;
-    can_frame.header.stamp = t;
-    can_frame.header.frame_id = "can";
-    can_frame.id = 0x111;
-    can_frame.is_extended = false;
-    can_frame.is_error = false;
-    can_frame.dlc = 5;
-    can_frame.data[0] = counter_;
-    can_frame.data[1] = mapped[0];  // throttle
-    can_frame.data[2] = mapped[1];  // steering high byte
-    can_frame.data[3] = mapped[2];  // steering low byte
-    can_frame.data[4] = mapped[3];  // braking
+    msgs::msg::DriveCommand act_cmd;
+    act_cmd.header.stamp = t;
+    act_cmd.header.frame_id = "actuator";
+    act_cmd.throttle = mapped.throttle;
+    act_cmd.steering_position = mapped.steering;
+    act_cmd.braking_level = mapped.braking;
 
-    can_pub_->publish(can_frame);
+    cmd_pub_->publish(act_cmd);
   }
 
   std::string cmd_in_topic_;
@@ -252,7 +246,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_in_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav2_msgs::msg::SpeedLimit>::SharedPtr speed_limit_sub_;
-  rclcpp::Publisher<can_msgs::msg::Frame>::SharedPtr can_pub_;
+  rclcpp::Publisher<msgs::msg::DriveCommand>::SharedPtr cmd_pub_;
 };
 
 int main(int argc, char **argv) {

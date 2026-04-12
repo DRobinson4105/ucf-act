@@ -20,7 +20,7 @@ def include(pkg: str, launch_file: str, launch_dir: str = "launch", launch_argum
 def generate_launch_description():
     return LaunchDescription([
         include("bringup", "static_tfs.launch.py"),
-        #include("bringup", "serial_bridge.launch.py"),
+        include("bringup", "esp32_link.launch.py"),
         include("bringup", "cameras.launch.py"),
         include("livox_ros_driver2", "msg_MID360_launch.py", launch_dir="launch_ROS2"),
         include("bringup", "gps.launch.py"),

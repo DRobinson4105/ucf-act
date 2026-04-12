@@ -32,7 +32,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'serial_bridge_node = bringup.serial_bridge_node:main'
+            
+            'esp32_link_node = bringup.esp32_link_node:main',
         ],
     },
 )
