@@ -22,7 +22,7 @@ static const char *TAG = "brakingMotor";
 #define SETUP_TASK_STACK_SIZE 8192U
 #define SETUP_TASK_PRIORITY   (tskIDLE_PRIORITY + 1U)
 #define PT_LOOP_PERIOD_MS     500U
-#define BRAKING_PT_PULSES_PER_STEP 30000
+#define BRAKING_PT_PULSES_PER_STEP 26666
 #define PT_POSITION_CLAMP_PULSES 8000
 
 typedef struct {
@@ -35,7 +35,7 @@ static int32_t braking_to_pt_position(uint8_t braking)
 {
     /* Current brake-to-PT feed:
      * braking=3 -> 0
-     * each step away from 3 changes PT by 30000 pulses
+     * each step away from 3 changes PT by 26666 pulses
      */
     return ((int32_t)braking - 3) * BRAKING_PT_PULSES_PER_STEP;
 }
