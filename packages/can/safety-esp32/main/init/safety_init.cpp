@@ -10,6 +10,7 @@
 
 #include "safety_init.h"
 
+#include "nvs_flash.h"
 #include "battery_monitor.h"
 #include "can_twai.h"
 #include "esp_log.h"
@@ -78,6 +79,16 @@ void main_task(void *param)
 {
 	(void)param;
 	g_boot_start_ms = node_get_time_ms();
+
+	// Initialize NVS (required for battery SOC persistence)
+	esp_err_t nvs_err = nvs_flash_init();
+	if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+	{
+		nvs_flash_erase();
+		nvs_err = nvs_flash_init();
+	}
+	if (nvs_err != ESP_OK)
+		ESP_LOGE(TAG_INIT, "NVS init failed: %s", esp_err_to_name(nvs_err));
 
 	// Initialize heartbeat monitor
 	heartbeat_monitor_config_t hb_cfg = {.name = "SAFETY"};

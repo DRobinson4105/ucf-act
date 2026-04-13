@@ -25,6 +25,8 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 namespace
 {
@@ -170,6 +172,33 @@ constexpr uint8_t FAIL_COUNT_THRESHOLD = 10; // consecutive failures before unhe
 
 // Timing
 uint32_t s_last_update_ms = 0;
+
+// ============================================================================
+// NVS Persistence
+// ============================================================================
+
+constexpr const char *NVS_NAMESPACE = "bat_mon";
+constexpr const char *NVS_KEY_SOC = "soc_pct";
+
+bool nvs_load_soc(uint8_t *out_soc)
+{
+	nvs_handle_t handle;
+	if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK)
+		return false;
+	esp_err_t err = nvs_get_u8(handle, NVS_KEY_SOC, out_soc);
+	nvs_close(handle);
+	return err == ESP_OK && *out_soc <= 100;
+}
+
+void nvs_save_soc(uint8_t soc)
+{
+	nvs_handle_t handle;
+	if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK)
+		return;
+	nvs_set_u8(handle, NVS_KEY_SOC, soc);
+	nvs_commit(handle);
+	nvs_close(handle);
+}
 
 // ============================================================================
 // Internal Helpers
@@ -581,7 +610,30 @@ void battery_monitor_update(uint32_t now_ms)
 			s_voltage_filtered_mv = startup_voltage_mv;
 			s_current_filtered_ma =
 				(startup_sensor_mv - s_current_zero_offset_mv) * 1000.0f / s_config.current_sens_uv;
-			s_soc_pct = voltage_to_soc((uint16_t)(startup_voltage_mv + 0.5f));
+			uint8_t nvs_soc = 0;
+			uint8_t voltage_soc_boot = voltage_to_soc((uint16_t)(startup_voltage_mv + 0.5f));
+			if (nvs_load_soc(&nvs_soc))
+			{
+				// Use saved SOC — more reliable than voltage after recent load.
+				// Clamp: if voltage-based SOC is much higher (battery was charged),
+				// trust voltage. Otherwise trust the saved value.
+				if (voltage_soc_boot > nvs_soc + 10)
+				{
+					s_soc_pct = voltage_soc_boot;
+					ESP_LOGI(TAG, "SOC from voltage (battery likely charged): %u%% (nvs=%u%%)", voltage_soc_boot, nvs_soc);
+				}
+				else
+				{
+					s_soc_pct = nvs_soc;
+					ESP_LOGI(TAG, "SOC restored from NVS: %u%% (voltage=%u%%)", nvs_soc, voltage_soc_boot);
+				}
+			}
+			else
+			{
+				s_soc_pct = voltage_soc_boot;
+				ESP_LOGI(TAG, "SOC from voltage (no NVS data): %u%%", voltage_soc_boot);
+			}
+			nvs_save_soc(s_soc_pct);
 			s_soc_coulomb_base = (float)s_soc_pct;
 			s_soc_voltage_only_estimate = (float)s_soc_pct;
 			s_coulomb_mah_used = 0.0f;
@@ -672,11 +724,17 @@ void battery_monitor_update(uint32_t now_ms)
 		float soc_delta_pct = (s_coulomb_mah_used / (float)s_config.capacity_mah) * 100.0f;
 		soc_estimate = s_soc_coulomb_base - soc_delta_pct;
 
-		// ── Blend voltage-derived SOC to correct coulomb counting drift ─
-		// Nudge coulomb base toward voltage SOC each tick so drift is
-		// corrected over ~2-3 minutes without requiring an idle period.
-		s_soc_coulomb_base += VOLTAGE_SOC_BLEND_ALPHA * (voltage_soc - soc_estimate);
-		soc_estimate = s_soc_coulomb_base - soc_delta_pct;
+		// ── Blend voltage-derived SOC only when idle ────────────────────
+		// Under load, battery voltage sags due to internal resistance and
+		// does not reflect true SOC — trust coulomb counting exclusively.
+		// At idle, open-circuit voltage is reliable for lead-acid, so slowly
+		// nudge the coulomb base toward the voltage-derived SOC to correct
+		// drift from coulomb counting inaccuracies.
+		if (s_is_idle)
+		{
+			s_soc_coulomb_base += VOLTAGE_SOC_BLEND_ALPHA * (voltage_soc - soc_estimate);
+			soc_estimate = s_soc_coulomb_base - soc_delta_pct;
+		}
 		s_soc_voltage_only_estimate = soc_estimate;
 	}
 	else
@@ -702,6 +760,8 @@ void battery_monitor_update(uint32_t now_ms)
 	}
 #endif
 
+	if (new_soc != s_soc_pct)
+		nvs_save_soc(new_soc);
 	s_soc_pct = new_soc;
 
 #ifdef CONFIG_LOG_INPUT_BATTERY_TICK
