@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "app_actuator_config.h"
 #include "app_twai_config.h"
+#include "dac_mcp4728.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -11,6 +13,7 @@
 #include "freertos/task.h"
 #include "motor_exec.h"
 #include "motor_setup.h"
+#include "relay_dpdt_my5nj.h"
 #include "serial_input.h"
 #include "twai_port.h"
 
@@ -32,6 +35,114 @@ typedef struct {
     motor_exec_result_t result;
     bool completed;
 } brake_pt_wait_t;
+
+static uint16_t clamp_throttle_level(uint16_t throttle)
+{
+    if (throttle > APP_THROTTLE_LEVEL_MAX) {
+        return APP_THROTTLE_LEVEL_MAX;
+    }
+
+    return throttle;
+}
+
+static void log_throttle_state(const char *state, uint16_t throttle)
+{
+    ESP_LOGI(TAG, "throttle state=%s level=%u", state, (unsigned)throttle);
+}
+
+static esp_err_t init_throttle_actuators(void)
+{
+    const dac_mcp4728_config_t dac_cfg = {
+        .i2c_port = APP_DAC_I2C_PORT,
+        .sda = APP_DAC_SDA_GPIO,
+        .scl = APP_DAC_SCL_GPIO,
+        .device_addr = APP_DAC_I2C_ADDR,
+        .clk_speed_hz = APP_DAC_I2C_CLK_SPEED_HZ,
+    };
+    const relay_dpdt_my5nj_config_t relay_cfg = {
+        .gpio = APP_DPDT_RELAY_GPIO,
+    };
+
+    ESP_LOGI(TAG,
+             "Throttle actuator init start: dac[i2c_port=%d sda=%d scl=%d addr=0x%02X clk=%" PRIu32 "] relay[gpio=%d]",
+             (int)dac_cfg.i2c_port,
+             (int)dac_cfg.sda,
+             (int)dac_cfg.scl,
+             (unsigned)dac_cfg.device_addr,
+             dac_cfg.clk_speed_hz,
+             (int)relay_cfg.gpio);
+
+    esp_err_t err = dac_mcp4728_init(&dac_cfg);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Throttle actuator init failed at step=dac_init rc=%s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "Throttle actuator init step=dac_init rc=%s", esp_err_to_name(err));
+
+    err = relay_dpdt_my5nj_init(&relay_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Throttle actuator init failed at step=relay_init rc=%s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "Throttle actuator init step=relay_init rc=%s", esp_err_to_name(err));
+
+    err = dac_mcp4728_set_level(APP_THROTTLE_LEVEL_MIN);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "Throttle actuator init failed at step=dac_set_min level=%u rc=%s",
+                 (unsigned)APP_THROTTLE_LEVEL_MIN,
+                 esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG,
+             "Throttle actuator init step=dac_set_min level=%u rc=%s",
+             (unsigned)APP_THROTTLE_LEVEL_MIN,
+             esp_err_to_name(err));
+
+    err = relay_dpdt_my5nj_energize();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Throttle actuator init failed at step=relay_energize rc=%s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "Throttle actuator init step=relay_energize rc=%s", esp_err_to_name(err));
+
+    vTaskDelay(pdMS_TO_TICKS(APP_DPDT_RELAY_SETTLE_DELAY_MS));
+    ESP_LOGI(TAG,
+             "Throttle actuator init step=relay_settle delay_ms=%u",
+             (unsigned)APP_DPDT_RELAY_SETTLE_DELAY_MS);
+
+    err = dac_mcp4728_enable_autonomous();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Throttle actuator init failed at step=dac_enable_autonomous rc=%s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "Throttle actuator init step=dac_enable_autonomous rc=%s", esp_err_to_name(err));
+
+    err = dac_mcp4728_set_level(APP_THROTTLE_DEFAULT_LEVEL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG,
+                 "Throttle actuator init failed at step=dac_set_default level=%u rc=%s",
+                 (unsigned)APP_THROTTLE_DEFAULT_LEVEL,
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG,
+             "Throttle actuator init complete step=dac_set_default level=%u rc=%s",
+             (unsigned)APP_THROTTLE_DEFAULT_LEVEL,
+             esp_err_to_name(err));
+    return ESP_OK;
+}
+
+static void shutdown_throttle_actuators(void)
+{
+    if (dac_mcp4728_emergency_stop() != ESP_OK) {
+        (void)dac_mcp4728_disable();
+    }
+
+    (void)relay_dpdt_my5nj_deenergize();
+}
 
 static int32_t braking_to_pt_position(uint8_t braking)
 {
@@ -369,15 +480,33 @@ static esp_err_t run_setup_flow(void)
     esp_err_t err = start_twai();
 
     if (err == ESP_OK) {
+        esp_err_t brake_plan_err;
+        esp_err_t steering_plan_err;
+
         ESP_LOGI(TAG,
                  "Setup task TWAI initialized stack_hwm_words=%u",
                  (unsigned)uxTaskGetStackHighWaterMark(NULL));
         vTaskDelay(pdMS_TO_TICKS(100));
-        err = run_named_plan(motor_setup_brake_pt_pv_demo_plan());
-        if (err == ESP_OK) {
-            err = run_named_plan(motor_setup_steering_pt_pv_demo_plan());
+
+        brake_plan_err = run_named_plan(motor_setup_brake_pt_pv_demo_plan());
+        if (brake_plan_err != ESP_OK) {
+            ESP_LOGW(TAG,
+                     "Continuing after brake setup plan failure rc=%s",
+                     esp_err_to_name(brake_plan_err));
         }
-        if (err == ESP_OK) {
+
+        /*
+         * Node 7 command path disabled temporarily. In this app that node is
+         * wired through the steering setup/demo plan.
+         */
+        // steering_plan_err = run_named_plan(motor_setup_steering_pt_pv_demo_plan());
+        // if (steering_plan_err != ESP_OK) {
+        //     ESP_LOGW(TAG,
+        //              "Continuing after steering setup plan failure rc=%s",
+        //              esp_err_to_name(steering_plan_err));
+        // }
+
+        {
             TickType_t next_plan_tick = xTaskGetTickCount();
             const TickType_t period_ticks = pdMS_TO_TICKS(PT_LOOP_PERIOD_MS);
             serial_input_frame_t frame = {0};
@@ -390,6 +519,13 @@ static esp_err_t run_setup_flow(void)
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "serial_input_init failed: %s", esp_err_to_name(err));
             } else {
+                err = init_throttle_actuators();
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "init_throttle_actuators failed: %s", esp_err_to_name(err));
+                }
+            }
+
+            if (err == ESP_OK) {
                 while (1) {
                     const TickType_t now = xTaskGetTickCount();
                     const TickType_t timeout_ticks = (now < next_plan_tick) ? (next_plan_tick - now) : 0U;
@@ -405,6 +541,11 @@ static esp_err_t run_setup_flow(void)
                                  (unsigned)frame.throttle,
                                  (unsigned)frame.steering,
                                  (unsigned)frame.braking);
+                    } else if (err == ESP_ERR_TIMEOUT) {
+                        if (frame_valid) {
+                            frame_valid = false;
+                            log_throttle_state("timeout_default", APP_THROTTLE_DEFAULT_LEVEL);
+                        }
                     } else if (err != ESP_ERR_TIMEOUT) {
                         ESP_LOGE(TAG, "serial_input_read failed: %s", esp_err_to_name(err));
                     }
@@ -414,6 +555,15 @@ static esp_err_t run_setup_flow(void)
                     }
 
                     if (frame_valid) {
+                        const uint16_t throttle_level = clamp_throttle_level(frame.throttle);
+
+                        log_throttle_state(frame_updated_this_cycle ? "updated" : "reused", throttle_level);
+                        err = dac_mcp4728_set_level(throttle_level);
+                        if (err != ESP_OK) {
+                            ESP_LOGE(TAG, "dac_mcp4728_set_level failed: %s", esp_err_to_name(err));
+                            break;
+                        }
+
                         const int32_t desired_brake_pt = braking_to_pt_position(frame.braking);
                         const int32_t next_brake_pt = clamp_pt_step(last_sent_brake_pt,
                                                                     desired_brake_pt,
@@ -442,14 +592,22 @@ static esp_err_t run_setup_flow(void)
                             last_sent_brake_pt = next_brake_pt;
                             maybe_log_pa_get_failure(SETUP_BRAKE_MOTOR_NODE_ID,
                                                      run_pa_get_command(SETUP_BRAKE_MOTOR_NODE_ID));
-                            err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
-                            if (err == ESP_OK) {
-                                last_sent_steering_pt = next_steering_pt;
-                                maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
-                                                         run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
-                            }
+                            /* Node 7 commands disabled temporarily. */
+                            // err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
+                            // if (err == ESP_OK) {
+                            //     last_sent_steering_pt = next_steering_pt;
+                            //     maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
+                            //                              run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
+                            // }
                         }
                     } else {
+                        log_throttle_state("missing_default", APP_THROTTLE_DEFAULT_LEVEL);
+                        err = dac_mcp4728_set_level(APP_THROTTLE_DEFAULT_LEVEL);
+                        if (err != ESP_OK) {
+                            ESP_LOGE(TAG, "dac_mcp4728_set_level default failed: %s", esp_err_to_name(err));
+                            break;
+                        }
+
                         const int32_t desired_brake_pt = braking_to_pt_position(0U);
                         const int32_t next_brake_pt = clamp_pt_step(last_sent_brake_pt,
                                                                     desired_brake_pt,
@@ -475,12 +633,13 @@ static esp_err_t run_setup_flow(void)
                             last_sent_brake_pt = next_brake_pt;
                             maybe_log_pa_get_failure(SETUP_BRAKE_MOTOR_NODE_ID,
                                                      run_pa_get_command(SETUP_BRAKE_MOTOR_NODE_ID));
-                            err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
-                            if (err == ESP_OK) {
-                                last_sent_steering_pt = next_steering_pt;
-                                maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
-                                                         run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
-                            }
+                            /* Node 7 commands disabled temporarily. */
+                            // err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
+                            // if (err == ESP_OK) {
+                            //     last_sent_steering_pt = next_steering_pt;
+                            //     maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
+                            //                              run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
+                            // }
                         }
                     }
 
@@ -493,6 +652,8 @@ static esp_err_t run_setup_flow(void)
                         next_plan_tick = xTaskGetTickCount() + period_ticks;
                     }
                 }
+
+                shutdown_throttle_actuators();
             }
         }
     }
