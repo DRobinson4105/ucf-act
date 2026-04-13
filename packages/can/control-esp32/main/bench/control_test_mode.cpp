@@ -845,7 +845,9 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 	int32_t target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_BRAKING)
 		                          ? compute_test_braking_target(&s_test_motor_state, requested_target_position)
 		                          : requested_target_position;
-	TickType_t next_feed_tick = 0;
+	int32_t last_sent_pt __attribute__((unused)) = 0;
+	constexpr TickType_t PT_FEED_PERIOD = pdMS_TO_TICKS(500);
+	TickType_t next_feed_tick = xTaskGetTickCount() + PT_FEED_PERIOD;
 	TickType_t last_status_log_tick = 0;
 	TickType_t last_query_tick = 0;
 	signed_input_accum_t target_input = {
@@ -897,17 +899,32 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 		if (ctx->actuator == CONTROL_TEST_ACTUATOR_BRAKING)
 			target_position = compute_test_braking_target(&s_test_motor_state, requested_target_position);
 
-		// Feed PT stream using the shared production helper
+		// Feed PT stream: simple periodic write to FIFO index 0, matching furrycon approach.
+		// The setup plan already started PT mode (PV + BG), so we just keep feeding rows.
 		bool fed_frame = false;
-		err = feed_pt_stream_if_due(&s_test_motor_state, ctx->motor_node_id, target_position, now_tick,
-		                            &next_feed_tick, &fed_frame);
-		if (err != ESP_OK)
+		if ((int32_t)(now_tick - next_feed_tick) >= 0)
 		{
-			ESP_LOGE(TEST_TAG, "%s PT feed failed: %s", ctx->motor_label ? ctx->motor_label : "MOTOR",
-			         esp_err_to_name(err));
-			status_led_set_state(NODE_STATE_NOT_READY);
+			motor_cmd_t cmd;
+			motor_cmd_pt_set(ctx->motor_node_id, true, 0U, target_position, &cmd);
+			motor_dispatch_result_t res = exec_cmd(&cmd);
+			if (res != MOTOR_DISPATCH_RESULT_OK)
+			{
+				ESP_LOGE(TEST_TAG, "%s PT feed failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR",
+				         (int)res);
+				status_led_set_state(NODE_STATE_NOT_READY);
+			}
+			else
+			{
+				last_sent_pt = target_position;
+				fed_frame = true;
+			}
+
+			next_feed_tick += PT_FEED_PERIOD;
+			if ((int32_t)(now_tick - next_feed_tick) >= 0)
+				next_feed_tick = now_tick + PT_FEED_PERIOD;
 		}
-		else if (s_motor_fault_latched)
+
+		if (s_motor_fault_latched)
 		{
 			status_led_set_state(NODE_STATE_NOT_READY);
 		}

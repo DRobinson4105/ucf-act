@@ -19,6 +19,8 @@
 #include "control_logic.h"
 #include "dac_mcp4728.h"
 #include "esp_log.h"
+#include "motor_dispatch.h"
+#include "motor_protocol.h"
 #include "heartbeat_monitor.h"
 #include "node_support.h"
 #include "status_led.h"
@@ -450,66 +452,68 @@ void control_task(void *param)
 #endif
 		}
 
-		// Steering stays on the PT stream cadence using the latest clamped
-		// planner-derived target. If Planner skips a cycle, we repeat the last
-		// steering target so the FIFO does not run dry.
+		// PT feeding: simple periodic write to FIFO index 0, matching furrycon approach.
+		// The setup plan starts PT mode (PV + BG), the loop just keeps pushing rows.
+		constexpr TickType_t PT_FEED_PERIOD = pdMS_TO_TICKS(500);
+
 #ifndef CONFIG_BYPASS_ACTUATOR_MOTOR_UIM2852_STEERING
 		if (g_motor_uim2852_steering_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
-			bool fed_frame = false;
-			esp_err_t err = feed_pt_stream_if_due(&g_steering_state, MOTOR_NODE_STEERING, step.steering_position, now_tick,
-			                                      &next_steering_pt_feed_tick, &fed_frame);
-			if (err != ESP_OK && step.send_steering)
+			if ((int32_t)(now_tick - next_steering_pt_feed_tick) >= 0)
 			{
-				step.new_last_steering = last_steering_sent; // keep old value on failure
-			}
+				motor_cmd_t cmd;
+				motor_cmd_pt_set(MOTOR_NODE_STEERING, true, 0U, step.steering_position, &cmd);
+				motor_dispatch_result_t res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(200), pdMS_TO_TICKS(50),
+				                                                  nullptr, nullptr, nullptr);
+				esp_err_t err = (res == MOTOR_DISPATCH_RESULT_OK) ? ESP_OK : ESP_FAIL;
+				if (err != ESP_OK && step.send_steering)
+					step.new_last_steering = last_steering_sent;
 #ifdef CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_COMMAND_TX
-			if (err != ESP_OK)
-			{
-				ESP_LOGI(TAG_TX, "Steering PT feed failed: %s", esp_err_to_name(err));
-			}
-			else if (fed_frame)
-			{
-				ESP_LOGI(TAG_TX, "Steering PT feed -> %ld%s", (long)step.steering_position,
-				         step.send_steering ? "" : " (repeat)");
-			}
+				if (err != ESP_OK)
+					ESP_LOGI(TAG_TX, "Steering PT feed failed: result=%d", (int)res);
+				else
+					ESP_LOGI(TAG_TX, "Steering PT feed -> %ld%s", (long)step.steering_position,
+					         step.send_steering ? "" : " (repeat)");
 #endif
-			if (fed_frame || err != ESP_OK)
 				track_can_tx(err);
+				next_steering_pt_feed_tick += PT_FEED_PERIOD;
+				if ((int32_t)(now_tick - next_steering_pt_feed_tick) >= 0)
+					next_steering_pt_feed_tick = now_tick + PT_FEED_PERIOD;
+			}
 		}
 		else
 		{
-			next_steering_pt_feed_tick = 0;
+			next_steering_pt_feed_tick = now_tick + PT_FEED_PERIOD;
 		}
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_MOTOR_UIM2852_BRAKING
 		if (g_motor_uim2852_braking_ready && step.new_state == NODE_STATE_ACTIVE)
 		{
-			bool fed_frame = false;
-			esp_err_t err =
-				feed_pt_stream_if_due(&g_braking_state, MOTOR_NODE_BRAKING, step.braking_position, now_tick, &next_braking_pt_feed_tick,
-				                      &fed_frame);
-			if (err != ESP_OK && step.send_braking)
+			if ((int32_t)(now_tick - next_braking_pt_feed_tick) >= 0)
 			{
-				step.new_last_braking = last_braking_sent;
-			}
+				motor_cmd_t cmd;
+				motor_cmd_pt_set(MOTOR_NODE_BRAKING, true, 0U, step.braking_position, &cmd);
+				motor_dispatch_result_t res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(200), pdMS_TO_TICKS(50),
+				                                                  nullptr, nullptr, nullptr);
+				esp_err_t err = (res == MOTOR_DISPATCH_RESULT_OK) ? ESP_OK : ESP_FAIL;
+				if (err != ESP_OK && step.send_braking)
+					step.new_last_braking = last_braking_sent;
 #ifdef CONFIG_LOG_ACTUATOR_MOTOR_UIM2852_COMMAND_TX
-			if (err != ESP_OK)
-			{
-				ESP_LOGI(TAG_TX, "Braking PT feed failed: %s", esp_err_to_name(err));
-			}
-			else if (fed_frame)
-			{
-				ESP_LOGI(TAG_TX, "Braking PT feed -> %ld%s", (long)step.braking_position,
-				         step.send_braking ? "" : " (repeat)");
-			}
+				if (err != ESP_OK)
+					ESP_LOGI(TAG_TX, "Braking PT feed failed: result=%d", (int)res);
+				else
+					ESP_LOGI(TAG_TX, "Braking PT feed -> %ld%s", (long)step.braking_position,
+					         step.send_braking ? "" : " (repeat)");
 #endif
-			if (fed_frame || err != ESP_OK)
 				track_can_tx(err);
+				next_braking_pt_feed_tick += PT_FEED_PERIOD;
+				if ((int32_t)(now_tick - next_braking_pt_feed_tick) >= 0)
+					next_braking_pt_feed_tick = now_tick + PT_FEED_PERIOD;
+			}
 		}
 		else
 		{
-			next_braking_pt_feed_tick = 0;
+			next_braking_pt_feed_tick = now_tick + PT_FEED_PERIOD;
 		}
 #endif
 

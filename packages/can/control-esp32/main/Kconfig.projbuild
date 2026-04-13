@@ -206,11 +206,11 @@ menu "Motor Limits"
         config MOTOR_UIM2852_PT_FRAME_TIME_MS
             int "MP[4]: PT frame time (ms)"
             range 5 30000
-            default 100
+            default 500
             help
                 Fixed segment duration for every PT interpolation row,
                 sent via MP[4] during PT FIFO configuration. Must match
-                the planner's command cadence (default 100 ms).
+                the PT feed cadence (default 500 ms).
                 Units: milliseconds.
 
         config MOTOR_UIM2852_PT_LOW_WATER_MARK
