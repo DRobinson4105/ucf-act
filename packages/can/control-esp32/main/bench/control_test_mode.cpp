@@ -1,3 +1,4 @@
+#include "sdkconfig.h"
 #ifdef CONFIG_CONTROL_TEST_MODE
 
 #include "control_test_mode.h"
@@ -17,6 +18,7 @@
 #include "control_types.h"
 #include "dac_mcp4728.h"
 #include "motor_dispatch.h"
+#include "motor_setup.h"
 #include "motor_protocol.h"
 #include "motor_rx.h"
 #include "motor_types.h"
@@ -28,7 +30,7 @@
 namespace
 {
 
-const char *TAG = "CONTROL_TEST";
+const char *TEST_TAG = "CONTROL_TEST";
 constexpr TickType_t TEST_LOOP_INTERVAL = pdMS_TO_TICKS(20);
 constexpr TickType_t TEST_CAN_RX_TIMEOUT = pdMS_TO_TICKS(10);
 constexpr TickType_t TEST_STATUS_LOG_INTERVAL = pdMS_TO_TICKS(2000);
@@ -94,7 +96,7 @@ void idle_forever(bool *wdt_reset_failed)
 {
 	while (true)
 	{
-		node_task_wdt_reset_or_log(TAG, "control_test", wdt_reset_failed);
+		node_task_wdt_reset_or_log(TEST_TAG, "control_test", wdt_reset_failed);
 		vTaskDelay(pdMS_TO_TICKS(1000));
 	}
 }
@@ -140,6 +142,33 @@ int32_t braking_input_to_pulses(int32_t braking_level)
 		(braking_level > PLANNER_BRAKING_MAX_LEVEL) ? PLANNER_BRAKING_MAX_LEVEL : (uint8_t)braking_level;
 	return ((int32_t)(PLANNER_BRAKING_MAX_LEVEL - clamped_level) * CONFIG_BRAKE_RELEASE_POSITION) /
 	       PLANNER_BRAKING_MAX_LEVEL;
+}
+
+int32_t clamp_delta_toward_target(int32_t current, int32_t target, int32_t max_delta)
+{
+	if (max_delta <= 0)
+		return target;
+
+	int32_t delta = target - current;
+	if (delta > max_delta)
+		return current + max_delta;
+	if (delta < -max_delta)
+		return current - max_delta;
+	return target;
+}
+
+int32_t compute_test_braking_target(motor_uim2852_state_t *state, int32_t requested_target)
+{
+	if (!state)
+		return requested_target;
+
+	int32_t reference = 0;
+	taskENTER_CRITICAL(&state->lock);
+	reference = state->pt_last_position;
+	taskEXIT_CRITICAL(&state->lock);
+
+	int32_t step_limit = compute_braking_pt_step_limit(state);
+	return clamp_delta_toward_target(reference, requested_target, step_limit);
 }
 
 void shutdown_throttle_path(void)
@@ -197,7 +226,7 @@ void update_test_motor_state(motor_uim2852_state_t *state, const motor_rx_t *rx)
 		if (motor_rx_ack_pa_get(rx, &pos))
 			state->absolute_position = pos;
 	}
-	else if (motor_rx_is_error(rx))
+	else if (motor_rx_er_is_thrown_error(rx))
 	{
 		state->error_detected = true;
 	}
@@ -233,7 +262,7 @@ void log_motor_snapshot(motor_uim2852_state_t *state, const char *label, int32_t
 	taskEXIT_CRITICAL(&state->lock);
 
 	const char *unit = (actuator == CONTROL_TEST_ACTUATOR_STEERING) ? "deg" : "level";
-	ESP_LOGI(TAG,
+	ESP_LOGI(TEST_TAG,
 	         "%s: input=%ld %s target=%ld actual=%ld cmd_target=%ld speed=%ld driver=%d motion=%d stopped=%d in_pos=%d fault=%d stall=%d",
 	         label ? label : "MOTOR", (long)requested_input, unit, (long)target_position, (long)absolute_position,
 	         (long)commanded_target, (long)current_speed, driver_on, motion_in_progress, stopped, in_position,
@@ -252,19 +281,24 @@ void motor_can_rx_task(void *param)
 		return;
 	}
 
-	node_task_wdt_add_self_or_log(TAG, "control_test_rx");
+	node_task_wdt_add_self_or_log(TEST_TAG, "control_test_rx");
 	bool wdt_reset_failed = false;
 	twai_message_t msg = {};
 
 	while (true)
 	{
-		node_task_wdt_reset_or_log(TAG, "control_test_rx", &wdt_reset_failed);
+		node_task_wdt_reset_or_log(TEST_TAG, "control_test_rx", &wdt_reset_failed);
 
 		if (can_twai_receive(&msg, TEST_CAN_RX_TIMEOUT) != ESP_OK)
 		{
 			vTaskDelay(TEST_MOTOR_RX_IDLE_DELAY);
 			continue;
 		}
+
+		ESP_LOGI(TEST_TAG, "CAN RX: id=0x%08lX extd=%d rtr=%d dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+		         (unsigned long)msg.identifier, msg.extd, msg.rtr, (unsigned)msg.data_length_code,
+		         msg.data[0], msg.data[1], msg.data[2], msg.data[3],
+		         msg.data[4], msg.data[5], msg.data[6], msg.data[7]);
 
 		if (msg.rtr || !msg.extd)
 			continue;
@@ -287,16 +321,16 @@ void motor_can_rx_task(void *param)
 		if (s_test_motor_state.stall_detected || s_test_motor_state.error_detected)
 		{
 			s_motor_fault_latched = true;
-			ESP_LOGE(TAG, "%s fault: stall=%d err=%d", ctx->motor_label ? ctx->motor_label : "MOTOR",
+			ESP_LOGE(TEST_TAG, "%s fault: stall=%d err=%d", ctx->motor_label ? ctx->motor_label : "MOTOR",
 			         s_test_motor_state.stall_detected, s_test_motor_state.error_detected);
 
-			if (motor_rx_is_error(&rx))
+			if (motor_rx_er_is_thrown_error(&rx))
 			{
 				uint8_t err_code = 0, related_cw = 0, related_sub = 0;
 				motor_rx_error_code(&rx, &err_code);
 				motor_rx_error_related_cw(&rx, &related_cw);
 				motor_rx_error_related_subindex(&rx, &related_sub);
-				ESP_LOGE(TAG, "%s error: code=0x%02X cw=0x%02X sub=%u",
+				ESP_LOGE(TEST_TAG, "%s error: code=0x%02X cw=0x%02X sub=%u",
 				         ctx->motor_label ? ctx->motor_label : "MOTOR", err_code, related_cw, related_sub);
 			}
 		}
@@ -346,11 +380,45 @@ esp_err_t init_throttle_test_components(control_test_mode_context_t *ctx)
  */
 motor_dispatch_result_t exec_cmd(motor_cmd_t *cmd)
 {
-	return motor_dispatch_exec(cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+	ESP_LOGI(TEST_TAG, "TX: id=0x%08lX dlc=%u [%02X %02X %02X %02X %02X %02X %02X %02X]",
+	         (unsigned long)cmd->msg.identifier, (unsigned)cmd->msg.data_length_code,
+	         cmd->msg.data[0], cmd->msg.data[1], cmd->msg.data[2], cmd->msg.data[3],
+	         cmd->msg.data[4], cmd->msg.data[5], cmd->msg.data[6], cmd->msg.data[7]);
+	return motor_dispatch_exec(cmd, pdMS_TO_TICKS(200), pdMS_TO_TICKS(50), nullptr, nullptr, nullptr);
+}
+
+esp_err_t run_motor_test_setup_plan(control_test_mode_context_t *ctx)
+{
+	if (!ctx)
+		return ESP_ERR_INVALID_ARG;
+
+	const motor_setup_plan_t *plan = nullptr;
+	switch (ctx->actuator)
+	{
+	case CONTROL_TEST_ACTUATOR_BRAKING:
+		plan = motor_setup_brake_pt_pv_demo_plan();
+		break;
+	case CONTROL_TEST_ACTUATOR_STEERING:
+		plan = motor_setup_steering_pt_pv_demo_plan();
+		break;
+	default:
+		return ESP_ERR_NOT_SUPPORTED;
+	}
+
+	motor_setup_result_t result = {};
+	esp_err_t err = motor_setup_run_plan(plan, nullptr, &result);
+	if (err != ESP_OK)
+		return err;
+	if (result.status != MOTOR_SETUP_STATUS_SUCCESS)
+		return ESP_FAIL;
+	return ESP_OK;
 }
 
 /**
  * @brief Initialize the motor dispatch, CAN bus, RX task, and configure + enable the motor for PT mode.
+ *
+ * PT motion itself is started later, on the first feed, after the startup rows
+ * have been queued.
  */
 esp_err_t init_motor_test_components(control_test_mode_context_t *ctx)
 {
@@ -387,84 +455,102 @@ esp_err_t init_motor_test_components(control_test_mode_context_t *ctx)
 	motor_cmd_t cmd;
 	motor_dispatch_result_t res;
 
+	ESP_LOGI(TEST_TAG, "%s init: node_id=%u tx=GPIO%d rx=GPIO%d",
+	         ctx->motor_label ? ctx->motor_label : "MOTOR", node,
+	         (int)ctx->twai_tx_gpio, (int)ctx->twai_rx_gpio);
+
 	// Disable motor first (clean slate)
 	motor_cmd_mo_set(node, true, MOTOR_MO_STATE_DISABLE, &cmd);
-	(void)exec_cmd(&cmd);
-	vTaskDelay(pdMS_TO_TICKS(10));
+	res = exec_cmd(&cmd);
+	ESP_LOGI(TEST_TAG, "%s MO=0 (disable): result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR", (int)res);
+	vTaskDelay(pdMS_TO_TICKS(50));
 
 	// Clear errors
 	motor_cmd_er_clear_all(node, true, &cmd);
-	(void)exec_cmd(&cmd);
-	vTaskDelay(pdMS_TO_TICKS(10));
+	res = exec_cmd(&cmd);
+	ESP_LOGI(TEST_TAG, "%s ER clear-all: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR", (int)res);
+	vTaskDelay(pdMS_TO_TICKS(50));
+
+	// Reset fault flags — the ER response itself can trigger the RX task's error detection
+	s_motor_fault_latched = false;
+	taskENTER_CRITICAL(&s_test_motor_state.lock);
+	s_test_motor_state.error_detected = false;
+	s_test_motor_state.stall_detected = false;
+	taskEXIT_CRITICAL(&s_test_motor_state.lock);
 
 	// Query current position
 	motor_cmd_pa_get(node, true, &cmd);
 	res = exec_cmd(&cmd);
+	ESP_LOGI(TEST_TAG, "%s PA get: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR", (int)res);
 	if (res != MOTOR_DISPATCH_RESULT_OK)
 	{
-		ESP_LOGE(TAG, "%s position query failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR", (int)res);
+		ESP_LOGE(TEST_TAG, "%s position query failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR", (int)res);
 		return ESP_FAIL;
 	}
+	taskENTER_CRITICAL(&s_test_motor_state.lock);
+	s_test_motor_state.pt_last_position = s_test_motor_state.absolute_position;
+	taskEXIT_CRITICAL(&s_test_motor_state.lock);
 	vTaskDelay(pdMS_TO_TICKS(10));
 
-	// Enable motor driver (MO=1)
-	motor_cmd_mo_set(node, true, MOTOR_MO_STATE_ENABLE, &cmd);
+	if (ctx->actuator != CONTROL_TEST_ACTUATOR_BRAKING)
+	{
+		err = configure_motor_controller_defaults(ctx->motor_node_id, false);
+		if (err != ESP_OK)
+		{
+			ESP_LOGE(TEST_TAG, "%s controller default config failed: %s",
+			         ctx->motor_label ? ctx->motor_label : "MOTOR", esp_err_to_name(err));
+			return err;
+		}
+	}
+
+	err = run_motor_test_setup_plan(ctx);
+	if (err != ESP_OK)
+	{
+		ESP_LOGE(TEST_TAG, "%s setup plan failed: %s", ctx->motor_label ? ctx->motor_label : "MOTOR",
+		         esp_err_to_name(err));
+		return err;
+	}
+
+	// Re-synchronize local state after the setup plan primes PT mode and starts motion.
+	motor_cmd_pa_get(node, true, &cmd);
 	res = exec_cmd(&cmd);
 	if (res != MOTOR_DISPATCH_RESULT_OK)
 	{
-		ESP_LOGE(TAG, "%s enable failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR", (int)res);
+		ESP_LOGE(TEST_TAG, "%s post-setup PA get failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR",
+		         (int)res);
 		return ESP_FAIL;
 	}
-	vTaskDelay(pdMS_TO_TICKS(5));
 
-	// Configure PT mode: set FIFO mode (MP[3]=0)
-	motor_cmd_mp_set_u16(node, true, MOTOR_MP_INDEX_PVT_DATA_MANAGEMENT_MODE, (uint16_t)MOTOR_MP_MODE_FIFO, &cmd);
-	res = exec_cmd(&cmd);
-	if (res != MOTOR_DISPATCH_RESULT_OK)
-		return ESP_FAIL;
-
-	// Set PT motion time (MP[4])
-	motor_cmd_mp_set_u16(node, true, MOTOR_MP_INDEX_PT_MOTION_TIME, s_test_motor_state.pt_frame_time_ms, &cmd);
-	res = exec_cmd(&cmd);
-	if (res != MOTOR_DISPATCH_RESULT_OK)
-		return ESP_FAIL;
-
-	// Reset PT table (MP[0]=0)
-	motor_cmd_mp_set_u16(node, true, MOTOR_MP_INDEX_CURRENT_QUEUE_LEVEL_OR_RESET_TABLE, 0, &cmd);
-	res = exec_cmd(&cmd);
-	if (res != MOTOR_DISPATCH_RESULT_OK)
-		return ESP_FAIL;
+	constexpr uint16_t kSetupPlanQueuedRows = 9;
+	uint16_t next_write_row = (uint16_t)(MOTOR_UIM2852_PT_FIRST_VALID_ROW + kSetupPlanQueuedRows);
+	if (next_write_row > MOTOR_UIM2852_PT_LAST_VALID_ROW)
+		next_write_row = MOTOR_UIM2852_PT_FIRST_VALID_ROW;
 
 	// Reset PT bookkeeping
 	taskENTER_CRITICAL(&s_test_motor_state.lock);
-	s_test_motor_state.pt_write_index = 0;
+	s_test_motor_state.pt_write_index = next_write_row;
 	s_test_motor_state.pt_prefill_count = 0;
-	s_test_motor_state.pt_motion_started = false;
+	s_test_motor_state.pt_motion_started = true;
+	s_test_motor_state.pt_last_position = s_test_motor_state.absolute_position;
 	taskEXIT_CRITICAL(&s_test_motor_state.lock);
-
-	// Start PT interpolation (BG)
-	motor_cmd_bg_begin(node, true, &cmd);
-	res = exec_cmd(&cmd);
-	if (res != MOTOR_DISPATCH_RESULT_OK)
-		return ESP_FAIL;
 
 	return ESP_OK;
 }
 
 void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 {
-	ESP_LOGI(TAG, "========================================");
-	ESP_LOGI(TAG, "  CONTROL TEST MODE: THROTTLE");
-	ESP_LOGI(TAG, "  0-4095: set DAC level (type digits + space/enter)");
-	ESP_LOGI(TAG, "  r:   toggle DPDT relay (MY5NJ)");
-	ESP_LOGI(TAG, "  q:   quit (shutdown all)");
-	ESP_LOGI(TAG, "  pedal: manual override (auto re-arms)");
-	ESP_LOGI(TAG, "========================================");
+	ESP_LOGI(TEST_TAG, "========================================");
+	ESP_LOGI(TEST_TAG, "  CONTROL TEST MODE: THROTTLE");
+	ESP_LOGI(TEST_TAG, "  0-4095: set DAC level (type digits + space/enter)");
+	ESP_LOGI(TEST_TAG, "  r:   toggle DPDT relay (MY5NJ)");
+	ESP_LOGI(TEST_TAG, "  q:   quit (shutdown all)");
+	ESP_LOGI(TEST_TAG, "  pedal: manual override (auto re-arms)");
+	ESP_LOGI(TEST_TAG, "========================================");
 
 	esp_err_t err = init_throttle_test_components(ctx);
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG, "Throttle test init failed: %s", esp_err_to_name(err));
+		ESP_LOGE(TEST_TAG, "Throttle test init failed: %s", esp_err_to_name(err));
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(wdt_reset_failed);
 	}
@@ -472,7 +558,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 	err = dac_mcp4728_set_level(0);
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG, "DAC set level 0 failed: %s — cannot arm", esp_err_to_name(err));
+		ESP_LOGE(TEST_TAG, "DAC set level 0 failed: %s — cannot arm", esp_err_to_name(err));
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(wdt_reset_failed);
 	}
@@ -480,7 +566,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 	err = relay_dpdt_my5nj_energize();
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG, "DPDT relay failed: %s — cannot arm", esp_err_to_name(err));
+		ESP_LOGE(TEST_TAG, "DPDT relay failed: %s — cannot arm", esp_err_to_name(err));
 		(void)dac_mcp4728_disable();
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(wdt_reset_failed);
@@ -491,16 +577,16 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 	err = dac_mcp4728_enable_autonomous();
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG, "DAC enable failed: %s — cannot arm", esp_err_to_name(err));
+		ESP_LOGE(TEST_TAG, "DAC enable failed: %s — cannot arm", esp_err_to_name(err));
 		(void)relay_dpdt_my5nj_deenergize();
 		(void)dac_mcp4728_disable();
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(wdt_reset_failed);
 	}
 
-	ESP_LOGI(TAG, "Throttle system ready — DPDT relay ON, DAC autonomous");
-	ESP_LOGI(TAG, "Type 0-4095 + space/enter to set level. r=toggle relay, q=quit");
-	ESP_LOGI(TAG, "F/R software enforced: REVERSE disables throttle, NEUTRAL zeros level");
+	ESP_LOGI(TEST_TAG, "Throttle system ready — DPDT relay ON, DAC autonomous");
+	ESP_LOGI(TEST_TAG, "Type 0-4095 + space/enter to set level. r=toggle relay, q=quit");
+	ESP_LOGI(TEST_TAG, "F/R software enforced: REVERSE disables throttle, NEUTRAL zeros level");
 
 	uint16_t current_level = 0;
 	bool relay_on = true;
@@ -514,7 +600,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 	test_state_t state = TEST_ARMED;
 	if (fr_arm == FR_STATE_REVERSE || fr_arm == FR_STATE_INVALID)
 	{
-		ESP_LOGW(TAG, "F/R is %s at arm — entering override until not in reverse", fr_state_to_string(fr_arm));
+		ESP_LOGW(TEST_TAG, "F/R is %s at arm — entering override until not in reverse", fr_state_to_string(fr_arm));
 		(void)dac_mcp4728_disable();
 		(void)relay_dpdt_my5nj_deenergize();
 		relay_on = false;
@@ -524,20 +610,20 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 	}
 	else
 	{
-		ESP_LOGI(TAG, "Throttle ARMED at level 0 (F/R=%s)", fr_state_to_string(fr_arm));
+		ESP_LOGI(TEST_TAG, "Throttle ARMED at level 0 (F/R=%s)", fr_state_to_string(fr_arm));
 		status_led_set_state(NODE_STATE_READY);
 	}
 
 	while (true)
 	{
-		node_task_wdt_reset_or_log(TAG, "control_test", wdt_reset_failed);
+		node_task_wdt_reset_or_log(TEST_TAG, "control_test", wdt_reset_failed);
 		uint32_t now_ms = node_get_time_ms();
 		TickType_t now_tick = xTaskGetTickCount();
 
 		control_driver_inputs_update_result_t input_update = {};
 		control_driver_inputs_update(ctx->driver_inputs, ctx->driver_inputs_cfg, now_ms, &input_update);
 		if (input_update.pedal_runtime_lost)
-			ESP_LOGW(TAG, "PEDAL_INPUT runtime read failure");
+			ESP_LOGW(TEST_TAG, "PEDAL_INPUT runtime read failure");
 
 		fr_state_t fr_now = control_driver_inputs_fr_state(ctx->driver_inputs);
 		if (ctx->bypass_input_fr_sensor)
@@ -555,10 +641,10 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 		int ch = serial_input_read_char();
 		if (ch == 'q' || ch == 'Q')
 		{
-			ESP_LOGI(TAG, "Quit requested");
+			ESP_LOGI(TEST_TAG, "Quit requested");
 			shutdown_throttle_path();
 			status_led_set_state(NODE_STATE_INIT);
-			ESP_LOGI(TAG, "Shutdown complete — idle");
+			ESP_LOGI(TEST_TAG, "Shutdown complete — idle");
 			serial_input_accum_reset(&level_input);
 			state = TEST_SHUTDOWN;
 		}
@@ -571,7 +657,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 			if (last_status_log_tick == 0 || (now_tick - last_status_log_tick) >= TEST_STATUS_LOG_INTERVAL)
 			{
-				ESP_LOGI(TAG, "Armed: level=%u pedal=%u mV (threshold=%u) fr=%s", current_level,
+				ESP_LOGI(TEST_TAG, "Armed: level=%u pedal=%u mV (threshold=%u) fr=%s", current_level,
 				         (unsigned)ctx->driver_inputs->pedal_mv, (unsigned)ctx->pedal_threshold_mv,
 				         fr_state_to_string(fr_now));
 				last_status_log_tick = now_tick;
@@ -579,7 +665,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 			if (pedal_is_pressed)
 			{
-				ESP_LOGI(TAG, "Pedal pressed (%u mV) — manual override, DPDT relay off",
+				ESP_LOGI(TEST_TAG, "Pedal pressed (%u mV) — manual override, DPDT relay off",
 				         (unsigned)ctx->driver_inputs->pedal_mv);
 				(void)dac_mcp4728_disable();
 				(void)relay_dpdt_my5nj_deenergize();
@@ -593,7 +679,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 			if (fr_is_reverse)
 			{
-				ESP_LOGW(TAG, "F/R is %s — override, DPDT relay off", fr_state_to_string(fr_now));
+				ESP_LOGW(TEST_TAG, "F/R is %s — override, DPDT relay off", fr_state_to_string(fr_now));
 				(void)dac_mcp4728_disable();
 				(void)relay_dpdt_my5nj_deenergize();
 				relay_on = false;
@@ -606,7 +692,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 			if (fr_now == FR_STATE_NEUTRAL && current_level > 0)
 			{
-				ESP_LOGW(TAG, "F/R is NEUTRAL — zeroing throttle (was level %u)", current_level);
+				ESP_LOGW(TEST_TAG, "F/R is NEUTRAL — zeroing throttle (was level %u)", current_level);
 				esp_err_t zerr = dac_mcp4728_set_level(0);
 				if (zerr == ESP_OK)
 				{
@@ -625,12 +711,12 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 					if (serr == ESP_OK)
 					{
 						current_level = level;
-						ESP_LOGI(TAG, "Throttle level: %u", level);
+						ESP_LOGI(TEST_TAG, "Throttle level: %u", level);
 						status_led_set_state(level > 0 ? NODE_STATE_ACTIVE : NODE_STATE_READY);
 					}
 					else
 					{
-						ESP_LOGE(TAG, "DAC set level %u failed: %s", level, esp_err_to_name(serr));
+						ESP_LOGE(TEST_TAG, "DAC set level %u failed: %s", level, esp_err_to_name(serr));
 					}
 				}
 			}
@@ -643,11 +729,11 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 					if (rerr == ESP_OK)
 					{
 						relay_on = false;
-						ESP_LOGI(TAG, "DPDT relay OFF — manual pedal drives Curtis, pedal switch in circuit");
+						ESP_LOGI(TEST_TAG, "DPDT relay OFF — manual pedal drives Curtis, pedal switch in circuit");
 					}
 					else
 					{
-						ESP_LOGE(TAG, "DPDT relay deenergize failed: %s", esp_err_to_name(rerr));
+						ESP_LOGE(TEST_TAG, "DPDT relay deenergize failed: %s", esp_err_to_name(rerr));
 					}
 				}
 				else
@@ -655,7 +741,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 					esp_err_t dp_err = dac_mcp4728_set_level(0);
 					if (dp_err != ESP_OK)
 					{
-						ESP_LOGE(TAG, "DAC reset to 0 failed: %s — aborting relay ON", esp_err_to_name(dp_err));
+						ESP_LOGE(TEST_TAG, "DAC reset to 0 failed: %s — aborting relay ON", esp_err_to_name(dp_err));
 					}
 					else
 					{
@@ -664,11 +750,11 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 						{
 							relay_on = true;
 							current_level = 0;
-							ESP_LOGI(TAG, "DPDT relay ON — DAC drives Curtis (level reset to 0)");
+							ESP_LOGI(TEST_TAG, "DPDT relay ON — DAC drives Curtis (level reset to 0)");
 						}
 						else
 						{
-							ESP_LOGE(TAG, "DPDT relay energize failed: %s", esp_err_to_name(rerr));
+							ESP_LOGE(TEST_TAG, "DPDT relay energize failed: %s", esp_err_to_name(rerr));
 						}
 					}
 				}
@@ -680,7 +766,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 		{
 			if (pedal_is_rearmed && !fr_is_reverse)
 			{
-				ESP_LOGI(TAG, "Override cleared (pedal rearmed, fr=%s) — re-arming at level 0",
+				ESP_LOGI(TEST_TAG, "Override cleared (pedal rearmed, fr=%s) — re-arming at level 0",
 				         fr_state_to_string(fr_now));
 
 				esp_err_t rerr = dac_mcp4728_set_level(0);
@@ -694,7 +780,7 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 				if (rerr != ESP_OK)
 				{
-					ESP_LOGE(TAG, "Re-arm failed: %s — staying in override", esp_err_to_name(rerr));
+					ESP_LOGE(TEST_TAG, "Re-arm failed: %s — staying in override", esp_err_to_name(rerr));
 					(void)relay_dpdt_my5nj_deenergize();
 					(void)dac_mcp4728_disable();
 					break;
@@ -703,12 +789,12 @@ void run_throttle_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 				current_level = 0;
 				relay_on = true;
 				status_led_set_state(NODE_STATE_READY);
-				ESP_LOGI(TAG, "Throttle ARMED at level 0 — enter command");
+				ESP_LOGI(TEST_TAG, "Throttle ARMED at level 0 — enter command");
 				state = TEST_ARMED;
 			}
 			else if (last_status_log_tick == 0 || (now_tick - last_status_log_tick) >= TEST_STATUS_LOG_INTERVAL)
 			{
-				ESP_LOGI(TAG, "Override: manual control (fr=%s, pedal_rearmed=%d — need both clear)",
+				ESP_LOGI(TEST_TAG, "Override: manual control (fr=%s, pedal_rearmed=%d — need both clear)",
 				         fr_state_to_string(fr_now), pedal_is_rearmed);
 				last_status_log_tick = now_tick;
 			}
@@ -728,24 +814,24 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 {
 	if (!ctx || ctx->motor_node_id == 0)
 	{
-		ESP_LOGE(TAG, "Missing motor configuration");
+		ESP_LOGE(TEST_TAG, "Missing motor configuration");
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(wdt_reset_failed);
 	}
 
-	ESP_LOGI(TAG, "========================================");
-	ESP_LOGI(TAG, "  CONTROL TEST MODE: %s", actuator_to_string(ctx->actuator));
+	ESP_LOGI(TEST_TAG, "========================================");
+	ESP_LOGI(TEST_TAG, "  CONTROL TEST MODE: %s", actuator_to_string(ctx->actuator));
 	if (ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING)
-		ESP_LOGI(TAG, "  Enter steering position 0-720 and press space/enter");
+		ESP_LOGI(TEST_TAG, "  Enter steering position 0-720 and press space/enter");
 	else
-		ESP_LOGI(TAG, "  Enter braking level 0-%d and press space/enter", PLANNER_BRAKING_MAX_LEVEL);
-	ESP_LOGI(TAG, "  q:   quit (stop and disable motor)");
-	ESP_LOGI(TAG, "========================================");
+		ESP_LOGI(TEST_TAG, "  Enter braking level 0-%d and press space/enter", PLANNER_BRAKING_MAX_LEVEL);
+	ESP_LOGI(TEST_TAG, "  q:   quit (stop and disable motor)");
+	ESP_LOGI(TEST_TAG, "========================================");
 
 	esp_err_t err = init_motor_test_components(ctx);
 	if (err != ESP_OK)
 	{
-		ESP_LOGE(TAG, "%s test init failed: %s", ctx->motor_label ? ctx->motor_label : "MOTOR",
+		ESP_LOGE(TEST_TAG, "%s test init failed: %s", ctx->motor_label ? ctx->motor_label : "MOTOR",
 		         esp_err_to_name(err));
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(wdt_reset_failed);
@@ -753,9 +839,12 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 	int32_t requested_input =
 		(ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING) ? 360 : BRAKING_TEST_INPUT_MIN;
-	int32_t target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING)
+	int32_t requested_target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING)
 		                          ? steering_input_to_pulses(requested_input)
 		                          : braking_input_to_pulses(requested_input);
+	int32_t target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_BRAKING)
+		                          ? compute_test_braking_target(&s_test_motor_state, requested_target_position)
+		                          : requested_target_position;
 	TickType_t next_feed_tick = 0;
 	TickType_t last_status_log_tick = 0;
 	TickType_t last_query_tick = 0;
@@ -769,16 +858,16 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 
 	while (true)
 	{
-		node_task_wdt_reset_or_log(TAG, "control_test", wdt_reset_failed);
+		node_task_wdt_reset_or_log(TEST_TAG, "control_test", wdt_reset_failed);
 		TickType_t now_tick = xTaskGetTickCount();
 
 		int ch = serial_input_read_char();
 		if (ch == 'q' || ch == 'Q')
 		{
-			ESP_LOGI(TAG, "Quit requested");
+			ESP_LOGI(TEST_TAG, "Quit requested");
 			shutdown_motor_path(ctx->motor_node_id);
 			status_led_set_state(NODE_STATE_INIT);
-			ESP_LOGI(TAG, "%s shutdown complete — idle", ctx->motor_label ? ctx->motor_label : "MOTOR");
+			ESP_LOGI(TEST_TAG, "%s shutdown complete — idle", ctx->motor_label ? ctx->motor_label : "MOTOR");
 			idle_forever(wdt_reset_failed);
 		}
 
@@ -786,21 +875,27 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 		{
 			requested_input = target_input.value;
 			test_input_accum_reset(&target_input);
-			target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING)
+			requested_target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING)
 				                  ? steering_input_to_pulses(requested_input)
 				                  : braking_input_to_pulses(requested_input);
+			target_position = (ctx->actuator == CONTROL_TEST_ACTUATOR_BRAKING)
+				                  ? compute_test_braking_target(&s_test_motor_state, requested_target_position)
+				                  : requested_target_position;
 			if (ctx->actuator == CONTROL_TEST_ACTUATOR_STEERING)
 			{
-				ESP_LOGI(TAG, "%s target: %ld deg -> %ld pulses", ctx->motor_label ? ctx->motor_label : "MOTOR",
+				ESP_LOGI(TEST_TAG, "%s target: %ld deg -> %ld pulses", ctx->motor_label ? ctx->motor_label : "MOTOR",
 				         (long)requested_input, (long)target_position);
 			}
 			else
 			{
-				ESP_LOGI(TAG, "%s target: level %ld -> %ld pulses",
+				ESP_LOGI(TEST_TAG, "%s target: level %ld -> requested=%ld bounded=%ld pulses",
 				         ctx->motor_label ? ctx->motor_label : "MOTOR", (long)requested_input,
-				         (long)target_position);
+				         (long)requested_target_position, (long)target_position);
 			}
 		}
+
+		if (ctx->actuator == CONTROL_TEST_ACTUATOR_BRAKING)
+			target_position = compute_test_braking_target(&s_test_motor_state, requested_target_position);
 
 		// Feed PT stream using the shared production helper
 		bool fed_frame = false;
@@ -808,7 +903,7 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 		                            &next_feed_tick, &fed_frame);
 		if (err != ESP_OK)
 		{
-			ESP_LOGE(TAG, "%s PT feed failed: %s", ctx->motor_label ? ctx->motor_label : "MOTOR",
+			ESP_LOGE(TEST_TAG, "%s PT feed failed: %s", ctx->motor_label ? ctx->motor_label : "MOTOR",
 			         esp_err_to_name(err));
 			status_led_set_state(NODE_STATE_NOT_READY);
 		}
@@ -818,6 +913,12 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 		}
 		else if (fed_frame || s_test_motor_state.motion_in_progress)
 		{
+			if (ctx->actuator == CONTROL_TEST_ACTUATOR_BRAKING && fed_frame)
+			{
+				taskENTER_CRITICAL(&s_test_motor_state.lock);
+				s_test_motor_state.pt_last_position = target_position;
+				taskEXIT_CRITICAL(&s_test_motor_state.lock);
+			}
 			status_led_set_state(NODE_STATE_ACTIVE);
 		}
 		else
@@ -832,7 +933,7 @@ void run_motor_test(control_test_mode_context_t *ctx, bool *wdt_reset_failed)
 			motor_cmd_pa_get(ctx->motor_node_id, true, &cmd);
 			motor_dispatch_result_t res = exec_cmd(&cmd);
 			if (res != MOTOR_DISPATCH_RESULT_OK)
-				ESP_LOGW(TAG, "%s position query failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR",
+				ESP_LOGW(TEST_TAG, "%s position query failed: result=%d", ctx->motor_label ? ctx->motor_label : "MOTOR",
 				         (int)res);
 			last_query_tick = now_tick;
 		}
@@ -856,17 +957,17 @@ void control_test_mode_task(void *param)
 	control_test_mode_context_t *ctx = static_cast<control_test_mode_context_t *>(param);
 	if (!ctx)
 	{
-		ESP_LOGE(TAG, "Missing control test mode context");
+		ESP_LOGE(TEST_TAG, "Missing control test mode context");
 		vTaskDelete(nullptr);
 		return;
 	}
 
-	node_task_wdt_add_self_or_log(TAG, "control_test");
+	node_task_wdt_add_self_or_log(TEST_TAG, "control_test");
 	bool wdt_reset_failed = false;
 
 	esp_err_t console_err = serial_input_init();
 	if (console_err != ESP_OK)
-		ESP_LOGW(TAG, "Serial console init failed: %s (serial input may not work)", esp_err_to_name(console_err));
+		ESP_LOGW(TEST_TAG, "Serial console init failed: %s (serial input may not work)", esp_err_to_name(console_err));
 
 	switch (ctx->actuator)
 	{
@@ -878,7 +979,7 @@ void control_test_mode_task(void *param)
 		run_motor_test(ctx, &wdt_reset_failed);
 		break;
 	default:
-		ESP_LOGE(TAG, "Unknown control test actuator: %d", (int)ctx->actuator);
+		ESP_LOGE(TEST_TAG, "Unknown control test actuator: %d", (int)ctx->actuator);
 		status_led_set_state(NODE_STATE_NOT_READY);
 		idle_forever(&wdt_reset_failed);
 		break;

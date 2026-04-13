@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "sdkconfig.h"
 #ifdef CONFIG_CONTROL_TEST_MODE
 
 #include <stdint.h>

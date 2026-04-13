@@ -96,7 +96,7 @@ static void update_motor_state(motor_uim2852_state_t *state, const motor_rx_t *r
 		if (motor_rx_notification_current_position(rx, &pos))
 			state->absolute_position = pos;
 	}
-	else if (motor_rx_is_error(rx))
+	else if (motor_rx_er_is_thrown_error(rx))
 	{
 		state->error_detected = true;
 	}
@@ -118,7 +118,7 @@ static bool check_motor_fault(const motor_uim2852_state_t *state, const motor_rx
 
 	ESP_LOGE(tag_rx, "%s: fault: stall=%d err=%d", label, state->stall_detected, state->error_detected);
 
-	if (motor_rx_is_error(rx))
+	if (motor_rx_er_is_thrown_error(rx))
 	{
 		uint8_t err_code = 0, related_cw = 0, related_sub = 0;
 		motor_rx_error_code(rx, &err_code);

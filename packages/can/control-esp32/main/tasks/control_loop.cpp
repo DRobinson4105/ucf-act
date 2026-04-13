@@ -2,6 +2,7 @@
  * @file control_loop.cpp
  * @brief FreeRTOS task implementations for the Control ESP32 runtime.
  */
+#include "sdkconfig.h"
 #ifndef CONFIG_CONTROL_TEST_MODE
 
 #include "control_loop.h"

@@ -865,15 +865,24 @@ bool motor_rx_ack_st(const motor_rx_t *rx)
 
 bool motor_rx_ack_pa_get(const motor_rx_t *rx, int32_t *out_position)
 {
-    if (!ack_shape(rx, MOTOR_RX_BASE_PA, 4U)) {
-        return false;
+    // Some SimpleCAN firmware responds to PA GET with a PA frame (base 0x20, DLC=4),
+    // others respond with a DV frame (base 0x2E, DLC=5, subindex=4 for absolute position).
+    // Accept both shapes.
+    if (ack_shape(rx, MOTOR_RX_BASE_PA, 4U)) {
+        if (out_position != NULL) {
+            *out_position = motor_codec_unpack_i32_le(&rx->data[0]);
+        }
+        return true;
     }
 
-    if (out_position != NULL) {
-        *out_position = motor_codec_unpack_i32_le(&rx->data[0]);
+    if (ack_shape(rx, MOTOR_RX_BASE_DV, 5U) && validate_pa_dv_subindex(rx->data[0])) {
+        if (out_position != NULL) {
+            *out_position = motor_codec_unpack_i32_le(&rx->data[1]);
+        }
+        return true;
     }
 
-    return true;
+    return false;
 }
 
 bool motor_rx_ack_pa_set(const motor_rx_t *rx, int32_t *out_position)
@@ -1047,7 +1056,12 @@ bool motor_rx_matches_cmd(const motor_rx_t *rx, const motor_cmd_t *cmd)
         return false;
     }
 
-    if (cmd->object != MOTOR_OBJECT_LM) {
+    if (cmd->object == MOTOR_OBJECT_PA && cmd->msg.data_length_code == 0U) {
+        // PA GET: motor may respond with PA (0x20) or DV (0x2E) base code
+        if (rx->base_code != MOTOR_RX_BASE_PA && rx->base_code != MOTOR_RX_BASE_DV) {
+            return false;
+        }
+    } else if (cmd->object != MOTOR_OBJECT_LM) {
         if (!expected_response_base(cmd, &expected_base) || rx->base_code != expected_base) {
             return false;
         }

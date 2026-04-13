@@ -93,12 +93,83 @@ static bool tick_deadline_reached(TickType_t now, TickType_t deadline)
 	return (int32_t)(now - deadline) >= 0;
 }
 
+static uint16_t next_pt_fifo_row(uint16_t current_row)
+{
+	if (current_row < MOTOR_UIM2852_PT_FIRST_VALID_ROW || current_row > MOTOR_UIM2852_PT_LAST_VALID_ROW)
+		return MOTOR_UIM2852_PT_FIRST_VALID_ROW;
+
+	if (current_row >= MOTOR_UIM2852_PT_LAST_VALID_ROW)
+		return MOTOR_UIM2852_PT_FIRST_VALID_ROW;
+
+	return (uint16_t)(current_row + 1U);
+}
+
+static esp_err_t exec_checked(motor_cmd_t *cmd)
+{
+	if (!cmd)
+		return ESP_ERR_INVALID_ARG;
+
+	return motor_dispatch_exec(cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr) ==
+	               MOTOR_DISPATCH_RESULT_OK
+	           ? ESP_OK
+	           : ESP_FAIL;
+}
+
+esp_err_t configure_motor_controller_defaults(uint8_t node_id, bool braking)
+{
+	motor_cmd_t cmd;
+
+	const int32_t max_speed = braking ? BRAKING_MAX_SPEED : STEERING_MAX_SPEED;
+	const int32_t lower_limit = braking ? BRAKING_POSITION_MIN : STEERING_POSITION_MIN;
+	const int32_t upper_limit = braking ? BRAKING_POSITION_MAX : STEERING_POSITION_MAX;
+	const int32_t max_accel = braking ? BRAKING_MAX_ACCEL : STEERING_MAX_ACCEL;
+	const uint32_t stop_decel = braking ? BRAKING_STOP_DECEL : STEERING_STOP_DECEL;
+
+	motor_cmd_sd_set_u32(node_id, true, stop_decel, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_ic_set_u16(node_id, true, MOTOR_IC_INDEX_USE_CLOSED_LOOP, 1U, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_ic_set_u16(node_id, true, MOTOR_IC_INDEX_SOFTWARE_LIMIT_ENABLE, 1U, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_mt_set_u16(node_id, true, MOTOR_MT_INDEX_WORKING_CURRENT, MOTOR_UIM2852_DEFAULT_WORKING_CURRENT, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_lm_set_i32(node_id, true, MOTOR_LM_INDEX_MAX_SPEED, max_speed, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_lm_set_i32(node_id, true, MOTOR_LM_INDEX_LOWER_WORKING_LIMIT, lower_limit, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_lm_set_i32(node_id, true, MOTOR_LM_INDEX_UPPER_WORKING_LIMIT, upper_limit, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_lm_set_i32(node_id, true, MOTOR_LM_INDEX_MAX_ACCEL_DECEL, max_accel, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	motor_cmd_lm_set_i32(node_id, true, MOTOR_LM_INDEX_ENABLE_DISABLE, 1, &cmd);
+	if (exec_checked(&cmd) != ESP_OK)
+		return ESP_FAIL;
+
+	return ESP_OK;
+}
+
 /**
  * @brief Feed one PT row on the motor's 100 ms cadence, reusing the last target when needed.
  *
  * The control loop runs at 20 ms, but the planner only updates every 100 ms.
  * This helper maintains a one-segment cushion in the motor's PT FIFO by:
- * - preloading two PT rows when PT motion starts (or restarts after FIFO empty)
+ * - preloading two PT rows before PT motion starts (or restarts after FIFO empty)
  * - enqueueing one new PT row every PT frame interval
  * - attempting the enqueue up to one control tick early so a single late tick
  *   can retry before the current motor segment expires
@@ -125,14 +196,14 @@ esp_err_t feed_pt_stream_if_due(motor_uim2852_state_t *state, uint8_t node_id, i
 
 	// Read PT bookkeeping under lock
 	uint16_t frame_time_ms;
+	uint16_t write_index;
 	bool motion_started;
 	uint8_t prefill_count;
-	uint16_t write_index;
 	taskENTER_CRITICAL(&state->lock);
 	frame_time_ms = state->pt_frame_time_ms;
+	write_index = state->pt_write_index;
 	motion_started = state->pt_motion_started;
 	prefill_count = state->pt_prefill_count;
-	write_index = state->pt_write_index;
 	taskEXIT_CRITICAL(&state->lock);
 
 	TickType_t interval_ticks = pdMS_TO_TICKS(frame_time_ms);
@@ -171,14 +242,33 @@ esp_err_t feed_pt_stream_if_due(motor_uim2852_state_t *state, uint8_t node_id, i
 		if (res != MOTOR_DISPATCH_RESULT_OK)
 			return ESP_FAIL;
 
-		// Advance write index under lock
 		taskENTER_CRITICAL(&state->lock);
-		state->pt_write_index++;
+		state->pt_write_index = next_pt_fifo_row(write_index);
 		state->pt_prefill_count++;
 		taskEXIT_CRITICAL(&state->lock);
-		write_index++;
+		write_index = next_pt_fifo_row(write_index);
 
 		*fed_frame = true;
+	}
+
+	if (priming_stream && prefill_count + frames_to_send >= PT_STREAM_STARTUP_FRAMES)
+	{
+		motor_cmd_t cmd;
+		motor_dispatch_result_t res;
+
+		motor_cmd_pv_set(node_id, true, MOTOR_UIM2852_PT_FIRST_VALID_ROW, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		if (res != MOTOR_DISPATCH_RESULT_OK)
+			return ESP_FAIL;
+
+		motor_cmd_bg_begin(node_id, true, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		if (res != MOTOR_DISPATCH_RESULT_OK)
+			return ESP_FAIL;
+
+		taskENTER_CRITICAL(&state->lock);
+		state->pt_motion_started = true;
+		taskEXIT_CRITICAL(&state->lock);
 	}
 
 	if (*fed_frame)
@@ -358,13 +448,17 @@ void execute_complete_enable()
 	motor_cmd_er_clear_all(MOTOR_NODE_STEERING, true, &cmd);
 	(void)motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
 	vTaskDelay(pdMS_TO_TICKS(10));
-	// Enable steering motor (MO=1)
-	motor_cmd_mo_set(MOTOR_NODE_STEERING, true, MOTOR_MO_STATE_ENABLE, &cmd);
-	res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
-	steer_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	steer_ok = (configure_motor_controller_defaults(MOTOR_NODE_STEERING, false) == ESP_OK);
+	if (steer_ok)
+	{
+		// Enable steering motor (MO=1)
+		motor_cmd_mo_set(MOTOR_NODE_STEERING, true, MOTOR_MO_STATE_ENABLE, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		steer_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
 	if (!steer_ok)
-		ESP_LOGI(TAG, "Steering enable failed: dispatch result %d", (int)res);
+		ESP_LOGI(TAG, "Steering controller configure/enable failed");
 #endif
 	vTaskDelay(pdMS_TO_TICKS(5));
 #endif
@@ -373,13 +467,17 @@ void execute_complete_enable()
 	motor_cmd_er_clear_all(MOTOR_NODE_BRAKING, true, &cmd);
 	(void)motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
 	vTaskDelay(pdMS_TO_TICKS(10));
-	// Enable braking motor (MO=1)
-	motor_cmd_mo_set(MOTOR_NODE_BRAKING, true, MOTOR_MO_STATE_ENABLE, &cmd);
-	res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
-	brake_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	brake_ok = (configure_motor_controller_defaults(MOTOR_NODE_BRAKING, true) == ESP_OK);
+	if (brake_ok)
+	{
+		// Enable braking motor (MO=1)
+		motor_cmd_mo_set(MOTOR_NODE_BRAKING, true, MOTOR_MO_STATE_ENABLE, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		brake_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
 #ifdef CONFIG_LOG_CONTROL_ENABLE_SEQUENCE
 	if (!brake_ok)
-		ESP_LOGI(TAG, "Braking enable failed: dispatch result %d", (int)res);
+		ESP_LOGI(TAG, "Braking controller configure/enable failed");
 #endif
 	vTaskDelay(pdMS_TO_TICKS(5));
 	// Sync braking target position to current position
@@ -409,7 +507,7 @@ void execute_complete_enable()
 
 	// Configure and arm PT FIFO mode for both steering and braking.
 	// PT configure: set FIFO mode (MP[3]=0), set motion time (MP[4]), reset table (MP[0]=0)
-	// PT start: BG (begin motion)
+	// PT motion starts lazily on the first successful feed after initial PT prefill.
 	bool pt_ok = true;
 #ifndef CONFIG_BYPASS_ACTUATOR_MOTOR_UIM2852_STEERING
 	if (pt_ok)
@@ -428,6 +526,27 @@ void execute_complete_enable()
 	}
 	if (pt_ok)
 	{
+		motor_cmd_mp_set_u16(MOTOR_NODE_STEERING, true, MOTOR_MP_INDEX_QUEUE_LOW_THRESHOLD,
+		                     MOTOR_UIM2852_PT_LOW_WATER_MARK, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
+	if (pt_ok)
+	{
+		motor_cmd_mp_set_u16(MOTOR_NODE_STEERING, true, MOTOR_MP_INDEX_LAST_VALID_ROW,
+		                     MOTOR_UIM2852_PT_LAST_VALID_ROW, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
+	if (pt_ok)
+	{
+		motor_cmd_mp_set_u16(MOTOR_NODE_STEERING, true, MOTOR_MP_INDEX_FIRST_VALID_ROW,
+		                     MOTOR_UIM2852_PT_FIRST_VALID_ROW, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
+	if (pt_ok)
+	{
 		// Reset PT table (write 0 to MP[0])
 		motor_cmd_mp_set_u16(MOTOR_NODE_STEERING, true, MOTOR_MP_INDEX_CURRENT_QUEUE_LEVEL_OR_RESET_TABLE,
 		                     0, &cmd);
@@ -437,14 +556,11 @@ void execute_complete_enable()
 	if (pt_ok)
 	{
 		taskENTER_CRITICAL(&g_steering_state.lock);
-		g_steering_state.pt_write_index = 0;
+		g_steering_state.pt_write_index = MOTOR_UIM2852_PT_FIRST_VALID_ROW;
 		g_steering_state.pt_prefill_count = 0;
 		g_steering_state.pt_motion_started = false;
 		taskEXIT_CRITICAL(&g_steering_state.lock);
 
-		motor_cmd_bg_begin(MOTOR_NODE_STEERING, true, &cmd);
-		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
-		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
 	}
 #endif
 #ifndef CONFIG_BYPASS_ACTUATOR_MOTOR_UIM2852_BRAKING
@@ -464,6 +580,27 @@ void execute_complete_enable()
 	}
 	if (pt_ok)
 	{
+		motor_cmd_mp_set_u16(MOTOR_NODE_BRAKING, true, MOTOR_MP_INDEX_QUEUE_LOW_THRESHOLD,
+		                     MOTOR_UIM2852_PT_LOW_WATER_MARK, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
+	if (pt_ok)
+	{
+		motor_cmd_mp_set_u16(MOTOR_NODE_BRAKING, true, MOTOR_MP_INDEX_LAST_VALID_ROW,
+		                     MOTOR_UIM2852_PT_LAST_VALID_ROW, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
+	if (pt_ok)
+	{
+		motor_cmd_mp_set_u16(MOTOR_NODE_BRAKING, true, MOTOR_MP_INDEX_FIRST_VALID_ROW,
+		                     MOTOR_UIM2852_PT_FIRST_VALID_ROW, &cmd);
+		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
+		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
+	}
+	if (pt_ok)
+	{
 		motor_cmd_mp_set_u16(MOTOR_NODE_BRAKING, true, MOTOR_MP_INDEX_CURRENT_QUEUE_LEVEL_OR_RESET_TABLE,
 		                     0, &cmd);
 		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
@@ -472,14 +609,11 @@ void execute_complete_enable()
 	if (pt_ok)
 	{
 		taskENTER_CRITICAL(&g_braking_state.lock);
-		g_braking_state.pt_write_index = 0;
+		g_braking_state.pt_write_index = MOTOR_UIM2852_PT_FIRST_VALID_ROW;
 		g_braking_state.pt_prefill_count = 0;
 		g_braking_state.pt_motion_started = false;
 		taskEXIT_CRITICAL(&g_braking_state.lock);
 
-		motor_cmd_bg_begin(MOTOR_NODE_BRAKING, true, &cmd);
-		res = motor_dispatch_exec(&cmd, pdMS_TO_TICKS(100), pdMS_TO_TICKS(20), nullptr, nullptr, nullptr);
-		pt_ok = (res == MOTOR_DISPATCH_RESULT_OK);
 	}
 #endif
 	if (!pt_ok)

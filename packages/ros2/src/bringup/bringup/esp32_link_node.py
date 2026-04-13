@@ -37,7 +37,8 @@ STATUS_FLAG_ENABLE_COMPLETE = 0x01
 STATUS_FLAG_AUTONOMY_REQUEST = 0x02
 
 # Actuator ranges (must match ESP32 control_config.h)
-THROTTLE_MIN = 800   # DAC levels below this produce no wheel movement
+THROTTLE_MIN = 0     # 0 = idle/no throttle
+THROTTLE_DEADBAND = 650  # lowest DAC level that produces wheel movement
 THROTTLE_MAX = 4095  # 12-bit DAC full scale
 STEERING_MIN = 0
 STEERING_MAX = 720   # 360 = centered/straight

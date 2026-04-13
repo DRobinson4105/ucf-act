@@ -75,7 +75,7 @@ private:
   double v_acc_min_ = 0.0, v_acc_max_ = 1.0;
   double v_decc_min_ = 0.0, v_decc_max_ = 1.5;
   double w_vel_min_ = -1.28, w_vel_max_ = 1.28;
-  uint16_t throttle_min_ = 800, throttle_max_ = 4095;
+  uint16_t throttle_deadband_ = 650, throttle_max_ = 4095;
   uint16_t steering_min_ = 0, steering_max_ = 720;
   uint8_t braking_min_ = 0, braking_max_ = 3;
 
@@ -93,7 +93,7 @@ private:
     if (speed_error > speed_error_deadband_mps_) {
       const double throttle_span = std::max(1e-3, throttle_full_error_mps_ - speed_error_deadband_mps_);
       const double throttle_request = speed_error - speed_error_deadband_mps_;
-      throttle_val = normalize(throttle_request, 0.0, throttle_span, throttle_min_, throttle_max_);
+      throttle_val = normalize(throttle_request, 0.0, throttle_span, throttle_deadband_, throttle_max_);
     } else if (speed_error < -speed_error_deadband_mps_) {
       const double brake_span = std::max(1e-3, brake_full_error_mps_ - speed_error_deadband_mps_);
       const double brake_request = (-speed_error) - speed_error_deadband_mps_;
