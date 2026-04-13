@@ -449,8 +449,16 @@ void safety_task(void *param)
 #ifdef CONFIG_LOG_SAFETY_FAULT_CHANGES
 		if (decision.fault_flags != prev_fault_flags)
 		{
-			ESP_LOGI(TAG, "Safety fault: %s -> %s", safety_fault_to_log_string(prev_fault_flags),
-			         safety_fault_to_log_string(decision.fault_flags));
+			if (decision.fault_flags != NODE_FAULT_NONE)
+			{
+				ESP_LOGW(TAG, "Safety fault: %s -> %s", safety_fault_to_log_string(prev_fault_flags),
+				         safety_fault_to_log_string(decision.fault_flags));
+			}
+			else
+			{
+				ESP_LOGI(TAG, "Safety fault: %s -> %s", safety_fault_to_log_string(prev_fault_flags),
+				         safety_fault_to_log_string(decision.fault_flags));
+			}
 		}
 		if (decision.stop_flags != prev_stop_flags)
 		{

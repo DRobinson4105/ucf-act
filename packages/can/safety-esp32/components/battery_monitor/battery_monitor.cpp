@@ -19,6 +19,8 @@
 
 #include "battery_monitor.h"
 
+#include <math.h>
+
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -51,6 +53,18 @@ constexpr float CURRENT_EMA_ALPHA = 0.2f;
 // At 20 Hz with alpha=0.001, time constant ≈ 50s (~2-3 min to converge).
 constexpr float VOLTAGE_SOC_BLEND_ALPHA = 0.001f;
 
+// When current tracking is not yet trusted, use a slower voltage-only SOC
+// blend so transient load sag does not whipsaw the estimate.
+constexpr float VOLTAGE_ONLY_SOC_BLEND_ALPHA = 0.02f;
+
+// Startup priming window: collect multiple samples before trusting either the
+// initial SOC seed or the current-sensor zero point.
+constexpr uint8_t STARTUP_PRIME_SAMPLES = 10;
+
+// Small median filter window to reject one-sample ADC spikes without adding
+// much lag to the signal.
+constexpr uint8_t RAW_MEDIAN_WINDOW = 3;
+
 // ============================================================================
 // SOC Constants
 // ============================================================================
@@ -62,9 +76,11 @@ constexpr int32_t IDLE_CURRENT_THRESHOLD_MA = 500;
 // Time the cart must be idle before voltage-based SOC recalibration (ms).
 constexpr uint32_t IDLE_RECAL_MS = 300000; // 5 minutes
 
-// Zero-offset calibration tolerance: at boot, if measured current is within
-// this range of expected zero, accept the reading as the true zero offset.
-constexpr int32_t ZERO_CAL_TOLERANCE_MA = 2000; // ±2A
+// Accept a startup zero estimate if it is stable over the priming window, even
+// when it differs from nominal. This lets us absorb wiring/sensor bias instead
+// of baking that bias into every current measurement.
+constexpr float ZERO_CAL_STABLE_RANGE_MV = 20.0f;
+constexpr int32_t ZERO_CAL_MAX_ABS_DEVIATION_MA = 15000;
 
 // ============================================================================
 // Voltage-to-SOC Lookup Table (48V lead-acid, 24 cells)
@@ -116,6 +132,7 @@ bool s_current_cali_ok = false;
 float s_voltage_filtered_mv = 0.0f; // Pack voltage in mV (after divider undo)
 float s_current_filtered_ma = 0.0f; // Pack current in mA (positive = discharge)
 bool s_filters_primed = false;      // First sample initializes filters directly
+float s_soc_voltage_only_estimate = 0.0f;
 
 // SOC state
 uint8_t s_soc_pct = 0;
@@ -127,8 +144,24 @@ uint32_t s_idle_start_ms = 0;
 bool s_is_idle = false;
 
 // Zero-offset calibration
-int32_t s_current_zero_offset_mv = 0; // Actual sensor zero in mV (after output divider)
+float s_current_zero_offset_mv = 0.0f; // Actual sensor zero in mV (after output divider)
 bool s_zero_calibrated = false;
+bool s_current_tracking_valid = false;
+
+// Startup priming state
+uint8_t s_startup_prime_count = 0;
+float s_startup_voltage_sum_mv = 0.0f;
+float s_startup_sensor_sum_mv = 0.0f;
+float s_startup_sensor_min_mv = 0.0f;
+float s_startup_sensor_max_mv = 0.0f;
+
+// Small raw-sample windows used by the median filter.
+float s_voltage_raw_window[RAW_MEDIAN_WINDOW] = {};
+float s_sensor_raw_window[RAW_MEDIAN_WINDOW] = {};
+uint8_t s_voltage_raw_count = 0;
+uint8_t s_sensor_raw_count = 0;
+uint8_t s_voltage_raw_index = 0;
+uint8_t s_sensor_raw_index = 0;
 
 // Health tracking
 uint8_t s_voltage_fail_count = 0;
@@ -238,6 +271,52 @@ bool setup_calibration(adc_unit_t unit, adc_channel_t channel, adc_cali_handle_t
 	return (err == ESP_OK);
 }
 
+float absf_local(float value)
+{
+	return value < 0.0f ? -value : value;
+}
+
+void push_raw_sample(float *window, uint8_t *count, uint8_t *index, float value)
+{
+	window[*index] = value;
+	*index = (uint8_t)((*index + 1U) % RAW_MEDIAN_WINDOW);
+	if (*count < RAW_MEDIAN_WINDOW)
+		(*count)++;
+}
+
+float median_window(const float *window, uint8_t count)
+{
+	if (count == 0)
+		return 0.0f;
+	if (count == 1)
+		return window[0];
+	if (count == 2)
+		return 0.5f * (window[0] + window[1]);
+
+	float a = window[0];
+	float b = window[1];
+	float c = window[2];
+	if (a > b)
+	{
+		float tmp = a;
+		a = b;
+		b = tmp;
+	}
+	if (b > c)
+	{
+		float tmp = b;
+		b = c;
+		c = tmp;
+	}
+	if (a > b)
+	{
+		float tmp = a;
+		a = b;
+		b = tmp;
+	}
+	return b;
+}
+
 } // namespace
 
 // ============================================================================
@@ -329,13 +408,24 @@ esp_err_t battery_monitor_init(const battery_monitor_config_t *config)
 	s_filters_primed = false;
 	s_voltage_filtered_mv = 0.0f;
 	s_current_filtered_ma = 0.0f;
+	s_soc_voltage_only_estimate = 0.0f;
 	s_soc_pct = 0;
 	s_coulomb_mah_used = 0.0f;
 	s_soc_coulomb_base = 0.0f;
 	s_is_idle = false;
 	s_idle_start_ms = 0;
 	s_zero_calibrated = false;
-	s_current_zero_offset_mv = 0;
+	s_current_zero_offset_mv = 0.0f;
+	s_current_tracking_valid = false;
+	s_startup_prime_count = 0;
+	s_startup_voltage_sum_mv = 0.0f;
+	s_startup_sensor_sum_mv = 0.0f;
+	s_startup_sensor_min_mv = 0.0f;
+	s_startup_sensor_max_mv = 0.0f;
+	s_voltage_raw_count = 0;
+	s_sensor_raw_count = 0;
+	s_voltage_raw_index = 0;
+	s_sensor_raw_index = 0;
 	s_voltage_fail_count = 0;
 	s_current_fail_count = 0;
 	s_last_update_ms = 0;
@@ -394,14 +484,11 @@ void battery_monitor_update(uint32_t now_ms)
 		// Undo divider: pack_voltage = adc_mv × divider_ratio
 		float pack_mv = (float)voltage_adc_mv * (float)s_config.divider_ratio;
 
-		if (!s_filters_primed)
-		{
-			s_voltage_filtered_mv = pack_mv;
-		}
-		else
-		{
-			s_voltage_filtered_mv += VOLTAGE_EMA_ALPHA * (pack_mv - s_voltage_filtered_mv);
-		}
+		push_raw_sample(s_voltage_raw_window, &s_voltage_raw_count, &s_voltage_raw_index, pack_mv);
+		float pack_mv_filtered = median_window(s_voltage_raw_window, s_voltage_raw_count);
+
+		if (s_filters_primed)
+			s_voltage_filtered_mv += VOLTAGE_EMA_ALPHA * (pack_mv_filtered - s_voltage_filtered_mv);
 	}
 	else
 	{
@@ -419,47 +506,7 @@ void battery_monitor_update(uint32_t now_ms)
 		// Undo the output divider to get the actual sensor output voltage.
 		// sensor_mv = adc_mv / output_scale
 		float sensor_mv = (float)current_adc_mv / s_config.current_output_scale;
-
-		// Zero-offset auto-calibration on first good reading:
-		// At boot the cart should be idle, so the sensor output represents 0A.
-		// Record this as the true zero offset instead of using the nominal value.
-		if (!s_zero_calibrated)
-		{
-			// Check if the reading is close to the expected zero
-			int32_t expected_zero = (int32_t)s_config.current_zero_mv;
-			float deviation_ma_f = (sensor_mv - (float)expected_zero) * 1000.0f / s_config.current_sens_uv;
-			int32_t deviation_ma = (int32_t)deviation_ma_f;
-
-			if (deviation_ma > -ZERO_CAL_TOLERANCE_MA && deviation_ma < ZERO_CAL_TOLERANCE_MA)
-			{
-				s_current_zero_offset_mv = (int32_t)(sensor_mv + 0.5f);
-				s_zero_calibrated = true;
-				ESP_LOGI(TAG, "Current sensor zero calibrated: %ldmV (nominal: %umV, deviation: %ldmA)",
-				         (long)s_current_zero_offset_mv, s_config.current_zero_mv, (long)deviation_ma);
-			}
-			else
-			{
-				// Deviation too large — cart may not be idle, use nominal zero
-				s_current_zero_offset_mv = expected_zero;
-				s_zero_calibrated = true;
-				ESP_LOGW(TAG, "Current sensor zero too far from nominal (%ldmA deviation), using nominal %umV",
-				         (long)deviation_ma, s_config.current_zero_mv);
-			}
-		}
-
-		// Convert sensor voltage to current:
-		// current_ma = (sensor_mv - zero_mv) × 1000 / sensitivity_uv
-		// Positive = discharge (current flowing out of battery)
-		float current_ma = (sensor_mv - (float)s_current_zero_offset_mv) * 1000.0f / s_config.current_sens_uv;
-
-		if (!s_filters_primed)
-		{
-			s_current_filtered_ma = current_ma;
-		}
-		else
-		{
-			s_current_filtered_ma += CURRENT_EMA_ALPHA * (current_ma - s_current_filtered_ma);
-		}
+		push_raw_sample(s_sensor_raw_window, &s_sensor_raw_count, &s_sensor_raw_index, sensor_mv);
 	}
 	else
 	{
@@ -467,26 +514,113 @@ void battery_monitor_update(uint32_t now_ms)
 			s_current_fail_count++;
 	}
 
-	// Mark filters as primed after first successful reads
+	// Prime startup state from a short window of valid samples before trusting
+	// either SOC or current zero. This avoids seeding from a single transient.
 	if (!s_filters_primed && v_err == ESP_OK && c_err == ESP_OK)
 	{
-		s_filters_primed = true;
+		float pack_mv_filtered = median_window(s_voltage_raw_window, s_voltage_raw_count);
+		float sensor_mv_filtered = median_window(s_sensor_raw_window, s_sensor_raw_count);
 
-		// Initialize SOC from voltage on first reading
-		s_soc_pct = voltage_to_soc((uint16_t)(s_voltage_filtered_mv + 0.5f));
-		s_soc_coulomb_base = (float)s_soc_pct;
-		s_coulomb_mah_used = 0.0f;
-		s_idle_start_ms = now_ms;
+		s_startup_voltage_sum_mv += pack_mv_filtered;
+		s_startup_sensor_sum_mv += sensor_mv_filtered;
+		if (s_startup_prime_count == 0)
+		{
+			s_startup_sensor_min_mv = sensor_mv_filtered;
+			s_startup_sensor_max_mv = sensor_mv_filtered;
+		}
+		else
+		{
+			if (sensor_mv_filtered < s_startup_sensor_min_mv)
+				s_startup_sensor_min_mv = sensor_mv_filtered;
+			if (sensor_mv_filtered > s_startup_sensor_max_mv)
+				s_startup_sensor_max_mv = sensor_mv_filtered;
+		}
+		s_startup_prime_count++;
 
-		ESP_LOGI(TAG, "Initial reading: voltage=%umV current=%dmA soc=%u%%", (unsigned)(s_voltage_filtered_mv + 0.5f),
-		         (int)(s_current_filtered_ma + 0.5f), s_soc_pct);
+		if (s_startup_prime_count >= STARTUP_PRIME_SAMPLES)
+		{
+			float startup_voltage_mv = s_startup_voltage_sum_mv / (float)s_startup_prime_count;
+			float startup_sensor_mv = s_startup_sensor_sum_mv / (float)s_startup_prime_count;
+			float sensor_range_mv = s_startup_sensor_max_mv - s_startup_sensor_min_mv;
+			float deviation_ma_f =
+				(startup_sensor_mv - (float)s_config.current_zero_mv) * 1000.0f / s_config.current_sens_uv;
+			int32_t deviation_ma = (int32_t)deviation_ma_f;
+
+			bool startup_zero_plausible =
+				absf_local((float)deviation_ma) <= (float)ZERO_CAL_MAX_ABS_DEVIATION_MA;
+			bool startup_zero_stable = sensor_range_mv <= ZERO_CAL_STABLE_RANGE_MV;
+
+			if (startup_zero_plausible && startup_zero_stable)
+			{
+				s_current_zero_offset_mv = startup_sensor_mv;
+				s_current_tracking_valid = true;
+				ESP_LOGI(TAG,
+				         "Current sensor zero calibrated: %ldmV (nominal: %umV, deviation: %ldmA, range=%.1fmV)",
+				         (long)(s_current_zero_offset_mv + 0.5f), s_config.current_zero_mv, (long)deviation_ma,
+				         (double)sensor_range_mv);
+			}
+			else
+			{
+				// Boot window was unstable or implausible. Use the boot average if
+				// plausible (captures actual sensor VCC/2 which drifts from nominal),
+				// otherwise fall back to configured nominal. Either way, start tracking
+				// immediately — no runtime re-centering, since downstream devices are
+				// always drawing current and would bias the zero offset.
+				s_current_zero_offset_mv =
+					startup_zero_plausible ? startup_sensor_mv : (float)s_config.current_zero_mv;
+				s_current_tracking_valid = true;
+				ESP_LOGI(TAG,
+				         "Current sensor boot unstable (deviation=%ldmA range=%.1fmV), using %s %ldmV",
+				         (long)deviation_ma, (double)sensor_range_mv,
+				         startup_zero_plausible ? "boot avg" : "nominal",
+				         (long)(s_current_zero_offset_mv + 0.5f));
+			}
+
+			s_zero_calibrated = true;
+			s_filters_primed = true;
+			s_voltage_filtered_mv = startup_voltage_mv;
+			s_current_filtered_ma =
+				(startup_sensor_mv - s_current_zero_offset_mv) * 1000.0f / s_config.current_sens_uv;
+			s_soc_pct = voltage_to_soc((uint16_t)(startup_voltage_mv + 0.5f));
+			s_soc_coulomb_base = (float)s_soc_pct;
+			s_soc_voltage_only_estimate = (float)s_soc_pct;
+			s_coulomb_mah_used = 0.0f;
+			s_idle_start_ms = now_ms;
+
+			// Seed the median windows with the settled startup estimates so the
+			// first post-prime update continues smoothly.
+			for (uint8_t i = 0; i < RAW_MEDIAN_WINDOW; ++i)
+			{
+				s_voltage_raw_window[i] = startup_voltage_mv;
+				s_sensor_raw_window[i] = startup_sensor_mv;
+			}
+			s_voltage_raw_count = RAW_MEDIAN_WINDOW;
+			s_sensor_raw_count = RAW_MEDIAN_WINDOW;
+			s_voltage_raw_index = 0;
+			s_sensor_raw_index = 0;
+
+			ESP_LOGI(TAG, "Initial reading: voltage=%umV current=%dmA soc=%u%%", (unsigned)(startup_voltage_mv + 0.5f),
+			         (int)(s_current_filtered_ma + 0.5f), s_soc_pct);
+		}
 	}
 
 	if (!s_filters_primed)
 		return;
 
+	if (c_err == ESP_OK)
+	{
+		float sensor_mv_filtered = median_window(s_sensor_raw_window, s_sensor_raw_count);
+		float current_ma = (sensor_mv_filtered - s_current_zero_offset_mv) * 1000.0f / s_config.current_sens_uv;
+
+		// No runtime re-centering. The zero offset is locked at boot (either stable
+		// average or unstable-but-plausible average). Downstream devices are always
+		// drawing current, so there is never a true zero-current moment to recalibrate.
+
+		s_current_filtered_ma += CURRENT_EMA_ALPHA * (current_ma - s_current_filtered_ma);
+	}
+
 	// ── Coulomb counting ────────────────────────────────────────────────
-	if (dt_s > 0.0f && dt_s < 1.0f) // Guard against absurd dt (>1s means we missed ticks)
+	if (s_current_tracking_valid && dt_s > 0.0f && dt_s < 1.0f) // Guard against absurd dt (>1s means we missed ticks)
 	{
 		// mAh = mA × hours = mA × (seconds / 3600)
 		float delta_mah = s_current_filtered_ma * (dt_s / 3600.0f);
@@ -498,7 +632,7 @@ void battery_monitor_update(uint32_t now_ms)
 	if (abs_current < 0.0f)
 		abs_current = -abs_current;
 
-	if (abs_current < (float)IDLE_CURRENT_THRESHOLD_MA)
+	if (s_current_tracking_valid && abs_current < (float)IDLE_CURRENT_THRESHOLD_MA)
 	{
 		if (!s_is_idle)
 		{
@@ -528,17 +662,28 @@ void battery_monitor_update(uint32_t now_ms)
 		s_is_idle = false;
 	}
 
-	// ── Compute SOC from coulomb counting ───────────────────────────────
-	// soc = base_soc - (mAh_used / capacity_mAh) × 100
-	float soc_delta_pct = (s_coulomb_mah_used / (float)s_config.capacity_mah) * 100.0f;
-	float soc_estimate = s_soc_coulomb_base - soc_delta_pct;
-
-	// ── Blend voltage-derived SOC to correct coulomb counting drift ─────
-	// Nudge coulomb base toward voltage SOC each tick so drift is
-	// corrected over ~2-3 minutes without requiring an idle period.
 	float voltage_soc = (float)voltage_to_soc((uint16_t)(s_voltage_filtered_mv + 0.5f));
-	s_soc_coulomb_base += VOLTAGE_SOC_BLEND_ALPHA * (voltage_soc - soc_estimate);
-	soc_estimate = s_soc_coulomb_base - soc_delta_pct;
+	float soc_estimate = voltage_soc;
+
+	if (s_current_tracking_valid)
+	{
+		// ── Compute SOC from coulomb counting ───────────────────────────
+		// soc = base_soc - (mAh_used / capacity_mAh) × 100
+		float soc_delta_pct = (s_coulomb_mah_used / (float)s_config.capacity_mah) * 100.0f;
+		soc_estimate = s_soc_coulomb_base - soc_delta_pct;
+
+		// ── Blend voltage-derived SOC to correct coulomb counting drift ─
+		// Nudge coulomb base toward voltage SOC each tick so drift is
+		// corrected over ~2-3 minutes without requiring an idle period.
+		s_soc_coulomb_base += VOLTAGE_SOC_BLEND_ALPHA * (voltage_soc - soc_estimate);
+		soc_estimate = s_soc_coulomb_base - soc_delta_pct;
+		s_soc_voltage_only_estimate = soc_estimate;
+	}
+	else
+	{
+		s_soc_voltage_only_estimate += VOLTAGE_ONLY_SOC_BLEND_ALPHA * (voltage_soc - s_soc_voltage_only_estimate);
+		soc_estimate = s_soc_voltage_only_estimate;
+	}
 
 	// Clamp to 0-100
 	if (soc_estimate < 0.0f)
@@ -551,16 +696,18 @@ void battery_monitor_update(uint32_t now_ms)
 #ifdef CONFIG_LOG_INPUT_BATTERY_SOC_CHANGES
 	if (new_soc != s_soc_pct)
 	{
-		ESP_LOGI(TAG, "SOC: %u%% -> %u%% (voltage=%umV current=%dmA coulomb_used=%.1fmAh)", s_soc_pct, new_soc,
-		         (unsigned)(s_voltage_filtered_mv + 0.5f), (int)(s_current_filtered_ma + 0.5f), s_coulomb_mah_used);
+		ESP_LOGI(TAG, "SOC: %u%% -> %u%% (voltage=%umV current=%dmA coulomb_used=%.1fmAh current_valid=%d)", s_soc_pct,
+		         new_soc, (unsigned)(s_voltage_filtered_mv + 0.5f), (int)(s_current_filtered_ma + 0.5f),
+		         s_coulomb_mah_used, s_current_tracking_valid);
 	}
 #endif
 
 	s_soc_pct = new_soc;
 
 #ifdef CONFIG_LOG_INPUT_BATTERY_TICK
-	ESP_LOGI(TAG, "V=%umV I=%dmA SOC=%u%% idle=%d zero_cal=%ldmV", (unsigned)(s_voltage_filtered_mv + 0.5f),
-	         (int)(s_current_filtered_ma + 0.5f), s_soc_pct, s_is_idle, (long)s_current_zero_offset_mv);
+	ESP_LOGI(TAG, "V=%umV I=%dmA SOC=%u%% idle=%d zero_cal=%ldmV current_valid=%d",
+	         (unsigned)(s_voltage_filtered_mv + 0.5f), (int)(s_current_filtered_ma + 0.5f), s_soc_pct, s_is_idle,
+	         (long)(s_current_zero_offset_mv + 0.5f), s_current_tracking_valid);
 #endif
 }
 

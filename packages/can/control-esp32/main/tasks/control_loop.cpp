@@ -622,13 +622,29 @@ void control_task(void *param)
 			const char *detail = fault_detail_string(new_fault, fr_state, true);
 			if (detail)
 			{
-				ESP_LOGI(TAG, "Fault: %s -> %s (detail=%s)", node_fault_to_string(prev_fault_flags),
-				         node_fault_to_string(new_fault), detail);
+				if (new_fault != NODE_FAULT_NONE)
+				{
+					ESP_LOGW(TAG, "Fault: %s -> %s (detail=%s)", node_fault_to_string(prev_fault_flags),
+					         node_fault_to_string(new_fault), detail);
+				}
+				else
+				{
+					ESP_LOGI(TAG, "Fault: %s -> %s (detail=%s)", node_fault_to_string(prev_fault_flags),
+					         node_fault_to_string(new_fault), detail);
+				}
 			}
 			else
 			{
-				ESP_LOGI(TAG, "Fault: %s -> %s", node_fault_to_string(prev_fault_flags),
-				         node_fault_to_string(new_fault));
+				if (new_fault != NODE_FAULT_NONE)
+				{
+					ESP_LOGW(TAG, "Fault: %s -> %s", node_fault_to_string(prev_fault_flags),
+					         node_fault_to_string(new_fault));
+				}
+				else
+				{
+					ESP_LOGI(TAG, "Fault: %s -> %s", node_fault_to_string(prev_fault_flags),
+					         node_fault_to_string(new_fault));
+				}
 			}
 		}
 		prev_fault_flags = new_fault;
@@ -643,8 +659,16 @@ void control_task(void *param)
 		}
 		if (cmd_local.safety_fault_flags != prev_safety_fault)
 		{
-			ESP_LOGI(TAG, "Safety fault: %s -> %s", node_fault_to_string(prev_safety_fault),
-			         node_fault_to_string(cmd_local.safety_fault_flags));
+			if (cmd_local.safety_fault_flags != NODE_FAULT_NONE)
+			{
+				ESP_LOGW(TAG, "Safety fault: %s -> %s", node_fault_to_string(prev_safety_fault),
+				         node_fault_to_string(cmd_local.safety_fault_flags));
+			}
+			else
+			{
+				ESP_LOGI(TAG, "Safety fault: %s -> %s", node_fault_to_string(prev_safety_fault),
+				         node_fault_to_string(cmd_local.safety_fault_flags));
+			}
 		}
 		if (cmd_local.safety_stop_flags != prev_safety_stop)
 		{
