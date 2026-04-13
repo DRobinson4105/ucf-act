@@ -24,7 +24,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from msgs.msg import ESP32Heartbeat
 
 from convex_client import push_telemetry, push_route, poll_assignment, arrived_at_pickup, complete_ride, get_ride_status
@@ -82,6 +82,9 @@ class CartBridgeNode(Node):
         self.create_subscription(Odometry, "/odometry/global", self._odom_callback, 10)
         self.create_subscription(ESP32Heartbeat, "/esp32/safety_heartbeat", self._safety_hb_callback, 10)
 
+        # Publisher — signals esp32_link_node to assert autonomy_request
+        self._autonomy_pub = self.create_publisher(Bool, "/act/autonomy_request", 10)
+
         # Publisher — sends route to global_path_manager
         self._route_pub = self.create_publisher(
             String,
@@ -119,6 +122,11 @@ class CartBridgeNode(Node):
     # ---- Timers ---------------------------------------------------------- #
 
     def _telemetry_timer(self) -> None:
+        # Tell esp32_link_node whether we want autonomy (active ride exists)
+        autonomy_msg = Bool()
+        autonomy_msg.data = self._active_ride is not None
+        self._autonomy_pub.publish(autonomy_msg)
+
         if self._lat is None or self._lon is None:
             return
         try:

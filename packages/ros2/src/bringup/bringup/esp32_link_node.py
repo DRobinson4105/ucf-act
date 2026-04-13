@@ -15,7 +15,7 @@ import time
 import serial
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Header
+from std_msgs.msg import Bool, Header
 from msgs.msg import DriveCommand, ESP32Heartbeat
 
 # orin_link_protocol constants
@@ -138,6 +138,7 @@ class ESP32LinkNode(Node):
         self._lock = threading.Lock()
         self._latest_cmd: DriveCommand | None = None
         self._safety_target_state: int = STATE_INIT
+        self._autonomy_requested: bool = False
 
         # Open serial ports
         self._safety_port = None
@@ -163,9 +164,11 @@ class ESP32LinkNode(Node):
         self._safety_hb_pub = self.create_publisher(ESP32Heartbeat, "/esp32/safety_heartbeat", 10)
         self._control_hb_pub = self.create_publisher(ESP32Heartbeat, "/esp32/control_heartbeat", 10)
 
-        # Subscriber for actuator commands
+        # Subscribers
         self._cmd_sub = self.create_subscription(
             DriveCommand, drive_cmd_topic, self._on_drive_cmd, 10)
+        self._autonomy_sub = self.create_subscription(
+            Bool, "/act/autonomy_request", self._on_autonomy_request, 10)
 
         # RX threads
         self._running = True
@@ -193,6 +196,10 @@ class ESP32LinkNode(Node):
             self._latest_cmd = msg
             self._last_cmd_time = time.monotonic()
 
+    def _on_autonomy_request(self, msg: Bool):
+        with self._lock:
+            self._autonomy_requested = msg.data
+
     def _tx_tick(self):
         now = time.monotonic()
 
@@ -201,6 +208,7 @@ class ESP32LinkNode(Node):
             cmd = self._latest_cmd
             cmd_age = now - self._last_cmd_time
             safety_state = self._safety_target_state
+            autonomy = self._autonomy_requested
 
         cmd_active = cmd is not None and cmd_age < self._cmd_timeout
 
@@ -210,7 +218,10 @@ class ESP32LinkNode(Node):
         # as cooperative and complete the ENABLE → ACTIVE transition.
         planner_state = safety_state if safety_state >= STATE_READY else STATE_READY
 
-        status_flags = STATUS_FLAG_AUTONOMY_REQUEST
+        # Only request autonomy when cart-bridge has an active ride.
+        # Safety gates READY → ENABLE on this flag, and retreats from
+        # ENABLE/ACTIVE when it drops.
+        status_flags = STATUS_FLAG_AUTONOMY_REQUEST if autonomy else 0
         if planner_state == STATE_ENABLE:
             status_flags |= STATUS_FLAG_ENABLE_COMPLETE
 
