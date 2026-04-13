@@ -71,6 +71,16 @@ void control_orin_link_rx_task(void *param)
 			}
 #endif
 		}
+		else if (msg.type == ORIN_LINK_MSG_SAFETY_HEARTBEAT)
+		{
+			// Safety heartbeat forwarded by Orin (replaces CAN-based safety heartbeat RX)
+			if (!control_can_rx_process_safety_heartbeat_payload(msg.payload, msg.payload_len, ctx->cmd_lock,
+			                                                     ctx->snapshot, ctx->monitor, ctx->safety_node_handle,
+			                                                     ctx->tag, "Orin safety HB"))
+			{
+				ESP_LOGW(ctx->tag, "Orin safety heartbeat decode failed (len=%u)", msg.payload_len);
+			}
+		}
 		else
 		{
 			ESP_LOGW(ctx->tag, "Ignoring Orin message type=%s len=%u", orin_link_message_type_to_string(msg.type),

@@ -37,27 +37,38 @@ void safety_orin_link_rx_task(void *param)
 			continue;
 		}
 
-		if (msg.type != ORIN_LINK_MSG_PLANNER_HEARTBEAT)
+		if (msg.type == ORIN_LINK_MSG_PLANNER_HEARTBEAT)
+		{
+			if (!safety_can_rx_process_heartbeat_payload(msg.payload, msg.payload_len, ctx->monitor,
+			                                             ctx->planner_node_handle, ctx->mirror_lock, ctx->mirror, true,
+			                                             ctx->tag, "Orin planner HB"))
+			{
+				ESP_LOGW(ctx->tag, "Orin planner heartbeat decode failed (len=%u)", msg.payload_len);
+			}
+#ifdef CONFIG_LOG_TRANSPORT_ORIN_PLANNER_HEARTBEAT_RX
+			else
+			{
+				node_heartbeat_t hb;
+				if (can_decode_heartbeat(msg.payload, msg.payload_len, &hb))
+					ESP_LOGI(ctx->tag, "Orin planner HB: seq=%u state=%s fault=%s",
+					         hb.sequence, node_state_to_string(hb.state), node_fault_to_string(hb.fault_flags));
+			}
+#endif
+		}
+		else if (msg.type == ORIN_LINK_MSG_CONTROL_HEARTBEAT)
+		{
+			// Control heartbeat forwarded by Orin (replaces CAN-based control heartbeat RX)
+			if (!safety_can_rx_process_heartbeat_payload(msg.payload, msg.payload_len, ctx->monitor,
+			                                             ctx->control_node_handle, ctx->mirror_lock, ctx->mirror, false,
+			                                             ctx->tag, "Orin control HB"))
+			{
+				ESP_LOGW(ctx->tag, "Orin control heartbeat decode failed (len=%u)", msg.payload_len);
+			}
+		}
+		else
 		{
 			ESP_LOGW(ctx->tag, "Ignoring Orin message type=%s len=%u", orin_link_message_type_to_string(msg.type),
 			         msg.payload_len);
-			continue;
 		}
-
-		if (!safety_can_rx_process_heartbeat_payload(msg.payload, msg.payload_len, ctx->monitor,
-		                                             ctx->planner_node_handle, ctx->mirror_lock, ctx->mirror, true,
-		                                             ctx->tag, "Orin planner HB"))
-		{
-			ESP_LOGW(ctx->tag, "Orin planner heartbeat decode failed (len=%u)", msg.payload_len);
-		}
-#ifdef CONFIG_LOG_TRANSPORT_ORIN_PLANNER_HEARTBEAT_RX
-		else
-		{
-			node_heartbeat_t hb;
-			if (can_decode_heartbeat(msg.payload, msg.payload_len, &hb))
-				ESP_LOGI(ctx->tag, "Orin planner HB: seq=%u state=%s fault=%s",
-				         hb.sequence, node_state_to_string(hb.state), node_fault_to_string(hb.fault_flags));
-		}
-#endif
 	}
 }

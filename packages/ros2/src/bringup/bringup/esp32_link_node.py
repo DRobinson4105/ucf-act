@@ -286,14 +286,28 @@ class ESP32LinkNode(Node):
             if hb is None:
                 continue
 
-            # Publish to appropriate topic
+            # Publish to appropriate topic and forward to the other ESP32
             if label == "safety" and msg_type == MSG_SAFETY_HEARTBEAT:
                 self._publish_heartbeat(self._safety_hb_pub, msg_type, hb)
                 # Track Safety's target state so we can mirror it in our heartbeat
                 with self._lock:
                     self._safety_target_state = hb["state"]
+                # Forward safety heartbeat to Control ESP32 (replaces CAN path)
+                if self._control_port and self._control_port.is_open:
+                    try:
+                        self._control_port.write(
+                            encode_frame(MSG_SAFETY_HEARTBEAT, payload))
+                    except serial.SerialException:
+                        pass
             elif label == "control" and msg_type == MSG_CONTROL_HEARTBEAT:
                 self._publish_heartbeat(self._control_hb_pub, msg_type, hb)
+                # Forward control heartbeat to Safety ESP32 (replaces CAN path)
+                if self._safety_port and self._safety_port.is_open:
+                    try:
+                        self._safety_port.write(
+                            encode_frame(MSG_CONTROL_HEARTBEAT, payload))
+                    except serial.SerialException:
+                        pass
 
     def _publish_heartbeat(self, pub, source: int, hb: dict):
         msg = ESP32Heartbeat()

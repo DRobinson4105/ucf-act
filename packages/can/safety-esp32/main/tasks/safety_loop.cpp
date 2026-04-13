@@ -37,39 +37,13 @@
  *
  * @param param  Unused (NULL)
  */
+// CAN RX task is no longer needed on Safety — Control heartbeats now arrive
+// via Orin UART link. The task entry point is kept for build compatibility
+// but the task is no longer created in safety_init.
 void can_rx_task(void *param)
 {
 	(void)param;
-	node_task_wdt_add_self_or_log(TAG, "can_rx_task");
-	bool wdt_reset_failed = false;
-	twai_message_t msg{};
-	while (true)
-	{
-		node_task_wdt_reset_or_log(TAG, "can_rx_task", &wdt_reset_failed);
-		// Skip TWAI API calls while driver is down or being recovered.
-		// Sleeping 100ms (not 5ms) prevents this priority-7 task from
-		// starving lower-priority tasks when the bus is unavailable.
-		if (!g_twai_ready)
-		{
-			vTaskDelay(pdMS_TO_TICKS(100));
-			continue;
-		}
-		if (can_twai_receive(&msg, CAN_RX_TIMEOUT) != ESP_OK)
-		{
-			vTaskDelay(pdMS_TO_TICKS(5));
-			continue;
-		}
-		if (msg.extd || msg.rtr)
-			continue;
-
-		// Process Control ESP32 heartbeat (0x120)
-		if (msg.identifier == CAN_ID_CONTROL_HEARTBEAT)
-		{
-			if (!safety_can_rx_process_heartbeat(&msg, &g_hb_monitor, g_node_control, &g_hb_mirror_lock, &g_hb_mirror,
-			                                     false, TAG_RX, "Control"))
-				continue;
-		}
-	}
+	vTaskDelete(nullptr);
 }
 
 // ============================================================================

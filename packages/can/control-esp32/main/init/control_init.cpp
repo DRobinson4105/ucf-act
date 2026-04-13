@@ -121,6 +121,7 @@ void main_task(void *param)
 		.snapshot = &g_cmd,
 		.monitor = &g_hb_monitor,
 		.planner_node_handle = g_node_planner,
+		.safety_node_handle = g_node_safety,
 	};
 	if (g_orin_link_ready &&
 	    xTaskCreate(control_orin_link_rx_task, "orin_rx", CAN_RX_TASK_STACK, &g_orin_rx_ctx, CAN_RX_TASK_PRIO,

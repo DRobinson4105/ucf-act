@@ -107,6 +107,7 @@ void main_task(void *param)
 		.tag = TAG_RX,
 		.monitor = &g_hb_monitor,
 		.planner_node_handle = g_node_planner,
+		.control_node_handle = g_node_control,
 		.mirror_lock = &g_hb_mirror_lock,
 		.mirror = &g_hb_mirror,
 	};
@@ -310,15 +311,8 @@ void main_task(void *param)
 		}
 	}
 
-	// Start CAN RX task first so heartbeat frames can be received during init wait.
-#ifndef CONFIG_BYPASS_CAN_TWAI
-	if (xTaskCreate(can_rx_task, "can_rx", CAN_RX_TASK_STACK, nullptr, CAN_RX_TASK_PRIO, &g_can_rx_task_handle) !=
-	    pdPASS)
-	{
-		ESP_LOGE(TAG_INIT, "Failed to create CAN RX task, restarting");
-		esp_restart();
-	}
-#endif
+	// CAN RX task is no longer needed — Control heartbeats arrive via Orin UART.
+	// Safety has no CAN devices (all sensors are GPIO/UART/ADC).
 
 	// Wait for Planner/Control heartbeats (if not bypassed).
 #if !defined(CONFIG_BYPASS_PLANNER_LIVENESS_CHECKS) || !defined(CONFIG_BYPASS_CONTROL_LIVENESS_CHECKS)

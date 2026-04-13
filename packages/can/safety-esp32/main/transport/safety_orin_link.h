@@ -18,6 +18,7 @@ typedef struct
 	const char *tag;
 	heartbeat_monitor_t *monitor;
 	int planner_node_handle;
+	int control_node_handle;
 	portMUX_TYPE *mirror_lock;
 	volatile hb_mirror_snapshot_t *mirror;
 } safety_orin_link_rx_context_t;

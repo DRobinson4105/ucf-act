@@ -76,38 +76,6 @@ void control_heartbeat_tx_send(control_heartbeat_tx_context_t *ctx)
 		}
 	}
 
-	if (!ctx->can_tx_lock || !ctx->twai_ready || !ctx->can_recovery_in_progress || !ctx->can_tx_in_flight)
-		return;
-
-	if (!can_runtime_try_reserve_tx(ctx->can_tx_lock, ctx->twai_ready, ctx->can_recovery_in_progress,
-	                                ctx->can_tx_in_flight))
-	{
-		return;
-	}
-
-#ifdef CONFIG_LOG_HEALTH_CAN_RECOVERY
-	if (!heap_caps_check_integrity_all(true))
-	{
-		ESP_LOGE(ctx->tag, "HEAP CORRUPTION detected in send_control_heartbeat! free=%lu",
-		         (unsigned long)esp_get_free_heap_size());
-	}
-#endif
-
-	twai_message_t msg = {};
-	msg.identifier = CAN_ID_CONTROL_HEARTBEAT;
-	msg.data_length_code = 8;
-	memcpy(msg.data, hb_data, 8);
-	esp_err_t err = can_twai_send(&msg, pdMS_TO_TICKS(10));
-
-	can_runtime_release_tx(ctx->can_tx_lock, ctx->can_tx_in_flight);
-	control_heartbeat_tx_track(ctx, err);
-
-#ifdef CONFIG_LOG_TRANSPORT_CAN_HEARTBEAT_TX
-	if (err != ESP_OK)
-		ESP_LOGE(ctx->tag_tx, "HB TX failed: %s", esp_err_to_name(err));
-	else
-		ESP_LOGI(ctx->tag_tx, "HB TX: seq=%u state=%s fault=%s stop=%s status=0x%02X", seq,
-		         node_state_to_string(state), node_fault_to_string(fault_flags), node_stop_to_string(stop_flags),
-		         status_flags);
-#endif
+	// Heartbeat is sent via UART to Orin only — no CAN TX.
+	// Orin forwards it to Safety ESP32 over the Safety UART link.
 }

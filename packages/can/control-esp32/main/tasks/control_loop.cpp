@@ -138,12 +138,8 @@ void can_rx_task(void *param)
 			continue;
 #endif
 
-		// Process Safety heartbeat (0x100)
-		if (msg.identifier == CAN_ID_SAFETY_HEARTBEAT)
-		{
-			(void)control_can_rx_process_safety_heartbeat(&msg, &g_cmd_lock, &g_cmd, &g_hb_monitor, g_node_safety,
-			                                              TAG_RX);
-		}
+			// Standard frames ignored — Safety heartbeat now arrives via Orin UART link.
+		// Motor CAN bus should only have extended frames from UIM2852 nodes.
 	}
 }
 

@@ -20,6 +20,7 @@ typedef struct
 	volatile command_snapshot_t *snapshot;
 	heartbeat_monitor_t *monitor;
 	int planner_node_handle;
+	int safety_node_handle;
 } control_orin_link_rx_context_t;
 
 void control_orin_link_rx_task(void *param);
