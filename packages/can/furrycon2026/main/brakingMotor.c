@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 #include "motor_exec.h"
 #include "motor_setup.h"
+#include "pwm_motor.h"
 #include "relay_dpdt_my5nj.h"
 #include "serial_input.h"
 #include "twai_port.h"
@@ -21,14 +22,13 @@ static const char *TAG = "brakingMotor";
 
 /* App Policy */
 #define SETUP_BRAKE_MOTOR_NODE_ID    6U
-#define SETUP_STEERING_MOTOR_NODE_ID 7U
 #define SETUP_RX_TIMEOUT_MS          1000U
 #define SETUP_TASK_STACK_SIZE        8192U
 #define SETUP_TASK_PRIORITY          (tskIDLE_PRIORITY + 1U)
 #define PT_LOOP_PERIOD_MS            500U
 #define BRAKING_PT_PULSES_PER_STEP 26666
 #define BRAKING_PT_POSITION_CLAMP_PULSES  8000
-#define STEERING_PT_POSITION_CLAMP_PULSES 8000
+#define STEERING_PWM_POSITION_CLAMP_US    50
 
 typedef struct {
     SemaphoreHandle_t done_sem;
@@ -144,6 +144,33 @@ static void shutdown_throttle_actuators(void)
     (void)relay_dpdt_my5nj_deenergize();
 }
 
+static esp_err_t init_steering_actuator(void)
+{
+    pwm_motor_config_t cfg = pwm_motor_default_config(APP_STEERING_PWM_GPIO);
+
+    cfg.freq_hz = APP_STEERING_PWM_FREQ_HZ;
+    cfg.min_pulse_us = APP_STEERING_PWM_MIN_US;
+    cfg.neutral_pulse_us = APP_STEERING_PWM_NEUTRAL_US;
+    cfg.max_pulse_us = APP_STEERING_PWM_MAX_US;
+
+    ESP_LOGI(TAG,
+             "Steering actuator init start gpio=%d freq=%" PRIu32 " min_us=%" PRIu32 " neutral_us=%" PRIu32 " max_us=%" PRIu32,
+             (int)cfg.gpio_num,
+             cfg.freq_hz,
+             cfg.min_pulse_us,
+             cfg.neutral_pulse_us,
+             cfg.max_pulse_us);
+
+    return pwm_motor_init(&cfg);
+}
+
+static void shutdown_steering_actuator(void)
+{
+    if (pwm_motor_neutral() != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to drive steering PWM to neutral during shutdown");
+    }
+}
+
 static int32_t braking_to_pt_position(uint8_t braking)
 {
     /* Current brake-to-PT feed:
@@ -153,9 +180,31 @@ static int32_t braking_to_pt_position(uint8_t braking)
     return ((int32_t)braking - 3) * BRAKING_PT_PULSES_PER_STEP;
 }
 
-static int32_t steering_to_pt_position(uint16_t steering)
+static uint16_t clamp_steering_value(uint16_t steering)
 {
-    return ((int32_t)steering - 360) * 444;
+    if (steering < APP_STEERING_MIN_VALUE) {
+        return APP_STEERING_MIN_VALUE;
+    }
+
+    if (steering > APP_STEERING_MAX_VALUE) {
+        return APP_STEERING_MAX_VALUE;
+    }
+
+    return steering;
+}
+
+static uint32_t steering_to_pwm_us(uint16_t steering)
+{
+    const uint32_t steering_range = APP_STEERING_MAX_VALUE - APP_STEERING_MIN_VALUE;
+    const uint32_t pulse_range = APP_STEERING_PWM_MAX_US - APP_STEERING_PWM_MIN_US;
+    const uint32_t clamped = clamp_steering_value(steering);
+
+    if (steering_range == 0U) {
+        return APP_STEERING_PWM_NEUTRAL_US;
+    }
+
+    return APP_STEERING_PWM_MIN_US +
+           (uint32_t)(((uint64_t)(clamped - APP_STEERING_MIN_VALUE) * pulse_range) / steering_range);
 }
 
 static int32_t clamp_pt_step(int32_t last_sent_pt, int32_t desired_pt, int32_t clamp_pulses)
@@ -481,7 +530,6 @@ static esp_err_t run_setup_flow(void)
 
     if (err == ESP_OK) {
         esp_err_t brake_plan_err;
-        esp_err_t steering_plan_err;
 
         ESP_LOGI(TAG,
                  "Setup task TWAI initialized stack_hwm_words=%u",
@@ -495,23 +543,12 @@ static esp_err_t run_setup_flow(void)
                      esp_err_to_name(brake_plan_err));
         }
 
-        /*
-         * Node 7 command path disabled temporarily. In this app that node is
-         * wired through the steering setup/demo plan.
-         */
-        // steering_plan_err = run_named_plan(motor_setup_steering_pt_pv_demo_plan());
-        // if (steering_plan_err != ESP_OK) {
-        //     ESP_LOGW(TAG,
-        //              "Continuing after steering setup plan failure rc=%s",
-        //              esp_err_to_name(steering_plan_err));
-        // }
-
         {
             TickType_t next_plan_tick = xTaskGetTickCount();
             const TickType_t period_ticks = pdMS_TO_TICKS(PT_LOOP_PERIOD_MS);
             serial_input_frame_t frame = {0};
             int32_t last_sent_brake_pt = 0;
-            int32_t last_sent_steering_pt = 0;
+            uint32_t last_sent_steering_us = APP_STEERING_PWM_NEUTRAL_US;
             bool frame_valid = false;
             bool frame_updated_this_cycle = false;
 
@@ -522,6 +559,11 @@ static esp_err_t run_setup_flow(void)
                 err = init_throttle_actuators();
                 if (err != ESP_OK) {
                     ESP_LOGE(TAG, "init_throttle_actuators failed: %s", esp_err_to_name(err));
+                } else {
+                    err = init_steering_actuator();
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "init_steering_actuator failed: %s", esp_err_to_name(err));
+                    }
                 }
             }
 
@@ -568,13 +610,14 @@ static esp_err_t run_setup_flow(void)
                         const int32_t next_brake_pt = clamp_pt_step(last_sent_brake_pt,
                                                                     desired_brake_pt,
                                                                     BRAKING_PT_POSITION_CLAMP_PULSES);
-                        const int32_t desired_steering_pt = steering_to_pt_position(frame.steering);
-                        const int32_t next_steering_pt = clamp_pt_step(last_sent_steering_pt,
-                                                                       desired_steering_pt,
-                                                                       STEERING_PT_POSITION_CLAMP_PULSES);
+                        const uint32_t desired_steering_us = steering_to_pwm_us(frame.steering);
+                        const uint32_t next_steering_us =
+                            (uint32_t)clamp_pt_step((int32_t)last_sent_steering_us,
+                                                    (int32_t)desired_steering_us,
+                                                    STEERING_PWM_POSITION_CLAMP_US);
 
                         ESP_LOGI(TAG,
-                                 "pt uart/frame state=%s seq=%u throttle=%u steering=%u braking=%u brake_desired_pt=%ld brake_next_pt=%ld brake_last_pt=%ld steering_desired_pt=%ld steering_next_pt=%ld steering_last_pt=%ld",
+                                 "pt uart/frame state=%s seq=%u throttle=%u steering=%u braking=%u brake_desired_pt=%ld brake_next_pt=%ld brake_last_pt=%ld steering_desired_us=%" PRIu32 " steering_next_us=%" PRIu32 " steering_last_us=%" PRIu32,
                                  frame_updated_this_cycle ? "updated" : "stale",
                                  (unsigned)frame.seq,
                                  (unsigned)frame.throttle,
@@ -583,22 +626,19 @@ static esp_err_t run_setup_flow(void)
                                  (long)desired_brake_pt,
                                  (long)next_brake_pt,
                                  (long)last_sent_brake_pt,
-                                 (long)desired_steering_pt,
-                                 (long)next_steering_pt,
-                                 (long)last_sent_steering_pt);
+                                 desired_steering_us,
+                                 next_steering_us,
+                                 last_sent_steering_us);
 
                         err = run_pt_command(SETUP_BRAKE_MOTOR_NODE_ID, next_brake_pt);
                         if (err == ESP_OK) {
                             last_sent_brake_pt = next_brake_pt;
                             maybe_log_pa_get_failure(SETUP_BRAKE_MOTOR_NODE_ID,
                                                      run_pa_get_command(SETUP_BRAKE_MOTOR_NODE_ID));
-                            /* Node 7 commands disabled temporarily. */
-                            // err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
-                            // if (err == ESP_OK) {
-                            //     last_sent_steering_pt = next_steering_pt;
-                            //     maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
-                            //                              run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
-                            // }
+                            err = pwm_motor_set_us(next_steering_us);
+                            if (err == ESP_OK) {
+                                last_sent_steering_us = next_steering_us;
+                            }
                         }
                     } else {
                         log_throttle_state("missing_default", APP_THROTTLE_DEFAULT_LEVEL);
@@ -612,34 +652,33 @@ static esp_err_t run_setup_flow(void)
                         const int32_t next_brake_pt = clamp_pt_step(last_sent_brake_pt,
                                                                     desired_brake_pt,
                                                                     BRAKING_PT_POSITION_CLAMP_PULSES);
-                        const int32_t desired_steering_pt = steering_to_pt_position(360U);
-                        const int32_t next_steering_pt = clamp_pt_step(last_sent_steering_pt,
-                                                                       desired_steering_pt,
-                                                                       STEERING_PT_POSITION_CLAMP_PULSES);
+                        const uint32_t desired_steering_us =
+                            steering_to_pwm_us(APP_STEERING_DEFAULT_VALUE);
+                        const uint32_t next_steering_us =
+                            (uint32_t)clamp_pt_step((int32_t)last_sent_steering_us,
+                                                    (int32_t)desired_steering_us,
+                                                    STEERING_PWM_POSITION_CLAMP_US);
 
                         ESP_LOGW(TAG,
-                                 "pt uart/frame state=missing using default braking=%u steering=%u brake_desired_pt=%ld brake_next_pt=%ld brake_last_pt=%ld steering_desired_pt=%ld steering_next_pt=%ld steering_last_pt=%ld",
+                                 "pt uart/frame state=missing using default braking=%u steering=%u brake_desired_pt=%ld brake_next_pt=%ld brake_last_pt=%ld steering_desired_us=%" PRIu32 " steering_next_us=%" PRIu32 " steering_last_us=%" PRIu32,
                                  0U,
-                                 360U,
+                                 APP_STEERING_DEFAULT_VALUE,
                                  (long)desired_brake_pt,
                                  (long)next_brake_pt,
                                  (long)last_sent_brake_pt,
-                                 (long)desired_steering_pt,
-                                 (long)next_steering_pt,
-                                 (long)last_sent_steering_pt);
+                                 desired_steering_us,
+                                 next_steering_us,
+                                 last_sent_steering_us);
 
                         err = run_pt_command(SETUP_BRAKE_MOTOR_NODE_ID, next_brake_pt);
                         if (err == ESP_OK) {
                             last_sent_brake_pt = next_brake_pt;
                             maybe_log_pa_get_failure(SETUP_BRAKE_MOTOR_NODE_ID,
                                                      run_pa_get_command(SETUP_BRAKE_MOTOR_NODE_ID));
-                            /* Node 7 commands disabled temporarily. */
-                            // err = run_pt_command(SETUP_STEERING_MOTOR_NODE_ID, next_steering_pt);
-                            // if (err == ESP_OK) {
-                            //     last_sent_steering_pt = next_steering_pt;
-                            //     maybe_log_pa_get_failure(SETUP_STEERING_MOTOR_NODE_ID,
-                            //                              run_pa_get_command(SETUP_STEERING_MOTOR_NODE_ID));
-                            // }
+                            err = pwm_motor_set_us(next_steering_us);
+                            if (err == ESP_OK) {
+                                last_sent_steering_us = next_steering_us;
+                            }
                         }
                     }
 
@@ -653,6 +692,7 @@ static esp_err_t run_setup_flow(void)
                     }
                 }
 
+                shutdown_steering_actuator();
                 shutdown_throttle_actuators();
             }
         }
