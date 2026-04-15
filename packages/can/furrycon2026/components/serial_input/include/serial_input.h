@@ -17,7 +17,8 @@ typedef struct {
 } serial_input_frame_t;
 
 /**
- * Install the USB Serial JTAG driver.  Call once before serial_input_read().
+ * Configure the dedicated planner UART receiver. Call once before
+ * serial_input_read().
  */
 esp_err_t serial_input_init(void);
 

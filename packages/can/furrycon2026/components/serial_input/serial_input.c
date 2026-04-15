@@ -2,88 +2,61 @@
 
 #include <stddef.h>
 
-#include "sdkconfig.h"
-#if CONFIG_ESP_CONSOLE_UART
 #include "driver/uart.h"
-#endif
-#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG || CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG
-#include "driver/usb_serial_jtag.h"
-#endif
 #include "esp_err.h"
 #include "esp_log.h"
 
-#define RX_BUF_SIZE 256
-#define TX_BUF_SIZE 64
+#define PLANNER_UART_PORT    UART_NUM_0
+#define PLANNER_UART_BAUD    1000000U
+#define PLANNER_UART_RX_BUF  256U
 
 static const char *TAG = "serial_input";
 
-#if CONFIG_ESP_CONSOLE_UART
 static esp_err_t serial_input_init_backend(void)
 {
-    const uart_port_t port = (uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM;
+    const uart_port_t port = PLANNER_UART_PORT;
+    uart_config_t uart_cfg = {
+        .baud_rate = (int)PLANNER_UART_BAUD,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    esp_err_t err;
 
-    if (uart_is_driver_installed(port)) {
-        ESP_LOGI(TAG, "Using UART%d input on existing console driver", (int)port);
-        return ESP_OK;
+    err = uart_param_config(port, &uart_cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "uart_param_config(UART%d) failed: %s", (int)port, esp_err_to_name(err));
+        return err;
     }
 
-    esp_err_t err = uart_driver_install(port, RX_BUF_SIZE, 0, 0, NULL, 0);
+    if (!uart_is_driver_installed(port)) {
+        err = uart_driver_install(port, (int)(PLANNER_UART_RX_BUF * 2U), 0, 0, NULL, 0);
 
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG,
-                 "UART%d driver installed rx_buf=%u baud=%u",
-                 (int)port,
-                 (unsigned)RX_BUF_SIZE,
-                 (unsigned)CONFIG_ESP_CONSOLE_UART_BAUDRATE);
-    } else {
-        ESP_LOGE(TAG, "uart_driver_install(UART%d) failed: %s", (int)port, esp_err_to_name(err));
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "uart_driver_install(UART%d) failed: %s", (int)port, esp_err_to_name(err));
+            return err;
+        }
     }
 
-    return err;
+    ESP_LOGI(TAG,
+             "Planner UART ready uart=%d baud=%u rx_buf=%u",
+             (int)port,
+             (unsigned)PLANNER_UART_BAUD,
+             (unsigned)(PLANNER_UART_RX_BUF * 2U));
+    return ESP_OK;
 }
 
 static int serial_input_read_backend(uint8_t *buf, size_t len, TickType_t timeout_ticks)
 {
-    return uart_read_bytes((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM, buf, len, timeout_ticks);
+    return uart_read_bytes(PLANNER_UART_PORT, buf, len, timeout_ticks);
 }
 
 static const char *serial_input_backend_name(void)
 {
     return "uart";
 }
-#elif CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG || CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG
-static esp_err_t serial_input_init_backend(void)
-{
-    usb_serial_jtag_driver_config_t cfg = {
-        .rx_buffer_size = RX_BUF_SIZE,
-        .tx_buffer_size = TX_BUF_SIZE,
-    };
-    esp_err_t err = usb_serial_jtag_driver_install(&cfg);
-
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG,
-                 "Using USB Serial JTAG input rx_buf=%u tx_buf=%u",
-                 (unsigned)RX_BUF_SIZE,
-                 (unsigned)TX_BUF_SIZE);
-    } else {
-        ESP_LOGE(TAG, "usb_serial_jtag_driver_install failed: %s", esp_err_to_name(err));
-    }
-
-    return err;
-}
-
-static int serial_input_read_backend(uint8_t *buf, size_t len, TickType_t timeout_ticks)
-{
-    return usb_serial_jtag_read_bytes(buf, (uint32_t)len, timeout_ticks);
-}
-
-static const char *serial_input_backend_name(void)
-{
-    return "usb_serial_jtag";
-}
-#else
-#error "serial_input requires a supported console backend"
-#endif
 
 esp_err_t serial_input_init(void)
 {

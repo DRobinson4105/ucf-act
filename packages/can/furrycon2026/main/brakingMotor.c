@@ -28,7 +28,7 @@ static const char *TAG = "brakingMotor";
 #define PT_LOOP_PERIOD_MS            500U
 #define BRAKING_PT_PULSES_PER_STEP 26666
 #define BRAKING_PT_POSITION_CLAMP_PULSES  8000
-#define STEERING_PWM_POSITION_CLAMP_US    50
+#define STEERING_PWM_POSITION_CLAMP_US   100
 
 typedef struct {
     SemaphoreHandle_t done_sem;
